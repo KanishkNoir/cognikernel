@@ -1,0 +1,286 @@
+"""Delta merge orchestrator — the session-end bookkeeping step.
+
+Six idempotent operations in one transaction:
+  1. Hash-based deduplication (insert-or-update)
+  2. Constraint supersession (overlap detection → mark superseded_by)
+  3. Component dependency cascade (blocked/abandoned → needs_review)
+  4. Weight decay (0.92× for non-current-session events)
+  5. Archive (events below 0.05 threshold, excluding protected types)
+  6. Projection invalidation (force lazy rebuild on next read)
+
+The whole merge runs inside a single `with conn:` transaction block.
+Python's sqlite3 context manager issues BEGIN on entry and COMMIT on success
+(ROLLBACK on exception), giving us atomicity without manual BEGIN/COMMIT calls.
+
+Internal helpers (_insert_or_update, _apply_decay_inner) do NOT call
+conn.commit() — they are designed to run inside the wrapping transaction.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import sqlite3
+import time
+from typing import TYPE_CHECKING
+
+from memlora.delta.cascade import cascade_component_status
+from memlora.delta.decay import (
+    ARCHIVE_THRESHOLD,
+    DECAY_FACTOR,
+    _META_KEY_PREFIX,
+    _PROTECTED_FROM_ARCHIVE,
+)
+from memlora.delta.supersede import (
+    apply_supersession,
+    detect_supersession,
+    jaccard_similarity,
+    levenshtein_normalized,
+    JACCARD_THRESHOLD,
+    LEVENSHTEIN_THRESHOLD,
+)
+from memlora.storage.events import (
+    MAX_EVENT_WEIGHT,
+    WEIGHT_INCREMENT_ON_DEDUP,
+    insert_extraction_failure,
+)
+
+if TYPE_CHECKING:
+    from memlora.storage.events import Event
+
+_log = logging.getLogger("memlora.delta")
+
+# Cross-type dedup: when the same concept appears under different event types,
+# keep only the highest-priority one.
+_DEDUP_GROUP: frozenset[str] = frozenset({
+    "APPROACH_ABANDONED_DO_NOT_RETRY",
+    "CONSTRAINT_HARD",
+    "APPROACH_ABANDONED",
+})
+_DEDUP_PRIORITY: dict[str, int] = {
+    "APPROACH_ABANDONED_DO_NOT_RETRY": 1,  # highest
+    "CONSTRAINT_HARD": 2,
+    "APPROACH_ABANDONED": 3,               # lowest
+}
+
+
+def merge_event(conn: sqlite3.Connection, event: Event) -> tuple[str, int]:
+    """Insert an event or increment its mention_count on hash collision.
+
+    Returns ("inserted", row_id) or ("updated", row_id).
+    Commits after the operation — use _insert_or_update() inside transactions.
+    """
+    outcome, row_id = _insert_or_update(conn, event)
+    conn.commit()
+    return outcome, row_id
+
+
+def execute_merge(
+    conn: sqlite3.Connection,
+    session_id: str,
+    candidates: list[Event],
+) -> dict:
+    """Run the full six-step merge inside a single transaction.
+
+    Returns a stats dict: {inserted, updated, superseded, cascaded, archived}.
+    On failure, the transaction is rolled back and the error written to the
+    dead-letter queue (extraction_failures).
+    """
+    if not candidates:
+        return {"inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0, "archived": 0}
+
+    project_id = candidates[0].project_id
+    stats = {"inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0, "archived": 0}
+
+    try:
+        with conn:
+            for event in candidates:
+                outcome, row_id = _insert_or_update(conn, event)
+                stats[outcome] += 1
+                event.id = row_id  # needed by cascade_component_status
+
+                sup_ids = detect_supersession(conn, event)
+                stats["superseded"] += apply_supersession(conn, row_id, sup_ids)
+                stats["superseded"] += _cross_type_dedup(conn, row_id, event)
+
+                if event.event_type == "COMPONENT_STATUS":
+                    stats["cascaded"] += cascade_component_status(conn, event)
+
+            stats["archived"] += _apply_decay_inner(conn, project_id, session_id)
+            _invalidate_projection_inner(conn, project_id)
+
+    except Exception as exc:
+        _log.error(
+            "merge.transaction_failed",
+            extra={"session_id": session_id, "error": str(exc)},
+        )
+        try:
+            insert_extraction_failure(
+                conn,
+                project_id=project_id,
+                session_id=session_id,
+                stage="delta.merge",
+                error_message=str(exc),
+                raw_input_path="",
+            )
+        except Exception:
+            pass
+        raise
+
+    _log.info("merge.complete", extra={"session_id": session_id, **stats})
+    return stats
+
+
+# ── transaction-internal helpers (no conn.commit()) ───────────────────────────
+
+def _insert_or_update(
+    conn: sqlite3.Connection,
+    event: Event,
+) -> tuple[str, int]:
+    """INSERT or UPDATE without committing — for use inside execute_merge."""
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO events
+                (project_id, session_id, created_at, event_type,
+                 payload, content_hash, weight, mention_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.project_id,
+                event.session_id,
+                event.created_at,
+                event.event_type,
+                json.dumps(event.payload, sort_keys=True, separators=(",", ":")),
+                event.content_hash,
+                event.weight,
+                event.mention_count,
+            ),
+        )
+        return "inserted", cursor.lastrowid  # type: ignore[return-value]
+    except sqlite3.IntegrityError:
+        conn.execute(
+            """
+            UPDATE events
+            SET mention_count = mention_count + 1,
+                weight        = MIN(weight + ?, ?)
+            WHERE project_id = ? AND content_hash = ?
+            """,
+            (WEIGHT_INCREMENT_ON_DEDUP, MAX_EVENT_WEIGHT, event.project_id, event.content_hash),
+        )
+        row = conn.execute(
+            "SELECT id FROM events WHERE project_id = ? AND content_hash = ?",
+            (event.project_id, event.content_hash),
+        ).fetchone()
+        return "updated", row["id"]
+
+
+def _apply_decay_inner(
+    conn: sqlite3.Connection,
+    project_id: str,
+    current_session_id: str,
+) -> int:
+    """Decay and archive without committing — for use inside execute_merge."""
+    meta_key = f"{_META_KEY_PREFIX}{project_id}"
+    last_row = conn.execute(
+        "SELECT value FROM meta WHERE key = ?", (meta_key,)
+    ).fetchone()
+    if last_row and last_row["value"] == current_session_id:
+        return 0
+
+    conn.execute(
+        """
+        UPDATE events
+        SET weight = MAX(0.0, weight * ?)
+        WHERE project_id = ?
+          AND session_id != ?
+          AND archived   = 0
+        """,
+        (DECAY_FACTOR, project_id, current_session_id),
+    )
+
+    protected_placeholders = ",".join("?" * len(_PROTECTED_FROM_ARCHIVE))
+    result = conn.execute(
+        f"""
+        UPDATE events
+        SET archived = 1
+        WHERE project_id = ?
+          AND archived   = 0
+          AND weight     < ?
+          AND event_type NOT IN ({protected_placeholders})
+        """,
+        (project_id, ARCHIVE_THRESHOLD, *_PROTECTED_FROM_ARCHIVE),
+    )
+    archived_count = result.rowcount
+
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        (meta_key, current_session_id),
+    )
+    return archived_count
+
+
+def _cross_type_dedup(
+    conn: sqlite3.Connection,
+    new_event_id: int,
+    event: "Event",
+) -> int:
+    """Supersede cross-type duplicates within _DEDUP_GROUP.
+
+    When the same concept is captured under e.g. both CONSTRAINT_HARD and
+    APPROACH_ABANDONED_DO_NOT_RETRY, keep only the highest-priority type.
+    Returns the count of events superseded.
+    """
+    if event.event_type not in _DEDUP_GROUP:
+        return 0
+
+    new_priority = _DEDUP_PRIORITY[event.event_type]
+    new_desc = event.payload.get("description", "")
+    superseded = 0
+
+    peer_types = [t for t in _DEDUP_GROUP if t != event.event_type]
+    placeholders = ",".join("?" * len(peer_types))
+    rows = conn.execute(
+        f"""
+        SELECT id, event_type, payload FROM events
+        WHERE project_id    = ?
+          AND event_type    IN ({placeholders})
+          AND archived      = 0
+          AND superseded_by IS NULL
+        """,
+        (event.project_id, *peer_types),
+    ).fetchall()
+
+    for row in rows:
+        import json as _json
+        peer_desc = _json.loads(row["payload"]).get("description", "")
+        overlap = (
+            jaccard_similarity(new_desc, peer_desc) >= JACCARD_THRESHOLD
+            or levenshtein_normalized(new_desc, peer_desc) <= LEVENSHTEIN_THRESHOLD
+        )
+        if not overlap:
+            continue
+
+        peer_priority = _DEDUP_PRIORITY[row["event_type"]]
+        if new_priority < peer_priority:
+            # New event wins — supersede the peer
+            conn.execute(
+                "UPDATE events SET superseded_by = ? WHERE id = ?",
+                (new_event_id, row["id"]),
+            )
+            superseded += 1
+        else:
+            # Peer wins — mark new event as superseded by peer
+            conn.execute(
+                "UPDATE events SET superseded_by = ? WHERE id = ?",
+                (row["id"], new_event_id),
+            )
+
+    return superseded
+
+
+def _invalidate_projection_inner(conn: sqlite3.Connection, project_id: str) -> None:
+    """Set high_water to -1 (sentinel) to force full projection rebuild."""
+    conn.execute(
+        "UPDATE state_projections SET event_id_high_water = -1 WHERE project_id = ?",
+        (project_id,),
+    )

@@ -1,0 +1,9 @@
+Human: We decided to apply these PRAGMAs on every connection. They are mandatory for correctness.
+
+```python
+conn.execute("PRAGMA journal_mode = WAL")
+conn.execute("PRAGMA synchronous = NORMAL")
+conn.execute("PRAGMA busy_timeout = 5000")
+```
+
+We rolled back the attempt to use a connection pool because it caused concurrency issues under WAL mode.

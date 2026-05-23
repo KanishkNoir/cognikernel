@@ -1,0 +1,6 @@
+Human: Here are the hard rules for this project:
+- We cannot use Redis for caching
+- We must not make network calls in the hot path
+- External APIs are not allowed during session extraction
+
+These are non-negotiable requirements from the product spec.

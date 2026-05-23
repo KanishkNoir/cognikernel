@@ -1,0 +1,1 @@
+Human: We decided to use WAL mode for SQLite. We cannot use the default rollback journal because it blocks readers.

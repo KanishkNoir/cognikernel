@@ -1,0 +1,1 @@
+Human: We need to choose a database. I've been thinking about PostgreSQL vs SQLite.

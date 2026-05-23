@@ -1,0 +1,1 @@
+Human: We decided to use SQLite for the storage layer. The main reason is that the tool needs to be local-first and ship with zero install steps. PostgreSQL would require the user to run a database server, which breaks the value proposition.

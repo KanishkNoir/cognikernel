@@ -1,0 +1,1 @@
+Human: We tried using an in-memory LRU cache for projections, but it didn't work because the process could be killed at any point. We reverted to disk-based storage only. Don't try the in-memory cache approach again — it fundamentally conflicts with the crash-recovery requirement.
