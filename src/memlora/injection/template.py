@@ -17,11 +17,15 @@ the rendered prefix is stable across sessions, enabling Anthropic prompt-cache h
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
+    from memlora.config import SectionBudgets
     from memlora.storage.events import Event
+
+_log = logging.getLogger("memlora.injection")
 
 
 @dataclass
@@ -39,6 +43,8 @@ class InjectionContext:
     token_budget: int = 1000
     hot_files: list[tuple[str, int, str]] = field(default_factory=list)
     skeleton: list = field(default_factory=list)  # list[SkeletonEntry]
+    ckl_mode: bool = False
+    section_budgets: SectionBudgets | None = None
 
 
 def render_injection(ctx: InjectionContext) -> str:
@@ -57,23 +63,67 @@ def render_injection(ctx: InjectionContext) -> str:
     """
     from memlora.symbols.render import render_skeleton_section
     has_skeleton = bool(ctx.skeleton)
+    sb = ctx.section_budgets
+
+    hard = ctx.hard_constraints
+    grave = ctx.graveyard
+    comps = ctx.components
+    decs = ctx.decisions
+
+    if sb is not None:
+        hard = _enforce_section_budget(
+            hard, lambda items: _render_hard_constraints(items, ckl_mode=ctx.ckl_mode),
+            sb.hard_constraints,
+        )
+        grave = _enforce_section_budget(
+            grave, lambda items: _render_graveyard(items, ckl_mode=ctx.ckl_mode),
+            sb.graveyard,
+        )
+        comps = _enforce_section_budget(comps, _render_components, sb.components)
+        decs = _enforce_section_budget(
+            decs, lambda items: _render_decisions(items, ckl_mode=ctx.ckl_mode),
+            sb.decisions,
+        )
+
     sections = [
         _render_header(ctx),
-        _render_hard_constraints(ctx.hard_constraints),
+        _render_hard_constraints(hard, ckl_mode=ctx.ckl_mode),
         _render_active_thread(ctx.active_threads),
         _render_hot_files(ctx.hot_files, has_skeleton=has_skeleton),
-        _render_graveyard(ctx.graveyard),
-        _render_components(ctx.components),
-        _render_decisions(ctx.decisions),
+        _render_graveyard(grave, ckl_mode=ctx.ckl_mode),
+        _render_components(comps),
+        _render_decisions(decs, ckl_mode=ctx.ckl_mode),
         render_skeleton_section(ctx.skeleton),
         _render_summary(ctx.summary_text),
     ]
     return "\n\n".join(s for s in sections if s)
 
 
+def _enforce_section_budget(
+    events: list[Event],
+    render_fn: Callable[[list[Event]], str],
+    budget: int,
+) -> list[Event]:
+    """Drop lowest-weight events until render_fn(remaining) fits in budget tokens.
+
+    Never drops the last remaining event — even if a single event exceeds the
+    section budget, the event is kept and the global backstop is left to handle
+    the overflow. Returns the surviving subset of events.
+    """
+    remaining = list(events)
+    while remaining and count_tokens_accurate(render_fn(remaining)) > budget:
+        if len(remaining) == 1:
+            return remaining
+        # Sort ascending and pop the first (lowest-weight) event
+        remaining.sort(key=lambda e: e.weight)
+        remaining.pop(0)
+    return remaining
+
+
 # ── section renderers ─────────────────────────────────────────────────────────
 
 def _render_header(ctx: InjectionContext) -> str:
+    from memlora.injection.ckl import CKL_LEGEND
     header = (
         f"## Session context [auto-generated — do not edit]\n"
         f"project: {ctx.project_name} · session {ctx.session_number} "
@@ -84,14 +134,22 @@ def _render_header(ctx: InjectionContext) -> str:
             "\nBefore using Read/Glob/Grep, check Codebase skeleton below — "
             "classes, methods, and imports listed without re-reading files."
         )
+    if ctx.ckl_mode:
+        header += f"\n{CKL_LEGEND}"
     return header
 
 
-def _render_hard_constraints(constraints: list[Event]) -> str:
+def _render_hard_constraints(constraints: list[Event], ckl_mode: bool = False) -> str:
     if not constraints:
         return ""
     # Stable sort by content_hash → deterministic order → prompt-cache hits
     ordered = sorted(constraints, key=lambda c: c.content_hash)
+    if ckl_mode:
+        from memlora.injection.ckl import render_event_ckl
+        lines = ["### Hard constraints — never violate"]
+        for c in ordered:
+            lines.append(render_event_ckl(c, "CSTR"))
+        return "\n".join(lines)
     lines = ["### Hard constraints — never violate"]
     for c in ordered:
         desc = c.payload.get("description", "")
@@ -103,10 +161,16 @@ def _render_hard_constraints(constraints: list[Event]) -> str:
     return "\n".join(lines)
 
 
-def _render_graveyard(items: list[Event]) -> str:
+def _render_graveyard(items: list[Event], ckl_mode: bool = False) -> str:
     if not items:
         return ""
     ordered = sorted(items, key=lambda e: e.content_hash)
+    if ckl_mode:
+        from memlora.injection.ckl import render_event_ckl
+        lines = ["### Do not retry — confirmed failures"]
+        for item in ordered:
+            lines.append(render_event_ckl(item, "DEAD"))
+        return "\n".join(lines)
     lines = ["### Do not retry — confirmed failures"]
     for item in ordered:
         approach = item.payload.get("description", "")
@@ -133,9 +197,15 @@ def _render_components(components: list[Event]) -> str:
     return "\n".join(lines)
 
 
-def _render_decisions(decisions: list[Event]) -> str:
+def _render_decisions(decisions: list[Event], ckl_mode: bool = False) -> str:
     if not decisions:
         return ""
+    if ckl_mode:
+        from memlora.injection.ckl import render_event_ckl
+        lines = ["### Key decisions"]
+        for d in decisions:
+            lines.append(render_event_ckl(d, "DEC"))
+        return "\n".join(lines)
     lines = ["### Key decisions"]
     for i, d in enumerate(decisions, 1):
         desc = d.payload.get("description", "")
@@ -263,6 +333,13 @@ def render_with_budget_enforcement(ctx: InjectionContext) -> str:
 
     if actual <= ctx.token_budget:
         return block
+
+    # Global backstop activated — section budgets (if set) were insufficient.
+    if ctx.section_budgets is not None:
+        _log.warning(
+            "injection.backstop_activated",
+            extra={"actual_tokens": actual, "budget": ctx.token_budget},
+        )
 
     while actual > ctx.token_budget and ctx.decisions:
         ctx.decisions.pop()

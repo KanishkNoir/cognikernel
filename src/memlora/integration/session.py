@@ -127,6 +127,8 @@ def render_state(
     )
     ctx.hot_files = hot_files
     ctx.skeleton = skeleton
+    ctx.ckl_mode = config.ckl_mode
+    ctx.section_budgets = config.section_budgets
     return render_with_budget_enforcement(ctx)
 
 

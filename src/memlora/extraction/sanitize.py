@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import re
 
-_MAX_DESC = 200
-_MAX_RATIONALE = 300
+_MAX_DESC = 120
+_MAX_RATIONALE = 120
 
 # Markdown patterns to strip
 _TABLE_ROW = re.compile(r"^\s*\|.+\|\s*$")

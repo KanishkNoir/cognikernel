@@ -93,4 +93,11 @@ def classify_constraint(
     if any(m in d for m in HEDGE_MARKERS):
         score -= 0.3
 
+    # Assistant source-role gate: only highest-confidence signals (must-not,
+    # must-never, mandatory, cannot — all 1.0 in SIGNAL_DICTIONARY) survive as
+    # CONSTRAINT_HARD when spoken by the assistant. Lower-confidence signals
+    # (e.g. bare "never" at 0.9) get capped below the 0.85 threshold.
+    if source_role == "assistant" and confidence < 1.0:
+        score = min(score, 0.80)
+
     return "CONSTRAINT_HARD" if score >= HARD_THRESHOLD else "CONSTRAINT_SOFT"
