@@ -84,18 +84,34 @@ _LEADING_WORDS = re.compile(r'^([\w+/.-]+(?:\s+[\w+/.-]+){0,2})\s+')
 
 _COMPACT_BREAKS = re.compile(r'\s*(?:—|-{2,}|,|;|\.\s)')
 _LEADING_ARTICLE = re.compile(r'^\s*(?:a|an|the)\s+', re.IGNORECASE)
+# Strip inline markdown: **bold**, *italic*, `code`
+_MD_INLINE = re.compile(r'\*{1,3}([^*]+)\*{1,3}|`([^`]+)`')
+# Strip unclosed leading asterisks (e.g. "**Foo" where closing ** is absent after a split)
+_MD_LEADING_STARS = re.compile(r'^\*+')
 
 _OBJECT_CAP = 35
 _SUBJECT_CAP = 25
 
 
+def _strip_inline_md(text: str) -> str:
+    """Remove markdown bold/italic/code markers, keeping the inner text.
+
+    Handles both paired markers (**text**) and unclosed leading markers (**text)
+    that occur when a split (e.g. on ' — ') removes the closing marker.
+    """
+    text = _MD_INLINE.sub(lambda m: (m.group(1) or m.group(2) or "").strip(), text)
+    text = _MD_LEADING_STARS.sub("", text)
+    return text
+
+
 def _compact(text: str, cap: int) -> str:
     """Truncate prose to a short identifier-friendly label.
 
-    Cuts at the first natural break (em-dash, comma, semicolon, sentence end)
-    and strips leading articles. Always returns a non-empty string or "".
+    Strips inline markdown, cuts at the first natural break (em-dash, comma,
+    semicolon, sentence end), and strips leading articles.
     """
-    text = _LEADING_ARTICLE.sub("", text.strip())
+    text = _strip_inline_md(text.strip())
+    text = _LEADING_ARTICLE.sub("", text)
     m = _COMPACT_BREAKS.search(text)
     if m:
         text = text[: m.start()].strip()

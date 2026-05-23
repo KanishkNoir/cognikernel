@@ -223,7 +223,8 @@ def _render_decisions(
         from memlora.injection.ckl import render_event_ckl
         lines = ["### Key decisions"]
         for d in decisions:
-            lines.append(render_event_ckl(d, "DEC", v2=ckl_v2))
+            prefix = "SOFT" if d.event_type == "CONSTRAINT_SOFT" else "DEC"
+            lines.append(render_event_ckl(d, prefix, v2=ckl_v2))
         return "\n".join(lines)
     lines = ["### Key decisions"]
     for i, d in enumerate(decisions, 1):
