@@ -1,22 +1,4 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg-info/
-dist/
-build/
-.eggs/
-.venv/
-venv/
-env/
-
-# Test / coverage
-.pytest_cache/
-.coverage
-htmlcov/
-.hypothesis/
+# ── CogniKernel project-specific exclusions ──────────────────────────────────
 
 # Research, architecture, and internal planning docs (not shipped)
 research/
@@ -28,14 +10,86 @@ transcript.txt
 # Architecture doc subdirs embedded inside src/ modules
 src/**/*_architecture/
 
-# Claude Code settings
+# Claude Code session settings
 .claude/
 
-# OS
-.DS_Store
-Thumbs.db
+# ── Python (GitHub template) ──────────────────────────────────────────────────
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[codz]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py.cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Environments
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
 
 # Editor
 .idea/
 .vscode/
 *.swp
+tempCodeRunnerFile.py
+
+# OS
+.DS_Store
+Thumbs.db
