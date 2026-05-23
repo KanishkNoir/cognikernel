@@ -42,6 +42,7 @@ class Config:
     wal_warning_threshold_bytes: int = 100 * 1024 * 1024
     grep_cache_enabled: bool = False
     ckl_mode: bool = False
+    ckl_v2: bool = False
     section_budgets: SectionBudgets = field(default_factory=SectionBudgets)
 
     @property
@@ -82,6 +83,8 @@ class Config:
             kwargs["grep_cache_enabled"] = bool(data["grep_cache_enabled"])
         if "ckl_mode" in data:
             kwargs["ckl_mode"] = bool(data["ckl_mode"])
+        if "ckl_v2" in data:
+            kwargs["ckl_v2"] = bool(data["ckl_v2"])
         if "section_budgets" in data and isinstance(data["section_budgets"], dict):
             sb = data["section_budgets"]
             kwargs["section_budgets"] = SectionBudgets(

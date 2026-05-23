@@ -62,10 +62,12 @@ def extract_session(
             session_meta.project_id, session_meta.session_id,
         )
         classified = [classify_event(e) for e in raw]
+        from memlora.extraction.triple import augment_with_triple
         for e in classified:
             e.content_hash = compute_content_hash(
                 e.event_type, e.payload.get("description", "")
             )
+            augment_with_triple(e)
         events.extend(classified)
 
         mention_events = extract_file_mention_events(

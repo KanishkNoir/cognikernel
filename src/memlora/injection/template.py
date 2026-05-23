@@ -44,6 +44,7 @@ class InjectionContext:
     hot_files: list[tuple[str, int, str]] = field(default_factory=list)
     skeleton: list = field(default_factory=list)  # list[SkeletonEntry]
     ckl_mode: bool = False
+    ckl_v2: bool = False
     section_budgets: SectionBudgets | None = None
 
 
@@ -72,27 +73,36 @@ def render_injection(ctx: InjectionContext) -> str:
 
     if sb is not None:
         hard = _enforce_section_budget(
-            hard, lambda items: _render_hard_constraints(items, ckl_mode=ctx.ckl_mode),
+            hard,
+            lambda items: _render_hard_constraints(
+                items, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2
+            ),
             sb.hard_constraints,
         )
         grave = _enforce_section_budget(
-            grave, lambda items: _render_graveyard(items, ckl_mode=ctx.ckl_mode),
+            grave,
+            lambda items: _render_graveyard(
+                items, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2
+            ),
             sb.graveyard,
         )
         comps = _enforce_section_budget(comps, _render_components, sb.components)
         decs = _enforce_section_budget(
-            decs, lambda items: _render_decisions(items, ckl_mode=ctx.ckl_mode),
+            decs,
+            lambda items: _render_decisions(
+                items, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2
+            ),
             sb.decisions,
         )
 
     sections = [
         _render_header(ctx),
-        _render_hard_constraints(hard, ckl_mode=ctx.ckl_mode),
+        _render_hard_constraints(hard, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2),
         _render_active_thread(ctx.active_threads),
         _render_hot_files(ctx.hot_files, has_skeleton=has_skeleton),
-        _render_graveyard(grave, ckl_mode=ctx.ckl_mode),
+        _render_graveyard(grave, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2),
         _render_components(comps),
-        _render_decisions(decs, ckl_mode=ctx.ckl_mode),
+        _render_decisions(decs, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2),
         render_skeleton_section(ctx.skeleton),
         _render_summary(ctx.summary_text),
     ]
@@ -136,10 +146,15 @@ def _render_header(ctx: InjectionContext) -> str:
         )
     if ctx.ckl_mode:
         header += f"\n{CKL_LEGEND}"
+    if ctx.ckl_v2:
+        from memlora.injection.ckl import CKL_OPS_LEGEND
+        header += f"\n{CKL_OPS_LEGEND}"
     return header
 
 
-def _render_hard_constraints(constraints: list[Event], ckl_mode: bool = False) -> str:
+def _render_hard_constraints(
+    constraints: list[Event], ckl_mode: bool = False, ckl_v2: bool = False
+) -> str:
     if not constraints:
         return ""
     # Stable sort by content_hash → deterministic order → prompt-cache hits
@@ -148,7 +163,7 @@ def _render_hard_constraints(constraints: list[Event], ckl_mode: bool = False) -
         from memlora.injection.ckl import render_event_ckl
         lines = ["### Hard constraints — never violate"]
         for c in ordered:
-            lines.append(render_event_ckl(c, "CSTR"))
+            lines.append(render_event_ckl(c, "CSTR", v2=ckl_v2))
         return "\n".join(lines)
     lines = ["### Hard constraints — never violate"]
     for c in ordered:
@@ -161,7 +176,9 @@ def _render_hard_constraints(constraints: list[Event], ckl_mode: bool = False) -
     return "\n".join(lines)
 
 
-def _render_graveyard(items: list[Event], ckl_mode: bool = False) -> str:
+def _render_graveyard(
+    items: list[Event], ckl_mode: bool = False, ckl_v2: bool = False
+) -> str:
     if not items:
         return ""
     ordered = sorted(items, key=lambda e: e.content_hash)
@@ -169,7 +186,7 @@ def _render_graveyard(items: list[Event], ckl_mode: bool = False) -> str:
         from memlora.injection.ckl import render_event_ckl
         lines = ["### Do not retry — confirmed failures"]
         for item in ordered:
-            lines.append(render_event_ckl(item, "DEAD"))
+            lines.append(render_event_ckl(item, "DEAD", v2=ckl_v2))
         return "\n".join(lines)
     lines = ["### Do not retry — confirmed failures"]
     for item in ordered:
@@ -197,14 +214,16 @@ def _render_components(components: list[Event]) -> str:
     return "\n".join(lines)
 
 
-def _render_decisions(decisions: list[Event], ckl_mode: bool = False) -> str:
+def _render_decisions(
+    decisions: list[Event], ckl_mode: bool = False, ckl_v2: bool = False
+) -> str:
     if not decisions:
         return ""
     if ckl_mode:
         from memlora.injection.ckl import render_event_ckl
         lines = ["### Key decisions"]
         for d in decisions:
-            lines.append(render_event_ckl(d, "DEC"))
+            lines.append(render_event_ckl(d, "DEC", v2=ckl_v2))
         return "\n".join(lines)
     lines = ["### Key decisions"]
     for i, d in enumerate(decisions, 1):

@@ -1,5 +1,5 @@
-"""Tests for CKL (CogniKernel Language) V1 rendering."""
-from memlora.injection.ckl import CKL_LEGEND, render_event_ckl
+"""Tests for CKL (CogniKernel Language) V1 and V2 rendering."""
+from memlora.injection.ckl import CKL_LEGEND, CKL_OPS_LEGEND, render_event_ckl
 from memlora.injection.template import InjectionContext, render_injection
 from memlora.storage.events import Event
 
@@ -134,3 +134,127 @@ class TestRenderInjectionCklMode:
         assert "- no DELETE — recoverability" in block
         assert "CSTR:" not in block
         assert "DEC:" not in block
+
+
+# ── render_event_ckl V2 unit tests ───────────────────────────────────────────
+
+def _event_with_triple(
+    event_type: str = "CONSTRAINT_HARD",
+    description: str = "no DELETE",
+    rationale: str = "",
+    triple: dict | None = None,
+    session_id: str = "sess1",
+) -> Event:
+    payload: dict = {"description": description, "rationale": rationale}
+    if triple is not None:
+        payload["triple"] = triple
+    return Event(
+        project_id="p1",
+        session_id=session_id,
+        event_type=event_type,
+        payload=payload,
+        content_hash=description[:32].ljust(64, "0"),
+        weight=1.0,
+    )
+
+
+class TestRenderEventCklV2:
+    def test_negation_triple_renders_op_before_object(self) -> None:
+        e = _event_with_triple(
+            triple={"operator": "¬", "subject": "", "object": "SQL DELETE"},
+            rationale="recoverability",
+        )
+        out = render_event_ckl(e, "CSTR", v2=True)
+        assert out == "CSTR: ¬ SQL DELETE  # recoverability"
+
+    def test_implication_triple_subject_op_object(self) -> None:
+        e = _event_with_triple(
+            event_type="DECISION",
+            triple={"operator": "→", "subject": "pagination", "object": "page+page_size"},
+        )
+        out = render_event_ckl(e, "DEC", v2=True)
+        assert out == "DEC: pagination → page+page_size"
+
+    def test_null_triple_subject_op_no_object(self) -> None:
+        e = _event_with_triple(
+            event_type="APPROACH_ABANDONED_DO_NOT_RETRY",
+            triple={"operator": "∅", "subject": "celery", "object": ""},
+            rationale="broker dep",
+        )
+        out = render_event_ckl(e, "DEAD", v2=True)
+        assert out == "DEAD: celery ∅  # broker dep"
+
+    def test_v2_fallback_when_no_triple_in_payload(self) -> None:
+        e = _event_with_triple(description="no DELETE", rationale="safety", triple=None)
+        out = render_event_ckl(e, "CSTR", v2=True)
+        # Must fall back to V1 prose
+        assert out == "CSTR: no DELETE  # safety"
+        assert "¬" not in out
+
+    def test_v2_false_ignores_triple(self) -> None:
+        e = _event_with_triple(
+            triple={"operator": "¬", "subject": "", "object": "SQL DELETE"},
+            description="no DELETE",
+            rationale="safety",
+        )
+        out = render_event_ckl(e, "CSTR", v2=False)
+        # Should render V1 prose even though triple is present
+        assert "¬" not in out
+        assert "no DELETE" in out
+
+    def test_triple_with_both_subject_and_object(self) -> None:
+        e = _event_with_triple(
+            event_type="DECISION",
+            triple={"operator": "→", "subject": "auth", "object": "JWT"},
+        )
+        out = render_event_ckl(e, "DEC", v2=True)
+        assert out == "DEC: auth → JWT"
+
+    def test_triple_subject_only(self) -> None:
+        e = _event_with_triple(
+            event_type="DECISION",
+            triple={"operator": "→", "subject": "Redis", "object": ""},
+        )
+        out = render_event_ckl(e, "DEC", v2=True)
+        assert out == "DEC: Redis →"
+
+    def test_rationale_truncated_to_cap(self) -> None:
+        e = _event_with_triple(
+            triple={"operator": "¬", "subject": "", "object": "X"},
+            rationale="r" * 200,
+        )
+        out = render_event_ckl(e, "CSTR", v2=True, rationale_cap=10)
+        # rationale portion should not exceed cap
+        assert out.endswith("  # " + "r" * 10)
+
+
+# ── ops legend in header ──────────────────────────────────────────────────────
+
+class TestOpsLegendInHeader:
+    def test_ops_legend_emitted_when_ckl_v2_true(self) -> None:
+        ctx = _ctx(
+            ckl_mode=True,
+            ckl_v2=True,
+            hard_constraints=[_event(description="no DELETE")],
+        )
+        block = render_injection(ctx)
+        assert CKL_OPS_LEGEND in block
+
+    def test_ops_legend_omitted_when_ckl_v2_false(self) -> None:
+        ctx = _ctx(
+            ckl_mode=True,
+            ckl_v2=False,
+            hard_constraints=[_event(description="no DELETE")],
+        )
+        block = render_injection(ctx)
+        assert CKL_OPS_LEGEND not in block
+
+    def test_ops_legend_present_without_ckl_mode(self) -> None:
+        # ckl_v2=True should add the ops legend even if ckl_mode=False
+        ctx = _ctx(
+            ckl_mode=False,
+            ckl_v2=True,
+            hard_constraints=[_event(description="no DELETE")],
+        )
+        block = render_injection(ctx)
+        assert CKL_OPS_LEGEND in block
