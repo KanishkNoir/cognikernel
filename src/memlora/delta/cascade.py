@@ -73,12 +73,12 @@ def cascade_component_status(
         )
 
         try:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO events
                     (project_id, session_id, created_at, event_type,
-                     payload, content_hash, weight, mention_count)
-                VALUES (?, ?, ?, 'COMPONENT_STATUS', ?, ?, 0.6, 1)
+                     payload, content_hash, weight, mention_count, evidence_id)
+                VALUES (?, ?, ?, 'COMPONENT_STATUS', ?, ?, 0.6, 1, ?)
                 """,
                 (
                     project_id,
@@ -86,8 +86,10 @@ def cascade_component_status(
                     int(time.time() * 1000),
                     json.dumps(cascade_payload, sort_keys=True, separators=(",", ":")),
                     cascade_hash,
+                    status_event.evidence_id,
                 ),
             )
+            cascade_id = cursor.lastrowid
         except Exception:
             conn.execute(
                 """
@@ -96,6 +98,21 @@ def cascade_component_status(
                 WHERE project_id = ? AND content_hash = ?
                 """,
                 (project_id, cascade_hash),
+            )
+            row = conn.execute(
+                "SELECT id FROM events WHERE project_id = ? AND content_hash = ?",
+                (project_id, cascade_hash),
+            ).fetchone()
+            cascade_id = row["id"]
+        if status_event.evidence_id is not None:
+            from memlora.storage.evidence import link_event_provenance
+
+            link_event_provenance(
+                conn,
+                event_id=cascade_id,
+                evidence_id=status_event.evidence_id,
+                extractor_version="memlora.v2.cascade",
+                transformation_notes=f"cascaded from event {status_event.id}",
             )
         count += 1
 

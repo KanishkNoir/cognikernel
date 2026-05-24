@@ -63,6 +63,38 @@ _DESCRIPTIVE_NEVER = re.compile(
     re.IGNORECASE,
 )
 
+# Structural-label detector — section headers and category labels whose name
+# re-uses a signal phrase (e.g. "Explicitly abandoned approaches:" hits the
+# "explicitly abandoned" signal). The label NAMES a category; it is not an
+# instance of the category. Must be checked on the RAW sentence text before
+# sanitization strips the markdown markers that prove it's a label.
+_LABEL_MAX_WORDS = 10
+_LABEL_HEADING = re.compile(r"^#{1,6}\s+(.+)$")
+_LABEL_BOLD_WRAP = re.compile(r"^\*\*(.+?)\*\*\s*:?\s*$")
+
+
+def _is_structural_label(raw_text: str) -> bool:
+    """Return True if the raw sentence is a section header / list label."""
+    s = raw_text.strip()
+    if not s:
+        return False
+
+    heading = _LABEL_HEADING.match(s)
+    if heading:
+        body = heading.group(1).rstrip(": ").strip()
+    else:
+        bold = _LABEL_BOLD_WRAP.match(s)
+        if bold:
+            body = bold.group(1).rstrip(": ").strip()
+        elif s.endswith(":"):
+            body = s[:-1].strip()
+        else:
+            return False
+
+    word_count = len(body.split())
+    return 0 < word_count <= _LABEL_MAX_WORDS
+
+
 # Connective words at the end of a preceding sentence indicate setup/reasoning.
 _BACKWARD_CONNECTIVES = ("because", "since", "so that", "given that", "as a result")
 _MAX_BACKWARD = 5
@@ -131,6 +163,13 @@ def extract_events_from_matches(
         description, rationale = extract_window(
             sentences, match.sentence_index, match.signal_type
         )
+
+        # Drop matches landing in a section header / category label. Must run
+        # on the raw description — sanitization strips the `##` and `**` markers
+        # that are the structural evidence this sentence is a label, not content.
+        if _is_structural_label(description):
+            continue
+
         description = sanitize_description(description)
         rationale   = sanitize_rationale(rationale)
 

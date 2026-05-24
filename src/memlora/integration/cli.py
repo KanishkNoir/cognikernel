@@ -10,6 +10,7 @@ from memlora.config import Config
 from memlora.integration.session import (
     get_projection,
     init_project,
+    rebuild_from_raw,
     render_state,
     session_end,
 )
@@ -109,6 +110,46 @@ def main() -> None:
         metavar="N",
         help="Number of recent failures to show (default: 10)",
     )
+    p_failures.add_argument(
+        "--replay",
+        type=int,
+        metavar="JOB_ID",
+        help="Re-run extraction for a dead-lettered job using its original raw evidence",
+    )
+
+    # ── rebuild ───────────────────────────────────────────────────────────────
+    p_rebuild = sub.add_parser(
+        "rebuild",
+        help="Regenerate derived tables from raw_evidence into a sidecar DB",
+    )
+    p_rebuild.add_argument("project_path", help="Path to the project root")
+    p_rebuild.add_argument(
+        "--from-raw",
+        action="store_true",
+        required=True,
+        help="Replay all raw_evidence to regenerate events and projections",
+    )
+    p_rebuild.add_argument(
+        "--sidecar",
+        action="store_true",
+        required=True,
+        help=(
+            "Write output to <project>.db.rebuild (required in V1 — "
+            "the source DB is never modified)"
+        ),
+    )
+    p_rebuild.add_argument(
+        "--since",
+        type=int,
+        default=0,
+        metavar="EVIDENCE_ID",
+        help="Only replay evidence rows with id > EVIDENCE_ID (default: 0 = all)",
+    )
+    p_rebuild.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be processed without writing the sidecar",
+    )
 
     # ── lookup ────────────────────────────────────────────────────────────────
     p_lookup = sub.add_parser(
@@ -136,6 +177,8 @@ def main() -> None:
         _cmd_mcp_serve()
     elif args.command == "failures":
         _cmd_failures(args)
+    elif args.command == "rebuild":
+        _cmd_rebuild(args)
     elif args.command == "lookup":
         sys.exit(_cmd_lookup(args))
 
@@ -270,13 +313,16 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     if args.transcript_file == "-":
-        transcript = sys.stdin.read()
+        raw_input = sys.stdin.read()
     else:
-        transcript = Path(args.transcript_file).read_text(encoding="utf-8")
+        raw_input = Path(args.transcript_file).read_text(encoding="utf-8")
 
+    transcript = raw_input
+    evidence_source_type = "transcript"
     if getattr(args, "jsonl", False):
         from memlora.extraction.jsonl_converter import jsonl_to_transcript
-        transcript = jsonl_to_transcript(transcript)
+        transcript = jsonl_to_transcript(raw_input)
+        evidence_source_type = "jsonl_transcript"
 
     git_diff: str | None = None
     if getattr(args, "git_diff", None):
@@ -287,6 +333,9 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         session_id,
         transcript,
         git_diff=git_diff,
+        evidence_content=raw_input,
+        evidence_source_type=evidence_source_type,
+        evidence_source_path="" if args.transcript_file == "-" else str(Path(args.transcript_file).resolve()),
     )
     print(json.dumps(stats, indent=2))
 
@@ -313,6 +362,9 @@ def _cmd_show(args: argparse.Namespace) -> None:
 
 def _cmd_doctor(args: argparse.Namespace) -> None:
     from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+    from memlora.storage.migrations import run_migrations
+    from memlora.storage.evidence import get_evidence_summary
+    from memlora.storage.jobs import list_jobs
     from memlora.telemetry.ingest import get_cache_stats
 
     config = Config.load()
@@ -325,6 +377,7 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     with get_connection(db_path) as conn:
+        run_migrations(conn)
         total = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         active = conn.execute(
             "SELECT COUNT(*) FROM events WHERE archived=0 AND superseded_by IS NULL"
@@ -339,15 +392,51 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
             "SELECT COUNT(*) FROM extraction_failures"
         ).fetchone()[0]
         sessions = conn.execute(
-            "SELECT COUNT(DISTINCT session_id) FROM events"
+            """
+            SELECT COUNT(DISTINCT session_id)
+            FROM (
+                SELECT session_id FROM extraction_jobs WHERE project_id = ?
+                UNION
+                SELECT session_id FROM events WHERE project_id = ?
+            )
+            """,
+            (project_id, project_id),
         ).fetchone()[0]
         cache_stats = get_cache_stats(conn, project_id)
+        evidence_summary = get_evidence_summary(conn, project_id)
+        import time as _time
+        dead_jobs = list_jobs(conn, project_id, state="dead_lettered", limit=1000)
+        queued_jobs = list_jobs(conn, project_id, state="queued", limit=1000)
+        claimed_jobs = list_jobs(conn, project_id, state="claimed", limit=1000)
+        retryable_jobs = list_jobs(conn, project_id, state="retryable_failure", limit=1000)
+        now_ms = int(_time.time() * 1000)
 
     print(f"project_id : {project_id}")
     print(f"db_path    : {db_path}")
     print(f"sessions   : {sessions}")
     print(f"events     : {total} total / {active} active / {archived} archived / {superseded} superseded")
     print(f"failures   : {failures}")
+    print(
+        "evidence   : "
+        f"{evidence_summary['count']} rows / "
+        f"{evidence_summary['average_compression_ratio']:.2f}x avg compression"
+    )
+    print(
+        f"jobs       : {len(queued_jobs)} queued / "
+        f"{len(claimed_jobs)} claimed / "
+        f"{len(retryable_jobs)} retryable / "
+        f"{len(dead_jobs)} dead-lettered"
+    )
+    stale_claimed = [
+        j for j in claimed_jobs
+        if j.claimed_at is not None and now_ms - j.claimed_at > j.hard_timeout_ms
+    ]
+    if stale_claimed:
+        print(
+            f"  WARNING: {len(stale_claimed)} claimed job(s) exceeded hard_timeout — "
+            "likely orphaned by a crashed process; run 'memlora doctor' again after "
+            "the next session to confirm they clear."
+        )
 
     print()
     print("-- cache telemetry ------------------------------------------")
@@ -397,15 +486,21 @@ def _cmd_reset(args: argparse.Namespace) -> None:
             return
 
     from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+    from memlora.storage.migrations import run_migrations
 
     config = Config.load()
     project_id = hash_project_path(args.project_path)
     db_path = get_db_path(config, project_id)
 
     with get_connection(db_path) as conn:
+        run_migrations(conn)
+        conn.execute("DELETE FROM extraction_job_acks")
+        conn.execute("DELETE FROM extraction_jobs")
+        conn.execute("DELETE FROM event_provenance")
         conn.execute("DELETE FROM events")
         conn.execute("DELETE FROM state_projections")
         conn.execute("DELETE FROM extraction_failures")
+        conn.execute("DELETE FROM raw_evidence")
         conn.execute("DELETE FROM meta WHERE key != 'schema_version' AND key != 'projection_version'")
         conn.commit()
 
@@ -414,8 +509,11 @@ def _cmd_reset(args: argparse.Namespace) -> None:
 
 def _cmd_failures(args: argparse.Namespace) -> None:
     import datetime
+    from memlora.integration.session import replay_job
     from memlora.storage.connection import get_connection, get_db_path, hash_project_path
     from memlora.storage.events import get_extraction_failures
+    from memlora.storage.jobs import list_jobs
+    from memlora.storage.migrations import run_migrations
 
     config = Config.load()
     project_id = hash_project_path(args.project_path)
@@ -425,20 +523,66 @@ def _cmd_failures(args: argparse.Namespace) -> None:
         print(f"No database found for {Path(args.project_path).resolve()}", file=sys.stderr)
         sys.exit(1)
 
-    with get_connection(db_path) as conn:
-        failures = get_extraction_failures(conn, project_id, limit=args.limit)
+    if getattr(args, "replay", None) is not None:
+        try:
+            stats = replay_job(args.project_path, args.replay, config=config)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as exc:
+            print(
+                f"ERROR: replay of job {args.replay} failed during re-execution: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"Replayed job {args.replay} — re-ran extraction.")
+        print(json.dumps(stats, indent=2))
+        return
 
-    if not failures:
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        failures = get_extraction_failures(conn, project_id, limit=args.limit)
+        dead_jobs = list_jobs(conn, project_id, state="dead_lettered", limit=args.limit)
+
+    if not failures and not dead_jobs:
         print("No extraction failures recorded.")
         return
 
-    print(f"{len(failures)} most recent extraction failure(s):\n")
+    if dead_jobs:
+        print(f"{len(dead_jobs)} dead-lettered extraction job(s):\n")
+        for job in dead_jobs:
+            ts = datetime.datetime.fromtimestamp(job.updated_at / 1000).strftime("%Y-%m-%d %H:%M:%S")
+            sess = job.session_id[:12]
+            err = (job.last_error or "")[:200]
+            print(
+                f"  job={job.id} [{ts}] session={sess} "
+                f"stage={job.stage} class={job.failure_class}"
+            )
+            print(f"    {err}")
+            print(f'    replay: memlora failures "{args.project_path}" --replay {job.id}')
+            print()
+
+    if not failures:
+        return
+
+    print(f"{len(failures)} legacy extraction failure(s):\n")
     for f in failures:
         ts = datetime.datetime.fromtimestamp(f["failed_at"] / 1000).strftime("%Y-%m-%d %H:%M:%S")
         sess = f["session_id"][:12]
         print(f"  [{ts}] session={sess}  stage={f['stage']}")
         print(f"    {f['error_message'][:200]}")
         print()
+
+
+def _cmd_rebuild(args: argparse.Namespace) -> None:
+    config = Config.load()
+    stats = rebuild_from_raw(
+        project_path=args.project_path,
+        since_evidence_id=args.since,
+        dry_run=args.dry_run,
+        config=config,
+    )
+    print(json.dumps(stats, indent=2))
 
 
 def _cmd_mcp_serve() -> None:

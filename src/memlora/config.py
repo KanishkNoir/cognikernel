@@ -5,7 +5,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-EXPECTED_SCHEMA_VERSION: int = 4
+EXPECTED_SCHEMA_VERSION: int = 6
 EXPECTED_PROJECTION_VERSION: int = 1
 
 

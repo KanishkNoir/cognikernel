@@ -12,12 +12,24 @@ import re
 _MAX_DESC = 120
 _MAX_RATIONALE = 120
 
-# Markdown patterns to strip
+# Block-level markdown patterns — applied per line, drop or strip the whole line.
 _TABLE_ROW = re.compile(r"^\s*\|.+\|\s*$")
 _TABLE_SEP  = re.compile(r"^\s*\|[-| :]+\|\s*$")
 _CODE_FENCE = re.compile(r"^```.*$")
 _HEADING    = re.compile(r"^#{1,6}\s+")
 _BULLET     = re.compile(r"^[-*•]\s+")
+
+# Inline markdown patterns — applied per kept line, keep text drop markers.
+# Order in `_strip_inline_markdown` matters: links → bold → italic → code → strike.
+_INLINE_LINK   = re.compile(r"\[([^\]\n]+)\]\([^)\n]+\)")
+_INLINE_BOLD   = re.compile(r"\*\*([^*\n]+?)\*\*|__([^_\n]+?)__")
+# Italic only fires when the marker is bordered by non-word chars so identifiers
+# like `snake_case_var` and `*args` are preserved. The body must not start or
+# end with whitespace (rules out emphasis-mid-word false positives).
+_INLINE_STAR_I = re.compile(r"(?<![*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\*)")
+_INLINE_UND_I  = re.compile(r"(?<![_\w])_(?!\s)([^_\n]+?)(?<!\s)_(?![_\w])")
+_INLINE_CODE   = re.compile(r"`([^`\n]+?)`")
+_INLINE_STRIKE = re.compile(r"~~([^~\n]+?)~~")
 
 # Role prefix and BOM stripping
 _BOM = "﻿"
@@ -88,8 +100,28 @@ def _clean(text: str) -> str:
             continue
         line = _HEADING.sub("", line)
         line = _BULLET.sub("", line)
+        line = _strip_inline_markdown(line)
         line = line.strip()
         if line:
             kept.append(line)
 
     return " ".join(kept)
+
+
+def _strip_inline_markdown(line: str) -> str:
+    """Remove inline markdown markers, keep their text content.
+
+    Inline markdown (bold/italic/code/link/strike) is presentational; once the
+    text is destined for re-injection into a future LLM context as plain prose,
+    the markers are noise that fragments tokenization without adding meaning.
+    """
+    # Links first so the URL is dropped before italic/code patterns can match it.
+    line = _INLINE_LINK.sub(r"\1", line)
+    # Bold must run before italic — otherwise `*chose*` inside `**chose**` would
+    # be consumed by the italic pattern and leave one stray `*` on each side.
+    line = _INLINE_BOLD.sub(lambda m: m.group(1) or m.group(2), line)
+    line = _INLINE_STAR_I.sub(r"\1", line)
+    line = _INLINE_UND_I.sub(r"\1", line)
+    line = _INLINE_CODE.sub(r"\1", line)
+    line = _INLINE_STRIKE.sub(r"\1", line)
+    return line

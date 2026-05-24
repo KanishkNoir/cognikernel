@@ -142,8 +142,8 @@ def _insert_or_update(
             """
             INSERT INTO events
                 (project_id, session_id, created_at, event_type,
-                 payload, content_hash, weight, mention_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 payload, content_hash, weight, mention_count, evidence_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.project_id,
@@ -154,24 +154,46 @@ def _insert_or_update(
                 event.content_hash,
                 event.weight,
                 event.mention_count,
+                event.evidence_id,
             ),
         )
-        return "inserted", cursor.lastrowid  # type: ignore[return-value]
+        row_id = cursor.lastrowid  # type: ignore[assignment]
     except sqlite3.IntegrityError:
         conn.execute(
             """
             UPDATE events
             SET mention_count = mention_count + 1,
-                weight        = MIN(weight + ?, ?)
+                weight        = MIN(weight + ?, ?),
+                evidence_id   = COALESCE(evidence_id, ?)
             WHERE project_id = ? AND content_hash = ?
             """,
-            (WEIGHT_INCREMENT_ON_DEDUP, MAX_EVENT_WEIGHT, event.project_id, event.content_hash),
+            (
+                WEIGHT_INCREMENT_ON_DEDUP,
+                MAX_EVENT_WEIGHT,
+                event.evidence_id,
+                event.project_id,
+                event.content_hash,
+            ),
         )
         row = conn.execute(
             "SELECT id FROM events WHERE project_id = ? AND content_hash = ?",
             (event.project_id, event.content_hash),
         ).fetchone()
-        return "updated", row["id"]
+        row_id = row["id"]
+        outcome = "updated"
+    else:
+        outcome = "inserted"
+
+    if event.evidence_id is not None:
+        from memlora.storage.evidence import link_event_provenance
+
+        link_event_provenance(
+            conn,
+            event_id=row_id,
+            evidence_id=event.evidence_id,
+            extractor_version="memlora.v2",
+        )
+    return outcome, row_id
 
 
 def _apply_decay_inner(

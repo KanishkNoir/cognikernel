@@ -18,6 +18,24 @@ from memlora.storage.events import (
     mark_superseded,
     update_weight,
 )
+from memlora.storage.evidence import (
+    RawEvidence,
+    get_evidence_summary,
+    link_event_provenance,
+    load_evidence,
+    store_evidence,
+)
+from memlora.storage.jobs import (
+    ExtractionJob,
+    ack_stage,
+    claim_next_job,
+    enqueue_extraction,
+    fail_job,
+    get_job,
+    list_jobs,
+    reclaim_stale_jobs,
+    replay_dead_letter,
+)
 from memlora.storage.migrations import run_migrations
 from memlora.storage.projections import (
     Projection,
@@ -52,6 +70,20 @@ __all__ = [
     "update_weight",
     "apply_weight_decay",
     "insert_extraction_failure",
+    "RawEvidence",
+    "store_evidence",
+    "load_evidence",
+    "link_event_provenance",
+    "get_evidence_summary",
+    "ExtractionJob",
+    "enqueue_extraction",
+    "claim_next_job",
+    "ack_stage",
+    "fail_job",
+    "get_job",
+    "list_jobs",
+    "reclaim_stale_jobs",
+    "replay_dead_letter",
     # projections
     "Projection",
     "load_projection",

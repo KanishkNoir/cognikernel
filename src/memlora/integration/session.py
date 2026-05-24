@@ -34,6 +34,9 @@ def session_end(
     transcript: str,
     config: Config | None = None,
     git_diff: str | None = None,
+    evidence_content: str | bytes | None = None,
+    evidence_source_type: str = "transcript",
+    evidence_source_path: str = "",
 ) -> dict[str, Any]:
     """Extract events from *transcript* and merge them into the project DB.
 
@@ -42,6 +45,8 @@ def session_end(
     """
     from memlora.extraction.pipeline import SessionMetadata, extract_session
     from memlora.delta.merge import execute_merge
+    from memlora.storage.evidence import store_evidence
+    from memlora.storage.jobs import ack_stage, enqueue_extraction, fail_job
 
     config = config or Config.load()
     project_id = hash_project_path(project_path)
@@ -49,6 +54,23 @@ def session_end(
 
     with get_connection(db_path) as conn:
         run_migrations(conn)
+        evidence_id = store_evidence(
+            conn,
+            project_id=project_id,
+            session_id=session_id,
+            source_type=evidence_source_type,
+            content=evidence_content if evidence_content is not None else transcript,
+            source_path=evidence_source_path,
+            metadata={"git_diff": bool(git_diff)},
+        )
+        job_id = enqueue_extraction(
+            conn,
+            project_id=project_id,
+            session_id=session_id,
+            evidence_id=evidence_id,
+            job_category="extract.transcript",
+        )
+        ack_stage(conn, job_id, "OBSERVED", output_ref=f"raw_evidence:{evidence_id}")
 
     now = int(time.time() * 1000)
     session_meta = SessionMetadata(
@@ -57,15 +79,96 @@ def session_end(
         started_at=now,
         ended_at=now,
     )
-    candidates = extract_session(transcript, session_meta, git_diff=git_diff)
+    try:
+        candidates = extract_session(transcript, session_meta, git_diff=git_diff)
+        for event in candidates:
+            event.evidence_id = evidence_id
 
-    with get_connection(db_path) as conn:
-        stats = execute_merge(conn, session_id, candidates)
-        _update_symbol_graph(conn, project_id, str(project_path), git_diff)
+        with get_connection(db_path) as conn:
+            ack_stage(conn, job_id, "PARSED", output_ref=f"events:{len(candidates)}")
+            ack_stage(conn, job_id, "CLASSIFIED", output_ref=f"events:{len(candidates)}")
+            stats = execute_merge(conn, session_id, candidates)
+            ack_stage(
+                conn,
+                job_id,
+                "MERGED",
+                output_ref=json_like_stats(stats),
+            )
+            _update_symbol_graph(conn, project_id, str(project_path), git_diff)
+            ack_stage(conn, job_id, "PROJECTED", output_ref="projection:invalidated")
+            ack_stage(conn, job_id, "COMPLETED", output_ref="session_end")
+    except Exception as exc:
+        with get_connection(db_path) as conn:
+            try:
+                fail_job(conn, job_id, "EXTRACTOR_BUG", str(exc))
+            except Exception:
+                pass
+        raise
 
     stats["extracted"] = len(candidates)
+    stats["evidence_id"] = evidence_id
+    stats["job_id"] = job_id
     _log.info("session_end.done", extra={"session_id": session_id, **stats})
     return stats
+
+
+def json_like_stats(stats: dict[str, Any]) -> str:
+    import json
+
+    return json.dumps(stats, sort_keys=True, separators=(",", ":"))
+
+
+def replay_job(
+    project_path: str | Path,
+    job_id: int,
+    config: Config | None = None,
+) -> dict[str, Any]:
+    """Re-run a dead-lettered extraction job using its original raw_evidence.
+
+    Flips the job state via replay_dead_letter, decompresses the original
+    content from raw_evidence, then re-invokes session_end with the same
+    session_id. The existing job row is reused (INSERT OR IGNORE on
+    enqueue_extraction) so it advances queued -> completed in place, or
+    back to dead_lettered if the underlying problem persists.
+    """
+    from memlora.storage.evidence import load_evidence
+    from memlora.storage.jobs import get_job, replay_dead_letter
+
+    config = config or Config.load()
+    project_id = hash_project_path(project_path)
+    db_path = get_db_path(config, project_id)
+
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        job = get_job(conn, job_id)
+        if job.state != "dead_lettered":
+            raise ValueError(
+                f"job {job_id} is not dead-lettered (state={job.state!r}); "
+                f"only dead-lettered jobs can be replayed"
+            )
+        evidence = load_evidence(conn, job.evidence_id)
+        if evidence is None:
+            raise ValueError(
+                f"evidence_id={job.evidence_id} referenced by job {job_id} "
+                f"is missing from raw_evidence — cannot replay"
+            )
+        replay_dead_letter(conn, job_id)
+
+    raw = evidence.content.decode("utf-8")
+    transcript = raw
+    if evidence.source_type == "jsonl_transcript":
+        from memlora.extraction.jsonl_converter import jsonl_to_transcript
+        transcript = jsonl_to_transcript(raw)
+
+    return session_end(
+        project_path=project_path,
+        session_id=job.session_id,
+        transcript=transcript,
+        config=config,
+        evidence_content=raw,
+        evidence_source_type=evidence.source_type,
+        evidence_source_path=evidence.source_path,
+    )
 
 
 def get_projection(
@@ -101,8 +204,15 @@ def render_state(
         run_migrations(conn)
         events = get_events_for_projection(conn, project_id, after_id=0)
         session_count: int = conn.execute(
-            "SELECT COUNT(DISTINCT session_id) FROM events WHERE project_id = ?",
-            (project_id,),
+            """
+            SELECT COUNT(DISTINCT session_id)
+            FROM (
+                SELECT session_id FROM extraction_jobs WHERE project_id = ?
+                UNION
+                SELECT session_id FROM events WHERE project_id = ?
+            )
+            """,
+            (project_id, project_id),
         ).fetchone()[0]
         nodes = load_symbol_nodes(conn, project_id)
         edges = load_symbol_edges(conn, project_id)
@@ -131,6 +241,163 @@ def render_state(
     ctx.ckl_v2 = config.ckl_v2
     ctx.section_budgets = config.section_budgets
     return render_with_budget_enforcement(ctx)
+
+
+def rebuild_from_raw(
+    project_path: str | Path,
+    since_evidence_id: int = 0,
+    dry_run: bool = False,
+    config: Config | None = None,
+) -> dict[str, Any]:
+    """Regenerate derived tables in a sidecar DB from raw_evidence.
+
+    Writes to <project_id>.db.rebuild — the source DB is never touched.
+    The sidecar is always recreated from scratch to guarantee determinism.
+
+    The audit invariant: given the same raw_evidence + extractor version,
+    the (event_type, content_hash, payload) set in the sidecar is identical
+    to what the original run produced. Lifecycle metadata (weight,
+    mention_count, archived, superseded_by) is recomputed from the replay
+    order and may differ from live values — see design decision §6.5(c).
+    """
+    import zlib
+
+    from memlora.extraction.pipeline import SessionMetadata, extract_session
+    from memlora.delta.merge import execute_merge
+
+    config = config or Config.load()
+    project_id = hash_project_path(project_path)
+    db_path = get_db_path(config, project_id)
+
+    with get_connection(db_path) as source_conn:
+        run_migrations(source_conn)
+        evidence_rows = source_conn.execute(
+            """
+            SELECT id, session_id, source_type, source_path, captured_at,
+                   content_sha256, content_encoding, content_blob,
+                   original_size_bytes, stored_size_bytes, metadata
+            FROM raw_evidence
+            WHERE project_id = ? AND id > ?
+            ORDER BY id ASC
+            """,
+            (project_id, since_evidence_id),
+        ).fetchall()
+
+    evidence_count = len(evidence_rows)
+    sidecar_path = db_path.parent / (db_path.name + ".rebuild")
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "evidence_count": evidence_count,
+            "since_evidence_id": since_evidence_id,
+            "sidecar_path": str(sidecar_path),
+        }
+
+    # Always start from a clean sidecar for determinism.
+    if sidecar_path.exists():
+        sidecar_path.unlink()
+    for _ext in ("-wal", "-shm"):
+        stale = Path(str(sidecar_path) + _ext)
+        if stale.exists():
+            stale.unlink()
+
+    total_extracted = 0
+    total_inserted = 0
+    total_updated = 0
+    sessions_seen: set[str] = set()
+    errors = 0
+
+    # One sidecar connection for the whole run avoids per-row WAL churn.
+    with get_connection(sidecar_path) as sidecar_conn:
+        run_migrations(sidecar_conn)
+        sidecar_conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('rebuild_source', ?)",
+            (str(db_path),),
+        )
+        sidecar_conn.commit()
+
+        for row in evidence_rows:
+            evidence_id = row["id"]
+            session_id = row["session_id"]
+            source_type = row["source_type"]
+
+            # Copy evidence row into sidecar (preserving original id for FK integrity).
+            sidecar_conn.execute(
+                """
+                INSERT OR IGNORE INTO raw_evidence
+                    (id, project_id, session_id, source_type, source_path, captured_at,
+                     content_sha256, content_encoding, content_blob,
+                     original_size_bytes, stored_size_bytes, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evidence_id,
+                    project_id,
+                    session_id,
+                    source_type,
+                    row["source_path"],
+                    row["captured_at"],
+                    row["content_sha256"],
+                    row["content_encoding"],
+                    row["content_blob"],
+                    row["original_size_bytes"],
+                    row["stored_size_bytes"],
+                    row["metadata"],
+                ),
+            )
+            sidecar_conn.commit()
+
+            raw = zlib.decompress(row["content_blob"]).decode("utf-8")
+            transcript = raw
+            if source_type == "jsonl_transcript":
+                from memlora.extraction.jsonl_converter import jsonl_to_transcript
+                transcript = jsonl_to_transcript(raw)
+
+            now = int(time.time() * 1000)
+            session_meta = SessionMetadata(
+                project_id=project_id,
+                session_id=session_id,
+                started_at=now,
+                ended_at=now,
+            )
+
+            try:
+                candidates = extract_session(transcript, session_meta)
+                for event in candidates:
+                    event.evidence_id = evidence_id
+                stats = execute_merge(sidecar_conn, session_id, candidates)
+                _update_symbol_graph(sidecar_conn, project_id, str(project_path), git_diff=None)
+                total_extracted += len(candidates)
+                total_inserted += stats.get("inserted", 0)
+                total_updated += stats.get("updated", 0)
+                sessions_seen.add(session_id)
+            except Exception as exc:
+                _log.warning(
+                    "rebuild.evidence_failed",
+                    extra={"evidence_id": evidence_id, "error": str(exc)},
+                )
+                errors += 1
+
+    _log.info(
+        "rebuild.done",
+        extra={
+            "project_id": project_id,
+            "evidence_count": evidence_count,
+            "sessions_processed": len(sessions_seen),
+            "errors": errors,
+        },
+    )
+    return {
+        "sidecar_path": str(sidecar_path),
+        "evidence_count": evidence_count,
+        "sessions_processed": len(sessions_seen),
+        "total_extracted": total_extracted,
+        "total_inserted": total_inserted,
+        "total_updated": total_updated,
+        "errors": errors,
+        "since_evidence_id": since_evidence_id,
+    }
 
 
 def _update_symbol_graph(

@@ -156,6 +156,34 @@ _NOISY: list[tuple[str, str, str]] = [
     ("Implement the CRUD endpoints and wire them in.", "DECISION", "user"),
     # DECISION events sourced from the user turn (not an architectural decision by the model)
     ("We decided to use FastAPI.", "DECISION", "user"),
+    # Structural labels — markdown headings whose category name re-uses a signal phrase.
+    # The label names a category, it isn't an instance of it. Storing the label as
+    # the decision/abandonment is meta-discourse, not data.
+    ("## Explicitly abandoned approaches", "APPROACH_ABANDONED_DO_NOT_RETRY", "assistant"),
+    ("## What's ruled out", "APPROACH_ABANDONED_DO_NOT_RETRY", "assistant"),
+    ("### Ruled out:", "APPROACH_ABANDONED_DO_NOT_RETRY", "assistant"),
+    ("**Explicitly abandoned approaches:**", "APPROACH_ABANDONED_DO_NOT_RETRY", "assistant"),
+    ("**What's ruled out:**", "APPROACH_ABANDONED_DO_NOT_RETRY", "assistant"),
+    ("Explicitly abandoned approaches:", "APPROACH_ABANDONED_DO_NOT_RETRY", "assistant"),
+    ("Things we won't use:", "APPROACH_ABANDONED_DO_NOT_RETRY", "assistant"),
+]
+
+
+_LABEL_BUT_SUBSTANTIVE: list[tuple[str, str, str]] = [
+    # A heading prefix on a substantive long sentence is NOT a label — it's a
+    # full sentence styled as a header. These must survive.
+    (
+        "## We switched to PostgreSQL because the WAL contention on SQLite blocked "
+        "concurrent writers in our staging cluster.",
+        "DECISION",
+        "assistant",
+    ),
+    (
+        "Switched to PostgreSQL after SQLite's WAL contention blocked our concurrent "
+        "writers in staging.",
+        "DECISION",
+        "assistant",
+    ),
 ]
 
 _GOOD: list[tuple[str, str, str]] = [
@@ -181,3 +209,12 @@ class TestNarrationFilter:
     def test_good_descriptions_survive(self, text: str, signal_type: str, role: str) -> None:
         events = _run_single(text, signal_type, role)
         assert len(events) == 1, f"Expected event to survive but got {len(events)} events"
+
+    @pytest.mark.parametrize("text,signal_type,role", _LABEL_BUT_SUBSTANTIVE)
+    def test_substantive_sentences_with_heading_marker_survive(
+        self, text: str, signal_type: str, role: str
+    ) -> None:
+        events = _run_single(text, signal_type, role)
+        assert len(events) == 1, (
+            f"Expected substantive sentence to survive label filter, got {len(events)} events"
+        )

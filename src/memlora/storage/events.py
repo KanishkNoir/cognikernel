@@ -34,6 +34,7 @@ class Event:
     event_type: str
     payload: dict[str, Any]
     content_hash: str
+    evidence_id: int | None = None
     weight: float = 1.0
     mention_count: int = 1
     created_at: int = field(default_factory=lambda: int(time.time() * 1000))
@@ -62,8 +63,8 @@ def insert_event(conn: sqlite3.Connection, event: Event) -> int:
             """
             INSERT INTO events
                 (project_id, session_id, created_at, event_type, payload,
-                 content_hash, weight, mention_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 content_hash, weight, mention_count, evidence_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.project_id,
@@ -74,25 +75,52 @@ def insert_event(conn: sqlite3.Connection, event: Event) -> int:
                 event.content_hash,
                 event.weight,
                 event.mention_count,
+                event.evidence_id,
             ),
         )
+        row_id = cursor.lastrowid  # type: ignore[assignment]
+        if event.evidence_id is not None:
+            from memlora.storage.evidence import link_event_provenance
+
+            link_event_provenance(
+                conn,
+                event_id=row_id,
+                evidence_id=event.evidence_id,
+                extractor_version="memlora.v2",
+            )
         conn.commit()
-        return cursor.lastrowid  # type: ignore[return-value]
+        return row_id  # type: ignore[return-value]
     except sqlite3.IntegrityError:
         conn.execute(
             """
             UPDATE events
             SET mention_count = mention_count + 1,
-                weight        = MIN(weight + ?, ?)
+                weight        = MIN(weight + ?, ?),
+                evidence_id   = COALESCE(evidence_id, ?)
             WHERE project_id = ? AND content_hash = ?
             """,
-            (WEIGHT_INCREMENT_ON_DEDUP, MAX_EVENT_WEIGHT, event.project_id, event.content_hash),
+            (
+                WEIGHT_INCREMENT_ON_DEDUP,
+                MAX_EVENT_WEIGHT,
+                event.evidence_id,
+                event.project_id,
+                event.content_hash,
+            ),
         )
-        conn.commit()
         row = conn.execute(
             "SELECT id FROM events WHERE project_id = ? AND content_hash = ?",
             (event.project_id, event.content_hash),
         ).fetchone()
+        if event.evidence_id is not None:
+            from memlora.storage.evidence import link_event_provenance
+
+            link_event_provenance(
+                conn,
+                event_id=row["id"],
+                evidence_id=event.evidence_id,
+                extractor_version="memlora.v2",
+            )
+        conn.commit()
         return row["id"]
 
 
@@ -286,6 +314,7 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         event_type=row["event_type"],
         payload=json.loads(row["payload"]),
         content_hash=row["content_hash"],
+        evidence_id=row["evidence_id"],
         weight=row["weight"],
         mention_count=row["mention_count"],
         superseded_by=row["superseded_by"],

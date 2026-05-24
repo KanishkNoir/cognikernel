@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from memlora.delta.merge import execute_merge, merge_event
+from memlora.storage.evidence import store_evidence
 from memlora.storage.events import Event, MAX_EVENT_WEIGHT, WEIGHT_INCREMENT_ON_DEDUP, insert_event
 
 
@@ -201,6 +202,40 @@ class TestExecuteMergeCascade:
         candidates = [make_event(event_type="DECISION", content_hash="h1")]
         stats = execute_merge(conn, "sess1", candidates)
         assert stats["cascaded"] == 0
+
+    def test_cascade_event_links_to_source_evidence(self, conn: sqlite3.Connection) -> None:
+        evidence_id = store_evidence(conn, "proj1", "sess1", "transcript", b"source")
+        conn.execute(
+            """
+            INSERT INTO events
+                (project_id, session_id, created_at, event_type,
+                 payload, content_hash, weight, mention_count)
+            VALUES ('proj1', 'sess0', 0, 'COMPONENT_STATUS',
+                    '{"path":"src/router.py","status":"stable","dependencies":["src/api.py"]}',
+                    'dep1', 0.8, 1)
+            """
+        )
+        conn.commit()
+        e = make_event(
+            event_type="COMPONENT_STATUS",
+            content_hash="new_status_with_evidence",
+            payload={"path": "src/api.py", "status": "blocked"},
+            evidence_id=evidence_id,
+        )
+
+        execute_merge(conn, "sess1", [e])
+
+        row = conn.execute(
+            """
+            SELECT ep.raw_evidence_id
+            FROM events ev
+            JOIN event_provenance ep ON ep.event_id = ev.id
+            WHERE ev.content_hash != 'new_status_with_evidence'
+              AND json_extract(ev.payload, '$.status') = 'needs_review'
+            """
+        ).fetchone()
+        assert row is not None
+        assert row["raw_evidence_id"] == evidence_id
 
 
 # ── execute_merge — decay and archive ─────────────────────────────────────────

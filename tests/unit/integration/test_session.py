@@ -11,6 +11,7 @@ from memlora.integration.session import (
     get_projection,
     init_project,
     render_state,
+    replay_job,
     session_end,
 )
 from memlora.storage.connection import get_connection, get_db_path, hash_project_path
@@ -111,6 +112,37 @@ class TestSessionEnd:
         stats = session_end(project_path, "sess1", "", config=cfg)
         assert "extracted" in stats
 
+    def test_session_end_records_evidence_and_completed_job(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        stats = session_end(
+            project_path,
+            "sess1",
+            "Assistant: We decided to use SQLite.",
+            config=cfg,
+        )
+        project_id = hash_project_path(project_path)
+        db_path = get_db_path(cfg, project_id)
+        with get_connection(db_path) as conn:
+            evidence_count = conn.execute(
+                "SELECT COUNT(*) FROM raw_evidence WHERE project_id=?",
+                (project_id,),
+            ).fetchone()[0]
+            job = conn.execute(
+                "SELECT * FROM extraction_jobs WHERE project_id=?",
+                (project_id,),
+            ).fetchone()
+            provenance_count = conn.execute(
+                "SELECT COUNT(*) FROM event_provenance"
+            ).fetchone()[0]
+
+        assert stats["evidence_id"] > 0
+        assert stats["job_id"] > 0
+        assert evidence_count == 1
+        assert job["state"] == "completed"
+        assert job["stage"] == "COMPLETED"
+        assert provenance_count == stats["inserted"] + stats["updated"]
+
 
 # ── get_projection ────────────────────────────────────────────────────────────
 
@@ -171,3 +203,103 @@ class TestRenderState:
         init_project(project_path, config=cfg)
         rendered = render_state(project_path, config=cfg)
         assert project_path.name in rendered
+
+
+# ── replay_job ────────────────────────────────────────────────────────────────
+
+class TestReplayJob:
+    """Replay must be a real recovery primitive: re-run extraction against the
+    original raw_evidence, not just flip the job state to queued."""
+
+    def _seed_dead_lettered_job(
+        self, project_path: Path, cfg: Config, session_id: str = "sess_poison"
+    ) -> tuple[int, int]:
+        from memlora.storage.evidence import store_evidence
+        from memlora.storage.jobs import enqueue_extraction, fail_job
+
+        init_project(project_path, config=cfg)
+        project_id = hash_project_path(project_path)
+        db_path = get_db_path(cfg, project_id)
+        transcript = (
+            "We decided to use SQLite for local storage. "
+            "This is a hard constraint: never store secrets in plain text."
+        )
+        with get_connection(db_path) as conn:
+            eid = store_evidence(
+                conn, project_id, session_id, "transcript", transcript.encode("utf-8")
+            )
+            jid = enqueue_extraction(
+                conn, project_id, session_id, eid, "extract.transcript"
+            )
+            fail_job(conn, jid, "POISON_INPUT", "simulated failure")
+        return eid, jid
+
+    def test_replay_advances_job_to_completed(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        from memlora.storage.jobs import get_job
+
+        evidence_id, job_id = self._seed_dead_lettered_job(project_path, cfg)
+        stats = replay_job(project_path, job_id, config=cfg)
+
+        project_id = hash_project_path(project_path)
+        db_path = get_db_path(cfg, project_id)
+        with get_connection(db_path) as conn:
+            job = get_job(conn, job_id)
+
+        assert job.state == "completed"
+        assert job.stage == "COMPLETED"
+        assert stats["evidence_id"] == evidence_id
+        assert stats["job_id"] == job_id
+
+    def test_replay_actually_inserts_events(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        _, job_id = self._seed_dead_lettered_job(project_path, cfg)
+        stats = replay_job(project_path, job_id, config=cfg)
+
+        project_id = hash_project_path(project_path)
+        db_path = get_db_path(cfg, project_id)
+        with get_connection(db_path) as conn:
+            event_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE project_id=?", (project_id,)
+            ).fetchone()[0]
+
+        assert stats["extracted"] > 0
+        assert event_count > 0
+
+    def test_replay_records_full_ack_chain(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        _, job_id = self._seed_dead_lettered_job(project_path, cfg)
+        replay_job(project_path, job_id, config=cfg)
+
+        project_id = hash_project_path(project_path)
+        db_path = get_db_path(cfg, project_id)
+        with get_connection(db_path) as conn:
+            stages = {
+                row["stage"]
+                for row in conn.execute(
+                    "SELECT stage FROM extraction_job_acks WHERE job_id=?",
+                    (job_id,),
+                ).fetchall()
+            }
+
+        assert {"OBSERVED", "PARSED", "CLASSIFIED", "MERGED", "PROJECTED", "COMPLETED"} <= stages
+
+    def test_replay_rejects_non_dead_lettered_job(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        init_project(project_path, config=cfg)
+        stats = session_end(project_path, "sess1", DECISION_TRANSCRIPT, config=cfg)
+
+        with pytest.raises(ValueError, match="not dead-lettered"):
+            replay_job(project_path, stats["job_id"], config=cfg)
+
+    def test_replay_rejects_unknown_job(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        init_project(project_path, config=cfg)
+
+        with pytest.raises(ValueError, match="Unknown extraction job"):
+            replay_job(project_path, 99999, config=cfg)
