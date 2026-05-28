@@ -1,11 +1,13 @@
-"""PostToolUse hook — updates symbol graph after Write/Edit tool calls.
+"""PostToolUse hook — updates symbol graph + symbol_files after Write/Edit.
 
-Fires after every Write or Edit. Re-parses the affected file and upserts
-symbol_nodes + symbol_edges in the DB immediately, keeping the graph current
-without waiting for session end.
+Fires after every successful Write or Edit. Delegates to
+`apply_symbol_update(..., project_path=..., session_id=..., last_action=...)`
+which keeps both symbol_nodes/edges AND symbol_files in lockstep (C1).
 
 Never raises — any exception is swallowed so Claude is never blocked.
 """
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path
@@ -18,8 +20,13 @@ def main() -> None:
     except Exception:
         return
 
+    tool_name = payload.get("tool_name", "")
+    if tool_name not in ("Write", "Edit"):
+        return
+
     tool_input = payload.get("tool_input", {})
     file_path = tool_input.get("file_path", "")
+    session_id = payload.get("session_id", "")
     if not file_path:
         return
 
@@ -32,18 +39,20 @@ def main() -> None:
         return
 
     try:
-        import sys as _sys
-        import os as _os
-        _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-        from memlora.symbols.extractor import build_symbol_update
-        from memlora.symbols.store import apply_symbol_update
-        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
-        from memlora.storage.migrations import run_migrations
         from memlora.config import Config
         from memlora.extraction.git_augment import FileChange
+        from memlora.storage.connection import (
+            get_connection,
+            get_db_path,
+            hash_project_path,
+        )
+        from memlora.storage.migrations import run_migrations
+        from memlora.symbols.extractor import build_symbol_update
+        from memlora.symbols.store import apply_symbol_update
 
-        config = Config.load()
+        config = Config.load(project_path=project_path)
         project_id = hash_project_path(project_path)
         db_path = get_db_path(config, project_id)
 
@@ -54,9 +63,17 @@ def main() -> None:
         changed_files = [FileChange(path=rel_path, change_type="modified", lines_changed=0)]
 
         update = build_symbol_update(project_id, str(project_path), changed_files)
+
         with get_connection(db_path) as conn:
             run_migrations(conn)
-            apply_symbol_update(conn, update)
+            apply_symbol_update(
+                conn,
+                update,
+                project_path=str(project_path),
+                session_id=session_id,
+                last_action=tool_name,  # 'Write' or 'Edit'
+            )
+
             if config.grep_cache_enabled:
                 from memlora.storage.grep_cache import invalidate_project_cache
                 invalidate_project_cache(conn, project_id, changed_path=rel_path)

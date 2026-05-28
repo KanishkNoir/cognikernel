@@ -1,15 +1,33 @@
-"""SQLite CRUD for the symbol graph (symbol_nodes + symbol_edges tables)."""
+"""SQLite CRUD for the symbol graph (symbol_nodes + symbol_edges + symbol_files)."""
 from __future__ import annotations
 
+import hashlib
 import sqlite3
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from memlora.symbols.extractor import SymbolEdge, SymbolNode, SymbolUpdate
 
 
-def apply_symbol_update(conn: sqlite3.Connection, update: "SymbolUpdate") -> None:
-    """Upsert nodes/edges and delete stale paths. Idempotent."""
+def apply_symbol_update(
+    conn: sqlite3.Connection,
+    update: "SymbolUpdate",
+    *,
+    project_path: str | None = None,
+    session_id: str = "",
+    last_action: str = "scan",
+) -> None:
+    """Upsert nodes/edges and delete stale paths. Idempotent.
+
+    When `project_path` is provided, also upserts `symbol_files` rows so the
+    PreToolUse hook's STEP 2 has authoritative file-level state. The hash and
+    timestamp let the renderer present truthful "last refreshed" claims (B-2).
+    Callers that just want the symbol_nodes/edges behavior can omit project_path.
+    """
+    from memlora.storage import symbol_files as sf
+
     # 1. Delete removed paths (nodes, outgoing edges, and incoming edges)
     for path in update.delete_paths:
         conn.execute(
@@ -24,8 +42,12 @@ def apply_symbol_update(conn: sqlite3.Connection, update: "SymbolUpdate") -> Non
             "DELETE FROM symbol_edges WHERE project_id = ? AND to_path = ?",
             (update.project_id, path),
         )
+        conn.execute(
+            "DELETE FROM symbol_files WHERE project_id = ? AND path = ?",
+            (update.project_id, path),
+        )
 
-    # 2. For each re-parsed path: delete existing rows first (fresh parse replaces all)
+    # 2. For each re-parsed path: delete existing nodes/edges first (fresh parse replaces all)
     upsert_paths = {n.path for n in update.upsert_nodes} | {e.from_path for e in update.upsert_edges}
     for path in upsert_paths:
         conn.execute(
@@ -60,6 +82,37 @@ def apply_symbol_update(conn: sqlite3.Connection, update: "SymbolUpdate") -> Non
         )
 
     conn.commit()
+
+    # 5. Symbol-files lifecycle (C1) — only when project_path is provided.
+    if project_path is not None:
+        now_ms = int(time.time() * 1000)
+        for path in sorted(upsert_paths):
+            symbol_count = sum(1 for n in update.upsert_nodes if n.path == path)
+            abs_path = Path(project_path) / path
+            content_sha = _sha256_of(abs_path) if abs_path.exists() else ""
+            sf.upsert(
+                conn,
+                update.project_id,
+                path,
+                freshness="fresh",
+                refreshed_at=now_ms,
+                refreshed_in_session=session_id,
+                last_action=last_action,
+                content_sha256=content_sha,
+                scan_status="scanned",
+                symbol_count=symbol_count,
+            )
+
+
+def _sha256_of(path: Path) -> str:
+    try:
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return ""
 
 
 def load_symbol_nodes(

@@ -249,11 +249,31 @@ def _cmd_init(args: argparse.Namespace) -> None:
                     {"type": "command", "command": _hook_cmd("memlora_posttool_hook.py")}
                 ],
             },
+            {
+                "matcher": "Read",
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("memlora_posttool_read_hook.py")}
+                ],
+            },
         ],
     }
     settings_path.write_text(
         json.dumps(settings, indent=2), encoding="utf-8"
     )
+
+    # ── .memlora/config.toml — per-project overrides ──────────────────────────
+    # New projects ship with hook_policy='strict' so the C1 strict gate is active
+    # immediately. Users can edit this file to fall back to advisory mode without
+    # touching the global ~/.memlora/config.toml.
+    memlora_dir = project_path / ".memlora"
+    memlora_dir.mkdir(exist_ok=True)
+    project_cfg_path = memlora_dir / "config.toml"
+    if not project_cfg_path.exists():
+        project_cfg_path.write_text(
+            '# CogniKernel per-project config. Overrides ~/.memlora/config.toml.\n'
+            'hook_policy = "strict"\n',
+            encoding="utf-8",
+        )
 
     # ── .mcp.json ─────────────────────────────────────────────────────────────
     mcp_path = project_path / ".mcp.json"
@@ -271,16 +291,27 @@ def _cmd_init(args: argparse.Namespace) -> None:
     ck_section = """\
 ## CogniKernel — structured session memory
 
-This project uses CogniKernel. At the start of every session the
+This project uses CogniKernel. At the start of every session a
 `## Session context` block is automatically injected into your context.
+It is the canonical source for three categories of information:
 
-**When that block is present:**
-- It is the canonical source of truth for decisions, constraints, and architecture.
-- It supersedes this file, any prior notes, and your own memory.
-- Do not re-read project files to rediscover facts already listed there.
-- Do not update this file with project decisions — the Stop hook persists them automatically.
+1. **Architectural decisions and constraints** — the `### Hard constraints`
+   and `### Key decisions` sections supersede this file and any prior notes.
+2. **Codebase structure** — the `### Codebase skeleton` section lists every
+   file with extracted public symbols. **Do not Read/Glob a file whose path
+   appears in the skeleton unless you need the function body** (e.g., to
+   replace an implementation). Under strict mode (the default for new
+   projects), the PreToolUse hook will deny such Reads. If you genuinely
+   need the body, retry the same Read within 60 seconds and the second
+   attempt is allowed.
+3. **Open work** — the `### Active thread` section tracks the current focus.
 
-Call `get_session_state` (cognikernel MCP tool) only if the block is missing.
+If the session context block is missing, call the `get_session_state`
+cognikernel MCP tool.
+
+Do not update this file with project decisions — the Stop hook persists them
+via extraction. Hand-written notes (this file) are fine as supplementary
+documentation that the injection cannot replace.
 """
     if claude_md.exists():
         existing = claude_md.read_text(encoding="utf-8")
@@ -289,11 +320,17 @@ Call `get_session_state` (cognikernel MCP tool) only if the block is missing.
     else:
         claude_md.write_text(ck_section, encoding="utf-8")
 
+    # ── Slash command for /memlora-extract (A-5) ──────────────────────────────
+    from memlora.integration.slash_extract import install_slash_command
+    slash_path = install_slash_command(project_path)
+
     print(f"Initialised project {project_id}")
     print(f"  path: {project_path}")
-    print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/PreToolUse/PostToolUse)")
+    print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/PreTool/PostTool [Write/Edit/Read])")
     print(f"  wrote: .mcp.json              (cognikernel MCP server)")
     print(f"  wrote: CLAUDE.md              (CogniKernel trust section)")
+    print(f"  wrote: .memlora/config.toml   (hook_policy=strict)")
+    print(f"  wrote: {slash_path.relative_to(project_path)}  (slash command)")
 
 
 def _cmd_extract(args: argparse.Namespace) -> None:

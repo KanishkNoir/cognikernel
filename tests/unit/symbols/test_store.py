@@ -1,36 +1,11 @@
-"""Unit tests for symbol graph SQLite CRUD (store.py)."""
-import sqlite3
+"""Unit tests for symbol graph SQLite CRUD (store.py).
+
+Uses the shared `conn` fixture from conftest.py (real migrated DB) so the full
+schema including symbol_files (added in C0 migration 008) is available.
+"""
 import pytest
 from memlora.symbols.extractor import SymbolNode, SymbolEdge, SymbolUpdate
 from memlora.symbols.store import apply_symbol_update, load_symbol_nodes, load_symbol_edges
-
-
-@pytest.fixture
-def conn():
-    """In-memory SQLite with symbol graph schema."""
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    c.executescript("""
-        CREATE TABLE symbol_nodes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id TEXT NOT NULL, path TEXT NOT NULL, node_type TEXT NOT NULL,
-            name TEXT NOT NULL, parent_name TEXT NOT NULL DEFAULT '',
-            signature TEXT NOT NULL DEFAULT '', return_type TEXT NOT NULL DEFAULT '',
-            fields TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL
-        );
-        CREATE UNIQUE INDEX idx_symbol_nodes_unique
-            ON symbol_nodes (project_id, path, node_type, name, parent_name);
-        CREATE TABLE symbol_edges (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id TEXT NOT NULL, from_path TEXT NOT NULL,
-            to_path TEXT NOT NULL, edge_type TEXT NOT NULL DEFAULT 'imports',
-            is_external INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE UNIQUE INDEX idx_symbol_edges_unique
-            ON symbol_edges (project_id, from_path, to_path, edge_type);
-    """)
-    yield c
-    c.close()
 
 
 def _node(path: str, name: str, pid: str = "p1") -> SymbolNode:
@@ -85,6 +60,68 @@ class TestApplySymbolUpdate:
         apply_symbol_update(conn, _update(deletes=["src/models.py"]))
         rows = conn.execute("SELECT * FROM symbol_edges WHERE to_path = 'src/models.py'").fetchall()
         assert rows == [], "Incoming edges to deleted file must be cleaned"
+
+    def test_project_path_populates_symbol_files(self, conn, tmp_path) -> None:
+        """When project_path is passed, symbol_files rows are upserted (C1 invariant).
+
+        This is the gate that makes strict mode work on session 2 of a project:
+        the first session's symbol walk populates symbol_files even for files
+        that never went through PostToolUse:Write/Edit.
+        """
+        # Real file on disk so the SHA256 computation succeeds.
+        f = tmp_path / "src" / "m.py"
+        f.parent.mkdir(parents=True)
+        f.write_text("class X:\n    pass\n", encoding="utf-8")
+
+        apply_symbol_update(
+            conn,
+            _update(nodes=[_node("src/m.py", "X")]),
+            project_path=str(tmp_path),
+            session_id="s1",
+            last_action="scan",
+        )
+
+        row = conn.execute(
+            "SELECT freshness, scan_status, symbol_count, last_action, content_sha256 "
+            "FROM symbol_files WHERE project_id='p1' AND path='src/m.py'"
+        ).fetchone()
+        assert row is not None
+        assert row["freshness"] == "fresh"
+        assert row["scan_status"] == "scanned"
+        assert row["symbol_count"] == 1
+        assert row["last_action"] == "scan"
+        assert len(row["content_sha256"]) == 64  # SHA256 hex digest
+
+    def test_project_path_none_skips_symbol_files(self, conn) -> None:
+        """Without project_path, symbol_files is untouched (back-compat behavior)."""
+        apply_symbol_update(conn, _update(nodes=[_node("src/m.py", "X")]))
+
+        n = conn.execute(
+            "SELECT COUNT(*) FROM symbol_files WHERE project_id='p1'"
+        ).fetchone()[0]
+        assert n == 0
+
+    def test_delete_path_also_removes_symbol_files_row(self, conn, tmp_path) -> None:
+        """Deleting a file removes its symbol_files row too."""
+        f = tmp_path / "src" / "m.py"
+        f.parent.mkdir(parents=True)
+        f.write_text("x = 1\n", encoding="utf-8")
+        apply_symbol_update(
+            conn,
+            _update(nodes=[_node("src/m.py", "X")]),
+            project_path=str(tmp_path),
+        )
+
+        apply_symbol_update(
+            conn,
+            _update(deletes=["src/m.py"]),
+            project_path=str(tmp_path),
+        )
+
+        n = conn.execute(
+            "SELECT COUNT(*) FROM symbol_files WHERE path='src/m.py'"
+        ).fetchone()[0]
+        assert n == 0
 
     def test_other_paths_unaffected_by_upsert(self, conn) -> None:
         apply_symbol_update(conn, _update(nodes=[_node("src/a.py", "A"), _node("src/b.py", "B")]))

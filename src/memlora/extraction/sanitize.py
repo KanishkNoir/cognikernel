@@ -48,15 +48,26 @@ _DECLARATIVE  = re.compile(
 
 
 def sanitize_description(text: str) -> str:
-    """Return a clean, length-bounded description string."""
+    """Return a clean, length-bounded description string.
+
+    Length cap is applied via memlora.extraction.normalize.smart_truncate so
+    the cut lands at a sentence or word boundary rather than mid-word (A-2).
+    """
+    from memlora.extraction.normalize import smart_truncate
+
     cleaned = _clean(text)
-    return cleaned[:_MAX_DESC].rstrip()
+    return smart_truncate(cleaned, _MAX_DESC).rstrip()
 
 
 def sanitize_rationale(text: str) -> str:
-    """Return a clean, length-bounded rationale string."""
+    """Return a clean, length-bounded rationale string.
+
+    Same sentence/word-aware truncation as descriptions (A-2).
+    """
+    from memlora.extraction.normalize import smart_truncate
+
     cleaned = _clean(text)
-    return cleaned[:_MAX_RATIONALE].rstrip()
+    return smart_truncate(cleaned, _MAX_RATIONALE).rstrip()
 
 
 def is_question_description(desc: str) -> bool:

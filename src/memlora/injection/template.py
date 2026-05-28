@@ -46,6 +46,15 @@ class InjectionContext:
     ckl_mode: bool = False
     ckl_v2: bool = False
     section_budgets: SectionBudgets | None = None
+    # ── Phase B trust signals ────────────────────────────────────────────────
+    hook_policy: str = "advisory"             # 'advisory' | 'strict'
+    retry_window_seconds: int = 60
+    # symbol_files-derived stats; None when callers don't supply them, which
+    # keeps the renderer back-compat with non-strict callers.
+    skeleton_coverage: object = None          # storage.symbol_files.CoverageStats | None
+    skeleton_refresh: object = None           # storage.symbol_files.RefreshInfo | None
+    # ── Phase A-4: assistant-answer co-captures ──────────────────────────────
+    pending_confirmations: list[Event] = field(default_factory=list)
 
 
 def render_injection(ctx: InjectionContext) -> str:
@@ -97,13 +106,19 @@ def render_injection(ctx: InjectionContext) -> str:
 
     sections = [
         _render_header(ctx),
+        _render_tool_policy(ctx),
         _render_hard_constraints(hard, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2),
         _render_active_thread(ctx.active_threads),
+        _render_pending_confirmation(ctx.pending_confirmations),
         _render_hot_files(ctx.hot_files, has_skeleton=has_skeleton),
         _render_graveyard(grave, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2),
         _render_components(comps),
         _render_decisions(decs, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2),
-        render_skeleton_section(ctx.skeleton),
+        render_skeleton_section(
+            ctx.skeleton,
+            coverage=ctx.skeleton_coverage,
+            refresh=ctx.skeleton_refresh,
+        ),
         _render_summary(ctx.summary_text),
     ]
     return "\n\n".join(s for s in sections if s)
@@ -150,6 +165,43 @@ def _render_header(ctx: InjectionContext) -> str:
         from memlora.injection.ckl import CKL_OPS_LEGEND
         header += f"\n{CKL_OPS_LEGEND}"
     return header
+
+
+def _render_pending_confirmation(events: list[Event]) -> str:
+    """A-4: render assistant-answer co-captures that no user_stated event
+    has yet confirmed. Format mirrors `### Hard constraints` but with an
+    authority note so Claude knows these are tentative."""
+    if not events:
+        return ""
+    lines = ["### Pending confirmation — answered by Claude; not yet user-confirmed"]
+    # Stable sort by content_hash for prompt-cache friendliness.
+    for e in sorted(events, key=lambda x: x.content_hash):
+        desc = e.payload.get("description", "")
+        if not desc:
+            continue
+        sess_short = (e.session_id or "")[:12] or "?"
+        lines.append(f"- {desc} (assistant, session {sess_short})")
+    return "\n".join(lines)
+
+
+def _render_tool_policy(ctx: InjectionContext) -> str:
+    """B-1: explicit Tool Policy section under strict hook policy.
+
+    Sets Claude's expectations before the first deny lands. Under advisory
+    policy (the legacy default) this section is omitted entirely.
+    """
+    if ctx.hook_policy != "strict":
+        return ""
+    return (
+        "### Tool policy (this project uses CogniKernel strict mode)\n"
+        f"- Read/Glob/Grep on files in `### Codebase skeleton` will be DENIED. The\n"
+        f"  skeleton lists public signatures — use them. If you need a function\n"
+        f"  body (e.g., to replace an implementation), retry the same Read once\n"
+        f"  within {ctx.retry_window_seconds} seconds and the second attempt is allowed.\n"
+        f"- Re-reads of any file already read in this session will be DENIED. The\n"
+        f"  content is in your context — cite it directly rather than re-reading.\n"
+        f"- Files NOT in the skeleton (or marked stale) are allowed."
+    )
 
 
 def _render_hard_constraints(

@@ -5,8 +5,10 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-EXPECTED_SCHEMA_VERSION: int = 6
+EXPECTED_SCHEMA_VERSION: int = 11
 EXPECTED_PROJECTION_VERSION: int = 1
+
+VALID_HOOK_POLICIES = frozenset({"advisory", "strict"})
 
 
 @dataclass
@@ -43,6 +45,9 @@ class Config:
     grep_cache_enabled: bool = False
     ckl_mode: bool = False
     ckl_v2: bool = False
+    hook_policy: str = "advisory"  # "advisory" (legacy) | "strict" (deny-by-default)
+    read_cache_ttl_hours: int = 24
+    deny_retry_window_seconds: int = 60
     section_budgets: SectionBudgets = field(default_factory=SectionBudgets)
 
     @property
@@ -54,19 +59,60 @@ class Config:
         return self.memlora_dir / "logs"
 
     @classmethod
-    def load(cls, config_path: Path | None = None) -> Config:
+    def load(
+        cls,
+        config_path: Path | None = None,
+        *,
+        project_path: str | Path | None = None,
+    ) -> Config:
+        """Load config from disk.
+
+        Precedence (highest first):
+          1. `<project_path>/.memlora/config.toml`  (when project_path is given)
+          2. `~/.memlora/config.toml`  (the global file, or `config_path` if provided)
+          3. Built-in defaults
+
+        Each layer is read independently and merged via dataclasses.replace so
+        per-project overrides only need to specify the keys that differ.
+
+        The MEMLORA_DIR env var short-circuits everything for test/CI use.
+        """
         # MEMLORA_DIR env var lets tests (and CI) redirect the data directory
-        # without touching ~/.memlora.
+        # without touching ~/.memlora. It overrides memlora_dir specifically,
+        # but project-local overlays still apply on top of it.
         env_dir = os.environ.get("MEMLORA_DIR")
-        if env_dir:
-            return cls(memlora_dir=Path(env_dir))
 
         if config_path is None:
             config_path = Path.home() / ".memlora" / "config.toml"
 
-        if not config_path.exists():
-            return cls()
+        # Layer 2 — global config.
+        if env_dir:
+            base = cls(memlora_dir=Path(env_dir))
+        elif config_path.exists():
+            base = cls._load_from_file(config_path)
+        else:
+            base = cls()
 
+        # Layer 1 — project-local overlay (if any).
+        if project_path is not None:
+            project_cfg_path = Path(project_path) / ".memlora" / "config.toml"
+            if project_cfg_path.exists():
+                project_kwargs = cls._read_toml_kwargs(project_cfg_path)
+                # Replace only the fields the project file specifies.
+                # memlora_dir override from MEMLORA_DIR is preserved unless the
+                # project config explicitly sets a different memlora_dir.
+                from dataclasses import replace
+                base = replace(base, **project_kwargs)
+
+        return base
+
+    @classmethod
+    def _load_from_file(cls, config_path: Path) -> Config:
+        kwargs = cls._read_toml_kwargs(config_path)
+        return cls(**kwargs)
+
+    @staticmethod
+    def _read_toml_kwargs(config_path: Path) -> dict:
         with open(config_path, "rb") as f:
             data = tomllib.load(f)
 
@@ -85,10 +131,21 @@ class Config:
             kwargs["ckl_mode"] = bool(data["ckl_mode"])
         if "ckl_v2" in data:
             kwargs["ckl_v2"] = bool(data["ckl_v2"])
+        if "hook_policy" in data:
+            policy = str(data["hook_policy"])
+            if policy not in VALID_HOOK_POLICIES:
+                raise ValueError(
+                    f"invalid hook_policy {policy!r}; expected one of {sorted(VALID_HOOK_POLICIES)}"
+                )
+            kwargs["hook_policy"] = policy
+        if "read_cache_ttl_hours" in data:
+            kwargs["read_cache_ttl_hours"] = int(data["read_cache_ttl_hours"])
+        if "deny_retry_window_seconds" in data:
+            kwargs["deny_retry_window_seconds"] = int(data["deny_retry_window_seconds"])
         if "section_budgets" in data and isinstance(data["section_budgets"], dict):
             sb = data["section_budgets"]
             kwargs["section_budgets"] = SectionBudgets(
                 **{k: int(v) for k, v in sb.items() if k in SectionBudgets.__dataclass_fields__}
             )
 
-        return cls(**kwargs)
+        return kwargs

@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import re
 
+from memlora.extraction.authority import (
+    ASSISTANT_ANSWER_TO_QUESTION,
+    default_authority_for_role,
+)
 from memlora.extraction.sanitize import (
     is_question_description,
     sanitize_description,
@@ -217,6 +221,8 @@ def extract_events_from_matches(
                     "source_role": source_role,
                     "matched_phrase": match.matched_phrase,
                     "affected_files": [],
+                    "authority": default_authority_for_role(source_role),
+                    "provenance": "trie",
                 },
                 content_hash="",   # populated by hashing stage
                 weight=confidence,
@@ -224,3 +230,121 @@ def extract_events_from_matches(
         )
 
     return events
+
+
+# ── co-capture (A-4) ─────────────────────────────────────────────────────────
+
+
+_MAX_ASSISTANT_COCAPTURE_SENTENCES = 2
+
+
+def extract_co_captures(
+    sentences: list[Sentence],
+    matches: list[TrieMatch],
+    project_id: str,
+    session_id: str,
+) -> list[Event]:
+    """For each trie match on a USER sentence, capture the next assistant
+    sentences and produce a co-capture Event.
+
+    The co-capture event holds the assistant's response as its description with
+    `authority = ASSISTANT_ANSWER_TO_QUESTION`. The renderer routes these to a
+    separate `### Pending confirmation` section unless suppressed by a later
+    user_stated / assistant_decided event with the same normalized subject.
+
+    Design notes:
+      - Only ONE co-capture per assistant turn even if multiple user matches
+        precede it (deduped by (session_id, assistant turn start index)).
+      - Assistant code blocks are skipped — they're implementation, not answers.
+      - The original trie matches are unaffected; this is purely additive.
+    """
+    if not sentences:
+        return []
+
+    events: list[Event] = []
+    seen_assistant_starts: set[int] = set()
+
+    # Pre-compute trie-matched sentence indices for fast membership.
+    user_match_indices: set[int] = set()
+    for m in matches:
+        if m.sentence_index >= len(sentences):
+            continue
+        if sentences[m.sentence_index].role == "user":
+            user_match_indices.add(m.sentence_index)
+
+    for user_idx in sorted(user_match_indices):
+        # Walk forward to find the start of the next assistant turn.
+        assistant_start = _find_next_assistant_start(sentences, user_idx)
+        if assistant_start is None or assistant_start in seen_assistant_starts:
+            continue
+        seen_assistant_starts.add(assistant_start)
+
+        captured = _capture_assistant_sentences(
+            sentences, assistant_start, _MAX_ASSISTANT_COCAPTURE_SENTENCES,
+        )
+        if not captured.strip():
+            continue
+
+        description = sanitize_description(captured)
+        if not description:
+            continue
+
+        events.append(
+            Event(
+                project_id=project_id,
+                session_id=session_id,
+                # CONSTRAINT_SOFT keeps confidence honest — the user hasn't
+                # confirmed yet, so the event should never gate the projection.
+                event_type="CONSTRAINT_SOFT",
+                payload={
+                    "description": description,
+                    "rationale": "",
+                    "confidence": 0.5,
+                    "source_role": "assistant",
+                    "matched_phrase": "CO_CAPTURE",
+                    "affected_files": [],
+                    "authority": ASSISTANT_ANSWER_TO_QUESTION,
+                    "answers_user_sentence_index": user_idx,
+                    "provenance": "co_capture",
+                },
+                content_hash="",
+                weight=0.5,
+            )
+        )
+
+    return events
+
+
+def _find_next_assistant_start(
+    sentences: list[Sentence], from_index: int,
+) -> int | None:
+    """Return the index of the first assistant non-code sentence after
+    `from_index`, or None if there isn't one within the same exchange."""
+    for j in range(from_index + 1, len(sentences)):
+        s = sentences[j]
+        if s.role == "assistant" and not s.is_code_block:
+            return j
+        if s.role == "user" and j > from_index + 1:
+            # Next user turn started before we found an assistant reply.
+            return None
+    return None
+
+
+def _capture_assistant_sentences(
+    sentences: list[Sentence], start_index: int, limit: int,
+) -> str:
+    """Concatenate up to `limit` consecutive assistant prose sentences."""
+    parts: list[str] = []
+    for j in range(start_index, len(sentences)):
+        s = sentences[j]
+        if s.role != "assistant":
+            break
+        if s.is_code_block:
+            continue
+        text = s.text.strip()
+        if not text:
+            continue
+        parts.append(text)
+        if len(parts) >= limit:
+            break
+    return " ".join(parts)

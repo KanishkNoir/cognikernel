@@ -1,4 +1,14 @@
 from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+from memlora.storage.denied_reads import (
+    DEFAULT_CLEANUP_TTL_MS as DENIED_READS_CLEANUP_TTL_MS,
+    DEFAULT_RETRY_WINDOW_MS,
+    DeniedRead,
+    cleanup_old as cleanup_old_denied_reads,
+    clear as clear_denied_read,
+    get as get_denied_read,
+    record as record_denied_read,
+    was_denied_within,
+)
 from memlora.storage.events import (
     ARCHIVE_THRESHOLD,
     MAX_EVENT_WEIGHT,
@@ -43,6 +53,26 @@ from memlora.storage.projections import (
     load_projection,
     needs_rebuild,
     save_projection,
+)
+from memlora.storage.read_cache import (
+    DEFAULT_TTL_MS as READ_CACHE_TTL_MS,
+    ReadCacheEntry,
+    cleanup_old as cleanup_old_read_cache,
+    clear_session as clear_read_cache_session,
+    get_read,
+    record_read,
+    was_read_in_session,
+)
+from memlora.storage.symbol_files import (
+    CoverageStats,
+    RefreshInfo,
+    SymbolFile,
+    coverage_stats,
+    get as get_symbol_file,
+    list_files as list_symbol_files,
+    mark_stale as mark_symbol_file_stale,
+    most_recent_refresh,
+    upsert as upsert_symbol_file,
 )
 
 __all__ = [
@@ -90,4 +120,31 @@ __all__ = [
     "save_projection",
     "needs_rebuild",
     "invalidate_projection",
+    # read_cache (C0)
+    "READ_CACHE_TTL_MS",
+    "ReadCacheEntry",
+    "record_read",
+    "get_read",
+    "was_read_in_session",
+    "cleanup_old_read_cache",
+    "clear_read_cache_session",
+    # symbol_files (C0)
+    "SymbolFile",
+    "CoverageStats",
+    "RefreshInfo",
+    "upsert_symbol_file",
+    "get_symbol_file",
+    "mark_symbol_file_stale",
+    "coverage_stats",
+    "most_recent_refresh",
+    "list_symbol_files",
+    # denied_reads (C0)
+    "DENIED_READS_CLEANUP_TTL_MS",
+    "DEFAULT_RETRY_WINDOW_MS",
+    "DeniedRead",
+    "record_denied_read",
+    "was_denied_within",
+    "get_denied_read",
+    "clear_denied_read",
+    "cleanup_old_denied_reads",
 ]

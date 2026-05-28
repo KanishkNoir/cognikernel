@@ -179,7 +179,7 @@ class TestRebuildProjection:
         insert(conn, "DECISION", "h2")
         insert(conn, "APPROACH_ABANDONED_DO_NOT_RETRY", "h3")
         insert(conn, "COMPONENT_STATUS", "h4",
-               payload={"path": "a.py", "status": "stable"})
+               payload={"path": "src/a.py", "status": "stable"})
         insert(conn, "THREAD_OPEN", "h5",
                payload={"description": "do work", "state": "in_progress"})
         proj = rebuild_projection(conn, "proj1")
@@ -188,6 +188,61 @@ class TestRebuildProjection:
         assert len(proj.graveyard) == 1
         assert len(proj.component_map) == 1
         assert len(proj.active_threads) == 1
+
+
+# ── C2 canonicalization invariants ────────────────────────────────────────────
+
+
+class TestComponentMapCanonicalization:
+    """C2 §1: drop bare basenames; dedup by canonical path; normalize separators."""
+
+    def test_bare_basename_is_dropped(self, conn: sqlite3.Connection) -> None:
+        insert(conn, "COMPONENT_STATUS", "h1",
+               payload={"path": "env.py", "status": "stable"})
+        proj = rebuild_projection(conn, "proj1")
+        assert proj.component_map == {}
+
+    def test_directory_prefixed_path_is_kept(self, conn: sqlite3.Connection) -> None:
+        insert(conn, "COMPONENT_STATUS", "h1",
+               payload={"path": "alembic/env.py", "status": "stable"})
+        proj = rebuild_projection(conn, "proj1")
+        assert "alembic/env.py" in proj.component_map
+
+    def test_bare_and_full_path_for_same_file_only_keeps_full(
+        self, conn: sqlite3.Connection,
+    ) -> None:
+        """The exact C4 bug: extraction sometimes produced both 'env.py' and
+        'alembic/env.py' — projection should drop the bare and keep the full."""
+        insert(conn, "COMPONENT_STATUS", "h1",
+               payload={"path": "env.py", "status": "modified"})
+        insert(conn, "COMPONENT_STATUS", "h2",
+               payload={"path": "alembic/env.py", "status": "modified"})
+
+        proj = rebuild_projection(conn, "proj1")
+        assert list(proj.component_map.keys()) == ["alembic/env.py"]
+
+    def test_backslash_separators_collapse_with_forward_slash(
+        self, conn: sqlite3.Connection,
+    ) -> None:
+        """Two events using different separator styles end up under one key."""
+        insert(conn, "COMPONENT_STATUS", "h1",
+               payload={"path": "app/main.py", "status": "stable"})
+        insert(conn, "COMPONENT_STATUS", "h2",
+               payload={"path": "app\\main.py", "status": "modified"})
+
+        proj = rebuild_projection(conn, "proj1")
+        assert list(proj.component_map.keys()) == ["app/main.py"]
+
+    def test_payload_path_is_rewritten_to_canonical(
+        self, conn: sqlite3.Connection,
+    ) -> None:
+        """component_map[key].payload.path matches the canonical key — callers
+        downstream can trust the payload."""
+        insert(conn, "COMPONENT_STATUS", "h1",
+               payload={"path": "app\\models.py", "status": "modified"})
+        proj = rebuild_projection(conn, "proj1")
+        rec = proj.component_map["app/models.py"]
+        assert rec["payload"]["path"] == "app/models.py"
 
 
 # ── load_or_rebuild ───────────────────────────────────────────────────────────

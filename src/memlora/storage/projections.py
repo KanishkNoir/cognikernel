@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from memlora.utils.paths import canonicalize_path, is_bare_basename
+
 _HARD_TYPES      = frozenset({"CONSTRAINT_HARD"})
 _GRAVEYARD_TYPES = frozenset({"APPROACH_ABANDONED_DO_NOT_RETRY"})
 _COMPONENT_TYPES = frozenset({"COMPONENT_STATUS"})
@@ -125,8 +127,18 @@ def rebuild_projection(conn: sqlite3.Connection, project_id: str) -> Projection:
         elif event.event_type in _GRAVEYARD_TYPES:
             graveyard.append(rec)
         elif event.event_type in _COMPONENT_TYPES:
-            path = event.payload.get("path", "")
-            component_map[path] = rec
+            # C2: canonicalize and drop bare-basename noise. Two events with
+            # different separator styles or trailing slashes now collapse to
+            # one key; an event whose path is just `env.py` (no directory)
+            # is dropped — `alembic/env.py` is the authoritative version.
+            raw_path = event.payload.get("path", "")
+            canonical = canonicalize_path(raw_path)
+            if not canonical or is_bare_basename(canonical):
+                continue
+            # Mirror the canonical path into the rec payload so callers
+            # downstream see the normalized form.
+            rec["payload"] = {**rec["payload"], "path": canonical}
+            component_map[canonical] = rec
         elif event.event_type in _DECISION_TYPES:
             ranked_decisions.append(rec)
         elif event.event_type in _THREAD_TYPES:

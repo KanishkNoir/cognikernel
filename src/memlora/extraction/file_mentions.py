@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from memlora.extraction.git_augment import infer_intent_from_path
 from memlora.extraction.hashing import compute_content_hash
 from memlora.storage.events import Event
+from memlora.utils.paths import canonicalize_path, is_bare_basename
 
 if TYPE_CHECKING:
     from memlora.extraction.tokenize import Sentence
@@ -69,8 +70,13 @@ def extract_file_mention_events(
             continue
 
         for match in _FILE_PATTERN.finditer(sentence.text):
-            path = match.group(0).strip()
-            if path in seen_paths:
+            # Canonicalize so backslash / double-slash variants collapse into
+            # a single key. Bare basenames (no directory component) are dropped
+            # at insertion time — they're extractor noise that conflicts with
+            # the prefixed canonical form (C4). Mirrors the same filter in
+            # storage/projections.py:rebuild_projection.
+            path = canonicalize_path(match.group(0))
+            if not path or is_bare_basename(path) or path in seen_paths:
                 continue
 
             # Build a window of ±1 sentences for verb detection.
@@ -102,6 +108,8 @@ def extract_file_mention_events(
                 "source": "transcript",
                 "description": description,
                 "rationale": "",
+                "authority": "inferred_from_code",
+                "provenance": "file_mention",
             }
             events.append(
                 Event(

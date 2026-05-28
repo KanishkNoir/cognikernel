@@ -55,17 +55,46 @@ def extract_session(
     sentences: list = []
     try:
         from memlora.extraction.file_mentions import extract_file_mention_events
+        from memlora.extraction.normalize import normalize_description
+        from memlora.extraction.patterns import scan_patterns
+        from memlora.extraction.sanitize import sanitize_description
+        from memlora.extraction.windowing import extract_co_captures
         sentences = tokenize(transcript)
         matches   = get_scanner().scan(sentences, transcript)
         raw       = extract_events_from_matches(
             sentences, matches,
             session_meta.project_id, session_meta.session_id,
         )
-        classified = [classify_event(e) for e in raw]
+        # A-3: pattern-with-capture events run in parallel with the trie.
+        # They use the same sentence list but their own scan algorithm so
+        # captured subjects can ride along in the payload.
+        pattern_events = scan_patterns(
+            sentences, session_meta.project_id, session_meta.session_id,
+        )
+        # Pattern events skip the trie's structural-label filter (already
+        # excluded by shape guards) but DO need sanitization + classification.
+        for pe in pattern_events:
+            pe.payload["description"] = sanitize_description(pe.payload["description"])
+
+        # A-4: co-capture the assistant's reply when a USER trie match landed.
+        # These produce CONSTRAINT_SOFT events tagged
+        # `authority=assistant_answer_to_user_question`, which the renderer
+        # routes to a Pending Confirmation section.
+        cocapture_events = extract_co_captures(
+            sentences, matches,
+            session_meta.project_id, session_meta.session_id,
+        )
+
+        combined = raw + pattern_events + cocapture_events
+        classified = [classify_event(e) for e in combined]
         from memlora.extraction.triple import augment_with_triple
         for e in classified:
+            # A-1: strip prompt-verb prefixes BEFORE hashing so equivalent
+            # descriptions normalize to the same content_hash, enabling dedup.
+            desc = e.payload.get("description", "")
+            e.payload["description"] = normalize_description(desc)
             e.content_hash = compute_content_hash(
-                e.event_type, e.payload.get("description", "")
+                e.event_type, e.payload["description"]
             )
             augment_with_triple(e)
         events.extend(classified)

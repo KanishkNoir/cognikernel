@@ -19,7 +19,7 @@ def init_project(
     config: Config | None = None,
 ) -> str:
     """Create and migrate the DB for a project. Idempotent. Returns project_id."""
-    config = config or Config.load()
+    config = config or Config.load(project_path=project_path)
     project_id = hash_project_path(project_path)
     db_path = get_db_path(config, project_id)
     with get_connection(db_path) as conn:
@@ -48,7 +48,7 @@ def session_end(
     from memlora.storage.evidence import store_evidence
     from memlora.storage.jobs import ack_stage, enqueue_extraction, fail_job
 
-    config = config or Config.load()
+    config = config or Config.load(project_path=project_path)
     project_id = hash_project_path(project_path)
     db_path = get_db_path(config, project_id)
 
@@ -94,7 +94,7 @@ def session_end(
                 "MERGED",
                 output_ref=json_like_stats(stats),
             )
-            _update_symbol_graph(conn, project_id, str(project_path), git_diff)
+            _update_symbol_graph(conn, project_id, str(project_path), git_diff, session_id=session_id)
             ack_stage(conn, job_id, "PROJECTED", output_ref="projection:invalidated")
             ack_stage(conn, job_id, "COMPLETED", output_ref="session_end")
     except Exception as exc:
@@ -134,7 +134,7 @@ def replay_job(
     from memlora.storage.evidence import load_evidence
     from memlora.storage.jobs import get_job, replay_dead_letter
 
-    config = config or Config.load()
+    config = config or Config.load(project_path=project_path)
     project_id = hash_project_path(project_path)
     db_path = get_db_path(config, project_id)
 
@@ -176,7 +176,7 @@ def get_projection(
     config: Config | None = None,
 ) -> Projection:
     """Return the current (possibly rebuilt) Projection for *project_path*."""
-    config = config or Config.load()
+    config = config or Config.load(project_path=project_path)
     project_id = hash_project_path(project_path)
     db_path = get_db_path(config, project_id)
     with get_connection(db_path) as conn:
@@ -190,13 +190,14 @@ def render_state(
 ) -> str:
     """Return the rendered injection block — what would be prepended to the LLM system prompt."""
     from memlora.storage.events import get_events_for_projection
+    from memlora.storage import symbol_files as sf
     from memlora.compression.greedy import greedy_fill
     from memlora.injection.ordering import make_injection_context
     from memlora.injection.template import render_with_budget_enforcement
     from memlora.symbols.store import load_symbol_nodes, load_symbol_edges
     from memlora.symbols.projection import compress_to_skeleton
 
-    config = config or Config.load()
+    config = config or Config.load(project_path=project_path)
     project_id = hash_project_path(project_path)
     db_path = get_db_path(config, project_id)
 
@@ -216,6 +217,9 @@ def render_state(
         ).fetchone()[0]
         nodes = load_symbol_nodes(conn, project_id)
         edges = load_symbol_edges(conn, project_id)
+        # Phase B-2: read symbol_files for truthful skeleton header.
+        coverage = sf.coverage_stats(conn, project_id)
+        refresh = sf.most_recent_refresh(conn, project_id)
 
     project_name = Path(project_path).resolve().name
     hot_files = _compute_hot_files(events)
@@ -240,6 +244,11 @@ def render_state(
     ctx.ckl_mode = config.ckl_mode
     ctx.ckl_v2 = config.ckl_v2
     ctx.section_budgets = config.section_budgets
+    # Phase B trust signals — only carried through to the renderer.
+    ctx.hook_policy = config.hook_policy
+    ctx.retry_window_seconds = config.deny_retry_window_seconds
+    ctx.skeleton_coverage = coverage
+    ctx.skeleton_refresh = refresh
     return render_with_budget_enforcement(ctx)
 
 
@@ -265,7 +274,7 @@ def rebuild_from_raw(
     from memlora.extraction.pipeline import SessionMetadata, extract_session
     from memlora.delta.merge import execute_merge
 
-    config = config or Config.load()
+    config = config or Config.load(project_path=project_path)
     project_id = hash_project_path(project_path)
     db_path = get_db_path(config, project_id)
 
@@ -367,7 +376,7 @@ def rebuild_from_raw(
                 for event in candidates:
                     event.evidence_id = evidence_id
                 stats = execute_merge(sidecar_conn, session_id, candidates)
-                _update_symbol_graph(sidecar_conn, project_id, str(project_path), git_diff=None)
+                _update_symbol_graph(sidecar_conn, project_id, str(project_path), git_diff=None, session_id=session_id)
                 total_extracted += len(candidates)
                 total_inserted += stats.get("inserted", 0)
                 total_updated += stats.get("updated", 0)
@@ -405,8 +414,15 @@ def _update_symbol_graph(
     project_id: str,
     project_path: str,
     git_diff: str | None,
+    session_id: str = "",
 ) -> None:
-    """Parse changed files and upsert symbol graph. Errors are logged, never raised."""
+    """Parse changed files and upsert symbol graph + symbol_files (C1).
+
+    Errors are logged, never raised. Passes `project_path` so apply_symbol_update
+    populates `symbol_files` rows — necessary for the first-session walk where
+    no PostToolUse hook fired but the next session's strict-mode gate needs
+    file-level authority for every scanned file.
+    """
     try:
         from memlora.symbols.extractor import build_symbol_update
         from memlora.symbols.store import apply_symbol_update
@@ -414,7 +430,13 @@ def _update_symbol_graph(
 
         changed_files = parse_diff(git_diff) if git_diff else []
         update = build_symbol_update(project_id, project_path, changed_files)
-        apply_symbol_update(conn, update)
+        apply_symbol_update(
+            conn,
+            update,
+            project_path=project_path,
+            session_id=session_id,
+            last_action="scan",
+        )
     except Exception as exc:
         _log.warning("symbol_graph.update_failed", extra={"error": str(exc)})
 
@@ -423,14 +445,22 @@ def _compute_hot_files(
     events: list,
     min_mentions: int = 2,
 ) -> list[tuple[str, int, str]]:
-    """Aggregate COMPONENT_STATUS events by path, return paths with total_mentions >= min_mentions."""
+    """Aggregate COMPONENT_STATUS events by path, return paths with total_mentions >= min_mentions.
+
+    Defensively drops bare-basename paths (e.g. ``env.py``) — these are
+    extractor noise that conflicts with the prefixed canonical form
+    (``alembic/env.py``). New extractions filter at insertion time
+    (see ``extraction/file_mentions.py``); this filter protects projects
+    whose DB already contains pre-fix bare-basename rows.
+    """
     from collections import defaultdict
+    from memlora.utils.paths import is_bare_basename
     files: dict = defaultdict(lambda: {"mentions": 0, "intent": ""})
     for e in events:
         if e.event_type != "COMPONENT_STATUS":
             continue
         path = e.payload.get("path", "")
-        if not path:
+        if not path or is_bare_basename(path):
             continue
         files[path]["mentions"] += e.mention_count or 1
         if not files[path]["intent"]:

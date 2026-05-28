@@ -18,11 +18,18 @@ SIGNAL_DICTIONARY: dict[str, tuple[str, float]] = {
     "switching from": ("DECISION", 0.85),
     "we'll use":      ("DECISION", 0.8),
     "we will use":    ("DECISION", 0.8),
+    "let's use":      ("DECISION", 0.8),
     "instead of":     ("DECISION", 0.7),
     "rather than":    ("DECISION", 0.7),
     "moved to":       ("DECISION", 0.7),
     "opted for":      ("DECISION", 0.8),
     "replacing":      ("DECISION", 0.75),
+    # A-3 high-precision literals
+    "stick with":     ("DECISION", 0.85),
+    "default to":     ("DECISION", 0.7),
+    "going to use":   ("DECISION", 0.8),
+    "we'll go with":  ("DECISION", 0.85),
+    "we're going with": ("DECISION", 0.85),
 
     # ── Hard constraint signals ───────────────────────────────────────────────
     "must not":       ("CONSTRAINT_HARD", 1.0),
@@ -38,6 +45,10 @@ SIGNAL_DICTIONARY: dict[str, tuple[str, float]] = {
     "mandatory":      ("CONSTRAINT_HARD", 1.0),
     "lock in":        ("CONSTRAINT_HARD", 0.8),
     "from day one":   ("CONSTRAINT_HARD", 0.75),
+    # A-3 high-precision literals
+    "strictly":       ("CONSTRAINT_HARD", 0.85),
+    "naming convention": ("CONSTRAINT_HARD", 0.8),
+    "casing convention": ("CONSTRAINT_HARD", 0.8),
 
     # ── Soft constraint signals ───────────────────────────────────────────────
     "should not":     ("CONSTRAINT_SOFT", 0.7),

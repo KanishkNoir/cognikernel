@@ -26,7 +26,7 @@ def handle_session_start(cwd: str | None, config=None) -> str:
     from memlora.config import Config
     from memlora.storage.connection import get_db_path, hash_project_path
 
-    config = config or Config.load()
+    config = config or Config.load(project_path=cwd)
     project_id = hash_project_path(cwd)
     db_path = get_db_path(config, project_id)
 
