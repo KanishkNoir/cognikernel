@@ -32,8 +32,8 @@ from memlora.delta.decay import (
 )
 from memlora.delta.supersede import (
     apply_supersession,
+    descriptions_overlap,
     detect_supersession,
-    supersedes,
 )
 from memlora.storage.events import (
     MAX_EVENT_WEIGHT,
@@ -272,7 +272,7 @@ def _cross_type_dedup(
     for row in rows:
         import json as _json
         peer_desc = _json.loads(row["payload"]).get("description", "")
-        if not supersedes(new_desc, peer_desc):
+        if not descriptions_overlap(new_desc, peer_desc):
             continue
 
         peer_priority = _DEDUP_PRIORITY[row["event_type"]]
