@@ -60,17 +60,20 @@ def compress_to_skeleton(
     for node in nodes:
         by_path.setdefault(node.path, []).append(node)
 
-    # Build path → local import targets lookup
-    # Also build in-degree map: how many files import each path
+    # Build path → local import targets lookup, plus the import graph used for
+    # PageRank centrality (transitive importance, not just raw in-degree).
     by_from: dict[str, list[str]] = {}
-    in_degree: dict[str, int] = {}
+    import_graph: dict[str, list[str]] = {}
     for edge in edges:
         if edge.is_external:
             continue
         by_from.setdefault(edge.from_path, [])
         basename = edge.to_path.rsplit("/", 1)[-1]
         by_from[edge.from_path].append(basename)
-        in_degree[edge.to_path] = in_degree.get(edge.to_path, 0) + 1
+        import_graph.setdefault(edge.from_path, []).append(edge.to_path)
+
+    from memlora.compression.centrality import compute_file_centrality
+    centrality = compute_file_centrality(import_graph) if import_graph else {}
 
     all_paths = sorted(set(by_path.keys()) | set(by_from.keys()))
     entries: list[SkeletonEntry] = []
@@ -83,11 +86,12 @@ def compress_to_skeleton(
         )
         entries.append(entry)
 
-    # Estimate tokens for each entry
+    # Estimate tokens for each entry using the single canonical counter, so the
+    # skeleton budget is enforced in the same unit as the global ceiling.
+    from memlora.compression.token_count import count_tokens
     from memlora.symbols.render import _render_entry
     for entry in entries:
-        text = _render_entry(entry)
-        entry.token_estimate = max(1, len(text) // 4)
+        entry.token_estimate = max(1, count_tokens(_render_entry(entry)))
 
     total = sum(e.token_estimate for e in entries)
     if total <= budget_tokens:
@@ -99,19 +103,21 @@ def compress_to_skeleton(
             for cls in entry.classes:
                 cls.methods = cls.methods[:method_limit]
         for entry in entries:
-            entry.token_estimate = max(1, len(_render_entry(entry)) // 4)
+            entry.token_estimate = max(1, count_tokens(_render_entry(entry)))
         total = sum(e.token_estimate for e in entries)
         if total <= budget_tokens:
             return entries
 
     # Budget phase 2: drop whole files.
-    # Score = symbol density + import centrality bonus + hot-file bonus.
-    # Higher score = keep longer; lowest-score file dropped first.
-    def _file_score(e: SkeletonEntry) -> int:
+    # Score = symbol density + PageRank centrality bonus + hot-file bonus.
+    # Higher score = keep longer; lowest-score file dropped first. PageRank
+    # captures transitive import importance (a file imported by central files
+    # ranks above one imported by leaves with the same raw in-degree).
+    def _file_score(e: SkeletonEntry) -> float:
         symbol_density = len(e.classes) * 3 + len(e.functions) + 1
-        centrality     = in_degree.get(e.path, 0) * 5
-        hot_bonus      = 20 if e.path in _hot else 0
-        return symbol_density + centrality + hot_bonus
+        centrality_bonus = centrality.get(e.path, 0.0) * 100.0
+        hot_bonus = 20 if e.path in _hot else 0
+        return symbol_density + centrality_bonus + hot_bonus
 
     entries.sort(key=_file_score, reverse=True)
     while total > budget_tokens and len(entries) > 1:
@@ -166,9 +172,17 @@ def _build_entry(
             methods=cls_methods,
         ))
 
-    top_functions = sorted(
-        (n for n in func_nodes), key=lambda n: n.name
-    )[:_MAX_FUNCTIONS_PER_FILE]
+    # Rank functions by importance, not alphabetically: API routes first (the
+    # `fields` slot holds the route descriptor for functions), then public
+    # functions, then name as a stable tiebreak. So when a file exceeds
+    # _MAX_FUNCTIONS_PER_FILE the private helpers are dropped, not whatever
+    # sorts last alphabetically.
+    def _func_sort_key(n):
+        is_route = 1 if n.fields else 0
+        is_public = 1 if not n.name.startswith("_") else 0
+        return (-is_route, -is_public, n.name)
+
+    top_functions = sorted(func_nodes, key=_func_sort_key)[:_MAX_FUNCTIONS_PER_FILE]
     skeleton_funcs = [
         SkeletonMethod(name=f.name, signature=f.signature, return_type=f.return_type, route_info=f.fields)
         for f in top_functions

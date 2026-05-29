@@ -24,6 +24,34 @@ class TestCompressToSkeleton:
     def test_empty_returns_empty(self) -> None:
         assert compress_to_skeleton([], []) == []
 
+    def test_central_file_survives_budget_over_leaf(self) -> None:
+        """Unit 6: under budget pressure the PageRank-central file is kept and a
+        leaf with the same raw symbol count is dropped first."""
+        nodes = [
+            _node("hub.py", "function", "h", sig="()"),
+            _node("leaf.py", "function", "l", sig="()"),
+            _node("a.py", "function", "a", sig="()"),
+            _node("b.py", "function", "b", sig="()"),
+        ]
+        # a and b both import hub → hub is central; nobody imports leaf.
+        edges = [_edge("a.py", "hub.py"), _edge("b.py", "hub.py")]
+        entries = compress_to_skeleton(nodes, edges, budget_tokens=3)
+        paths = {e.path for e in entries}
+        assert "hub.py" in paths
+        assert "leaf.py" not in paths
+
+    def test_functions_ranked_by_importance_not_alphabetical(self) -> None:
+        """Unit 6: a private helper sorting first alphabetically is dropped before
+        an API route when the per-file function cap bites."""
+        nodes = [
+            _node("api.py", "function", f"_helper{i}", sig="()")
+            for i in range(10)
+        ]
+        nodes.append(_node("api.py", "function", "zzz_route", sig="()", fields="GET /x"))
+        entries = compress_to_skeleton(nodes, [])
+        names = {f.name for f in entries[0].functions}
+        assert "zzz_route" in names  # route kept despite sorting last alphabetically
+
     def test_single_file_class_and_method(self) -> None:
         nodes = [
             _node("src/models.py", "class", "Quote", fields="id:int, text:str"),
