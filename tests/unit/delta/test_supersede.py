@@ -11,14 +11,50 @@ from memlora.delta.supersede import (
     JACCARD_THRESHOLD,
     LEVENSHTEIN_THRESHOLD,
     apply_supersession,
+    derive_subject,
     descriptions_overlap,
     detect_supersession,
     events_overlap,
     jaccard_similarity,
     levenshtein_normalized,
     normalize_for_overlap,
+    subject_supersedes,
+    supersedes,
 )
 from memlora.storage.events import Event
+
+
+class TestDeriveSubject:
+    def test_choice_for_topic(self) -> None:
+        assert derive_subject("We will use bcrypt for password hashing.") == "password hashing"
+
+    def test_switch_keeps_topic_not_choice(self) -> None:
+        # The differing choice (argon2id/bcrypt) drops out; the shared topic stays.
+        assert derive_subject(
+            "Decision: we will use argon2id for password hashing instead of bcrypt."
+        ) == "password hashing"
+
+    def test_prohibition_subject_is_the_rejected_thing(self) -> None:
+        assert derive_subject("Do not use Celery, we will never revisit it.") == "celery"
+
+    def test_no_subject_returns_empty(self) -> None:
+        assert derive_subject("This sentence has no decision verb pattern.") == ""
+
+    def test_bcrypt_argon2id_supersede_each_other(self) -> None:
+        a = "We will use bcrypt for password hashing."
+        b = "Decision: we will use argon2id for password hashing instead of bcrypt."
+        # Below the textual threshold...
+        assert not descriptions_overlap(a, b)
+        # ...but caught by subject keying.
+        assert subject_supersedes(a, b)
+        assert supersedes(a, b)
+
+    def test_same_topic_unrelated_decisions_do_not_supersede(self) -> None:
+        # Shared topic "password hashing" but a refinement, not a replacement —
+        # low textual overlap keeps them distinct.
+        a = "We will use argon2id for password hashing."
+        b = "Set the memory cost to 64 megabytes for password hashing."
+        assert not supersedes(a, b)
 
 
 def _naive_overlap(a: str, b: str) -> bool:

@@ -97,13 +97,100 @@ def descriptions_overlap(desc_a: str, desc_b: str) -> bool:
     return levenshtein_normalized(desc_a, desc_b) <= LEVENSHTEIN_THRESHOLD
 
 
+# ── cheap subject derivation (prototype) ─────────────────────────────────────
+#
+# Description-only overlap misses the canonical supersession case: a decision
+# whose *choice* changes but whose *topic* stays the same — "use bcrypt for
+# password hashing" → "use argon2id for password hashing" only share ~0.5
+# Jaccard, below threshold. derive_subject pulls the topic (the noun phrase the
+# decision is *about*, not the tool it picks) so those collapse.
+#
+# This lives here (not the extraction pipeline) on purpose: it is additive to
+# supersession only, needs no payload/schema change, and keeps the heavy
+# extraction package off the merge hot path. A topic source in the pipeline
+# would let it also feed rendering/dedup-at-insert later.
+
+# Decision verbs that introduce a choice, after which "for/to/as/in <topic>"
+# names what the decision concerns.
+_DECISION_VERB = (
+    r"(?:use|using|adopt\w*|choos\w*|chose|switch\w*|stick\w*\s+with|"
+    r"go\w*\s+with|prefer\w*|replac\w*|will\s+use|going\s+to\s+use|we'?ll\s+use)"
+)
+_TOPIC_RE = re.compile(
+    rf"\b{_DECISION_VERB}\b[\w './+-]*?\b(?:for|to|as|in)\s+"
+    r"(?P<topic>[a-z0-9][\w +./-]*?)\s*"
+    r"(?:\binstead\b|\brather\b|\bbecause\b|\bsince\b|[.,;:]|$)",
+    re.IGNORECASE,
+)
+# Prohibition / abandonment: the subject is the thing being rejected.
+_PROHIBIT_RE = re.compile(
+    r"\b(?:never\s+use|do\s+not\s+use|don'?t\s+use|avoid|abandon\w*|drop|reject\w*)\s+"
+    r"(?P<thing>[a-z0-9][\w./+-]*)",
+    re.IGNORECASE,
+)
+_LEADING_ARTICLE = re.compile(r"^(?:the|a|an|our|this|that|these|those)\s+", re.IGNORECASE)
+
+# Subject match alone is too loose (generic topics like "the database" recur);
+# require a minimum description token overlap so subject-keying only rescues
+# genuinely-related decisions, not unrelated ones that share a generic topic.
+SUBJECT_MATCH_MIN_JACCARD: float = 0.3
+
+
+def _normalize_subject_str(text: str) -> str:
+    s = re.sub(r"[^\w\s]", " ", text.lower())
+    s = re.sub(r"\s+", " ", s).strip()
+    s = _LEADING_ARTICLE.sub("", s)
+    toks = [t for t in s.split() if t not in STOPWORDS and len(t) > 2]
+    return " ".join(toks)
+
+
+def derive_subject(description: str) -> str:
+    """Best-effort topic of a decision/constraint, normalized; '' if none found.
+
+    Examples:
+      "We will use bcrypt for password hashing."            -> "password hashing"
+      "use argon2id for password hashing instead of bcrypt" -> "password hashing"
+      "Do not use Celery, we will never revisit it."        -> "celery"
+    """
+    if not description:
+        return ""
+    m = _TOPIC_RE.search(description)
+    if m:
+        topic = _normalize_subject_str(m.group("topic"))
+        if topic:
+            return topic
+    m = _PROHIBIT_RE.search(description)
+    if m:
+        thing = _normalize_subject_str(m.group("thing"))
+        if thing:
+            return thing
+    return ""
+
+
+def subject_supersedes(desc_a: str, desc_b: str) -> bool:
+    """True when two descriptions share a derived subject and are related enough.
+
+    Gated by SUBJECT_MATCH_MIN_JACCARD so a shared *generic* topic alone does not
+    force a supersession between unrelated decisions.
+    """
+    sa = derive_subject(desc_a)
+    if not sa or sa != derive_subject(desc_b):
+        return False
+    return jaccard_similarity(desc_a, desc_b) >= SUBJECT_MATCH_MIN_JACCARD
+
+
+def supersedes(desc_a: str, desc_b: str) -> bool:
+    """Combined supersession predicate: textual overlap OR same-subject (gated)."""
+    return descriptions_overlap(desc_a, desc_b) or subject_supersedes(desc_a, desc_b)
+
+
 def events_overlap(event_a: Event, event_b: Event) -> bool:
     """Return True if two events express the same concept in different words."""
     if event_a.event_type != event_b.event_type:
         return False
     desc_a = event_a.payload.get("description", "")
     desc_b = event_b.payload.get("description", "")
-    return descriptions_overlap(desc_a, desc_b)
+    return supersedes(desc_a, desc_b)
 
 
 def detect_supersession(
@@ -134,7 +221,7 @@ def detect_supersession(
     superseded_ids: list[int] = []
     for row in rows:
         cand_desc = json.loads(row["payload"]).get("description", "")
-        if descriptions_overlap(new_desc, cand_desc):
+        if supersedes(new_desc, cand_desc):
             superseded_ids.append(row["id"])
 
     return superseded_ids
