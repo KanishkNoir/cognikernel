@@ -34,6 +34,7 @@ from memlora.delta.supersede import (
     apply_supersession,
     descriptions_overlap,
     detect_supersession,
+    find_superseded,
 )
 from memlora.storage.events import (
     MAX_EVENT_WEIGHT,
@@ -75,12 +76,17 @@ def execute_merge(
     conn: sqlite3.Connection,
     session_id: str,
     candidates: list[Event],
+    embed_events: bool = False,
 ) -> dict:
     """Run the full six-step merge inside a single transaction.
 
     Returns a stats dict: {inserted, updated, superseded, cascaded, archived}.
     On failure, the transaction is rolled back and the error written to the
     dead-letter queue (extraction_failures).
+
+    When `embed_events` is True (config.embedding_enabled), each event gets a
+    local embedding stored and supersession uses the hybrid semantic+temporal+
+    authority finder. When False, behavior is the legacy lexical path exactly.
     """
     if not candidates:
         return {"inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0, "archived": 0}
@@ -95,7 +101,11 @@ def execute_merge(
                 stats[outcome] += 1
                 event.id = row_id  # needed by cascade_component_status
 
-                sup_ids = detect_supersession(conn, event)
+                if embed_events:
+                    _store_event_embedding(conn, row_id, event)
+                    sup_ids = find_superseded(conn, event)
+                else:
+                    sup_ids = detect_supersession(conn, event)
                 stats["superseded"] += apply_supersession(conn, row_id, sup_ids)
                 stats["superseded"] += _cross_type_dedup(conn, row_id, event)
 
@@ -128,6 +138,20 @@ def execute_merge(
 
 
 # ── transaction-internal helpers (no conn.commit()) ───────────────────────────
+
+def _store_event_embedding(conn: sqlite3.Connection, event_id: int, event: Event) -> None:
+    """Compute + store the event's description embedding. Best-effort, no-op if
+    the model is unavailable (degrades supersession to lexical)."""
+    try:
+        from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text
+        from memlora.embedding.store import upsert_embedding
+
+        vec = embed_text(event.payload.get("description", ""))
+        if vec is not None:
+            upsert_embedding(conn, event_id, vec, EMBEDDING_MODEL_VERSION)
+    except Exception as exc:  # never let embedding failures break the merge
+        _log.warning("merge.embedding_failed", extra={"event_id": event_id, "error": str(exc)})
+
 
 def _insert_or_update(
     conn: sqlite3.Connection,

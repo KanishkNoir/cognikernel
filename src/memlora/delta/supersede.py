@@ -152,3 +152,109 @@ def apply_supersession(
             (new_event_id, old_id),
         )
     return len(superseded_ids)
+
+
+# ── hybrid supersession: semantic retrieval gated by temporal + authority ─────
+#
+# The lexical path (descriptions_overlap) misses paraphrased corrections like
+# "use bcrypt for hashing" -> "switch to argon2id for hashing". `find_superseded`
+# adds a *semantic* axis (local embeddings) for candidate retrieval, then uses
+# the structured metadata CogniKernel already stores as the *decision* axis that
+# similarity alone cannot provide:
+#   - temporal direction: a new event only supersedes an OLDER one (created_at);
+#   - authority precedence: a lower-trust event never supersedes a higher-trust
+#     one (e.g. inferred-from-code must not overwrite a user-stated decision).
+# Lexical overlap remains an OR-fallback, and if the embedding model is absent
+# the semantic axis simply contributes nothing — behavior degrades to
+# temporal+authority-gated lexical matching.
+
+# Empirically set for bge-small-en-v1.5: unrelated same-type decisions cluster
+# <= ~0.66, genuine paraphrases ("use bcrypt for hashing" vs "adopt argon2id as
+# the hashing scheme") land ~0.75-0.89. 0.75 sits in that gap and biases toward
+# precision — a false supersession deletes a still-valid decision (worse than
+# keeping a stale one alongside). Should be validated/swept per-model on real
+# project data (the A/B benchmark is the intended tuning instrument).
+SUPERSESSION_COSINE_THRESHOLD: float = 0.75
+
+# Higher = more authoritative. A new event must be >= a candidate's precedence
+# to supersede it. Mirrors extraction.authority string constants.
+_AUTHORITY_PRECEDENCE: dict[str, int] = {
+    "user_stated": 3,
+    "assistant_decided": 2,
+    "llm": 2,
+    "assistant_answer_to_user_question": 1,
+    "inferred_from_code": 0,
+}
+_AUTHORITY_DEFAULT = 2
+
+
+def find_superseded(conn: sqlite3.Connection, new_event: Event) -> list[int]:
+    """Hybrid supersession candidate finder (semantic + temporal + authority).
+
+    Returns ids of active, same-type events that `new_event` supersedes. Safe
+    when embeddings are unavailable (falls back to temporal+authority-gated
+    lexical overlap). The new event is assumed to be the most recent assertion.
+    """
+    if new_event.event_type not in _SUPERSESSION_TYPES:
+        return []
+
+    rows = conn.execute(
+        """
+        SELECT id, payload, created_at FROM events
+        WHERE project_id    = ?
+          AND event_type    = ?
+          AND archived      = 0
+          AND superseded_by IS NULL
+          AND content_hash != ?
+        """,
+        (new_event.project_id, new_event.event_type, new_event.content_hash),
+    ).fetchall()
+    if not rows:
+        return []
+
+    new_desc = new_event.payload.get("description", "")
+    new_auth = _AUTHORITY_PRECEDENCE.get(
+        new_event.payload.get("authority", ""), _AUTHORITY_DEFAULT
+    )
+    new_created = new_event.created_at
+
+    # Semantic axis (optional): embed the new description, cosine over stored
+    # candidate vectors. Empty dict when the model or vectors are unavailable.
+    sem_matches: dict[int, float] = {}
+    try:
+        from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text
+        from memlora.embedding.store import cosine_matches, load_embeddings
+
+        query_vec = embed_text(new_desc)
+        if query_vec is not None:
+            cand_emb = load_embeddings(
+                conn, [r["id"] for r in rows], EMBEDDING_MODEL_VERSION
+            )
+            sem_matches = cosine_matches(
+                query_vec, cand_emb, SUPERSESSION_COSINE_THRESHOLD
+            )
+    except Exception:
+        sem_matches = {}
+
+    superseded: list[int] = []
+    for row in rows:
+        cand_payload = json.loads(row["payload"])
+        cand_desc = cand_payload.get("description", "")
+
+        # Temporal gate: only supersede an event that is not newer than this one.
+        c_created = row["created_at"]
+        if c_created is not None and new_created is not None and c_created > new_created:
+            continue
+
+        # Authority gate: a less-authoritative event must not supersede a more-
+        # authoritative one.
+        cand_auth = _AUTHORITY_PRECEDENCE.get(
+            cand_payload.get("authority", ""), _AUTHORITY_DEFAULT
+        )
+        if new_auth < cand_auth:
+            continue
+
+        if row["id"] in sem_matches or descriptions_overlap(new_desc, cand_desc):
+            superseded.append(row["id"])
+
+    return superseded

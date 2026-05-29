@@ -5,7 +5,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-EXPECTED_SCHEMA_VERSION: int = 11
+EXPECTED_SCHEMA_VERSION: int = 12
 EXPECTED_PROJECTION_VERSION: int = 1
 
 VALID_HOOK_POLICIES = frozenset({"advisory", "strict"})
@@ -59,6 +59,10 @@ class Config:
     hook_policy: str = "advisory"  # "advisory" (legacy) | "strict" (deny-by-default)
     read_cache_ttl_hours: int = 24
     deny_retry_window_seconds: int = 60
+    # When True, session_end stores a local embedding per event and supersession
+    # uses the hybrid (semantic + temporal + authority) finder. Default off:
+    # opt-in, gradual rollout, A/B-able. Degrades to lexical if the model is absent.
+    embedding_enabled: bool = False
     section_budgets: SectionBudgets = field(default_factory=SectionBudgets)
 
     @property
@@ -153,6 +157,8 @@ class Config:
             kwargs["read_cache_ttl_hours"] = int(data["read_cache_ttl_hours"])
         if "deny_retry_window_seconds" in data:
             kwargs["deny_retry_window_seconds"] = int(data["deny_retry_window_seconds"])
+        if "embedding_enabled" in data:
+            kwargs["embedding_enabled"] = bool(data["embedding_enabled"])
         if "section_budgets" in data and isinstance(data["section_budgets"], dict):
             sb = data["section_budgets"]
             kwargs["section_budgets"] = SectionBudgets(

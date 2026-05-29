@@ -87,7 +87,9 @@ def session_end(
         with get_connection(db_path) as conn:
             ack_stage(conn, job_id, "PARSED", output_ref=f"events:{len(candidates)}")
             ack_stage(conn, job_id, "CLASSIFIED", output_ref=f"events:{len(candidates)}")
-            stats = execute_merge(conn, session_id, candidates)
+            stats = execute_merge(
+                conn, session_id, candidates, embed_events=config.embedding_enabled
+            )
             ack_stage(
                 conn,
                 job_id,

@@ -14,11 +14,69 @@ from memlora.delta.supersede import (
     descriptions_overlap,
     detect_supersession,
     events_overlap,
+    find_superseded,
     jaccard_similarity,
     levenshtein_normalized,
     normalize_for_overlap,
 )
+from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text, is_available
+from memlora.embedding.store import upsert_embedding
 from memlora.storage.events import Event
+
+
+class TestFindSuperseded:
+    """Hybrid finder: semantic + temporal + authority gates over lexical OR."""
+
+    def test_lexical_match_with_gates(self, conn: sqlite3.Connection) -> None:
+        old_id = seed_event(
+            conn, content_hash="h_old", created_at=1000,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_new", created_at=2000,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        assert old_id in find_superseded(conn, new)
+
+    def test_temporal_gate_newer_not_superseded(self, conn: sqlite3.Connection) -> None:
+        seed_event(
+            conn, content_hash="h_future", created_at=5000,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_now", created_at=2000,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        assert find_superseded(conn, new) == []
+
+    def test_authority_gate_low_does_not_supersede_high(self, conn: sqlite3.Connection) -> None:
+        seed_event(
+            conn, content_hash="h_user", created_at=1000,
+            payload={"description": "Use SQLite for local storage", "authority": "user_stated"},
+        )
+        new = make_event(
+            content_hash="h_inferred", created_at=2000,
+            payload={"description": "Use SQLite for local storage", "authority": "inferred_from_code"},
+        )
+        assert find_superseded(conn, new) == []
+
+    @pytest.mark.skipif(not is_available(), reason="embedding model not installed")
+    def test_semantic_supersedes_paraphrase(self, conn: sqlite3.Connection) -> None:
+        bcrypt_desc = "We will use bcrypt for password hashing."
+        argon_desc = "Hash user passwords with argon2id going forward."
+        # Lexically disjoint (Jaccard 0) — only the semantic axis catches it.
+        assert not descriptions_overlap(bcrypt_desc, argon_desc)
+        old_id = seed_event(
+            conn, content_hash="h_bcrypt", created_at=1000,
+            payload={"description": bcrypt_desc, "authority": "assistant_decided"},
+        )
+        upsert_embedding(conn, old_id, embed_text(bcrypt_desc), EMBEDDING_MODEL_VERSION)
+        conn.commit()
+        new = make_event(
+            content_hash="h_argon", created_at=2000,
+            payload={"description": argon_desc, "authority": "assistant_decided"},
+        )
+        assert old_id in find_superseded(conn, new)
 
 
 def _naive_overlap(a: str, b: str) -> bool:

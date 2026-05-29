@@ -14,6 +14,11 @@ dependencies = [
     "tree-sitter-language-pack>=1.0",
 ]
 
+# Optional local semantic layer (config.embedding_enabled). Off by default;
+# supersession degrades to lexical matching when not installed.
+[project.optional-dependencies]
+embedding = ["fastembed>=0.3", "numpy>=1.24"]
+
 [project.scripts]
 memlora = "memlora.integration.cli:main"
 
