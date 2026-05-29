@@ -320,9 +320,10 @@ documentation that the injection cannot replace.
     else:
         claude_md.write_text(ck_section, encoding="utf-8")
 
-    # ── Slash command for /memlora-extract (A-5) ──────────────────────────────
-    from memlora.integration.slash_extract import install_slash_command
-    slash_path = install_slash_command(project_path)
+    # ── Clean up any stale /memlora-extract slash command (enrichment removed) ──
+    stale_slash = Path(project_path) / ".claude" / "commands" / "memlora-extract.md"
+    if stale_slash.exists():
+        stale_slash.unlink()
 
     print(f"Initialised project {project_id}")
     print(f"  path: {project_path}")
@@ -330,7 +331,6 @@ documentation that the injection cannot replace.
     print(f"  wrote: .mcp.json              (cognikernel MCP server)")
     print(f"  wrote: CLAUDE.md              (CogniKernel trust section)")
     print(f"  wrote: .memlora/config.toml   (hook_policy=strict)")
-    print(f"  wrote: {slash_path.relative_to(project_path)}  (slash command)")
 
 
 def _cmd_extract(args: argparse.Namespace) -> None:
