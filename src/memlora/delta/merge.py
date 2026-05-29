@@ -32,11 +32,8 @@ from memlora.delta.decay import (
 )
 from memlora.delta.supersede import (
     apply_supersession,
+    descriptions_overlap,
     detect_supersession,
-    jaccard_similarity,
-    levenshtein_normalized,
-    JACCARD_THRESHOLD,
-    LEVENSHTEIN_THRESHOLD,
 )
 from memlora.storage.events import (
     MAX_EVENT_WEIGHT,
@@ -275,11 +272,7 @@ def _cross_type_dedup(
     for row in rows:
         import json as _json
         peer_desc = _json.loads(row["payload"]).get("description", "")
-        overlap = (
-            jaccard_similarity(new_desc, peer_desc) >= JACCARD_THRESHOLD
-            or levenshtein_normalized(new_desc, peer_desc) <= LEVENSHTEIN_THRESHOLD
-        )
-        if not overlap:
+        if not descriptions_overlap(new_desc, peer_desc):
             continue
 
         peer_priority = _DEDUP_PRIORITY[row["event_type"]]

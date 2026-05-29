@@ -76,16 +76,34 @@ def levenshtein_normalized(a: str, b: str) -> float:
     return prev[n] / m
 
 
+def descriptions_overlap(desc_a: str, desc_b: str) -> bool:
+    """Return True if two descriptions express the same concept.
+
+    Exact semantics: ``jaccard >= JACCARD_THRESHOLD OR levenshtein <= LEVENSHTEIN_THRESHOLD``.
+
+    De-quadratic pruning (no behavior change): Jaccard (O(tokens)) is checked
+    first and short-circuits. If it fails, a length bound rules out Levenshtein
+    cheaply — normalized edit distance is at least ``|len_a − len_b| / max(len)``,
+    so when that lower bound already exceeds the threshold the O(m·n) Levenshtein
+    computation is skipped entirely. This is exact: it never changes the result,
+    only avoids work on length-disparate (hence non-matching) pairs, which is the
+    common case during a merge scan.
+    """
+    if jaccard_similarity(desc_a, desc_b) >= JACCARD_THRESHOLD:
+        return True
+    la, lb = len(desc_a.strip()), len(desc_b.strip())
+    if la and lb and abs(la - lb) / max(la, lb) > LEVENSHTEIN_THRESHOLD:
+        return False  # Levenshtein lower bound already exceeds the threshold
+    return levenshtein_normalized(desc_a, desc_b) <= LEVENSHTEIN_THRESHOLD
+
+
 def events_overlap(event_a: Event, event_b: Event) -> bool:
     """Return True if two events express the same concept in different words."""
     if event_a.event_type != event_b.event_type:
         return False
     desc_a = event_a.payload.get("description", "")
     desc_b = event_b.payload.get("description", "")
-    return (
-        jaccard_similarity(desc_a, desc_b) >= JACCARD_THRESHOLD
-        or levenshtein_normalized(desc_a, desc_b) <= LEVENSHTEIN_THRESHOLD
-    )
+    return descriptions_overlap(desc_a, desc_b)
 
 
 def detect_supersession(
@@ -116,10 +134,7 @@ def detect_supersession(
     superseded_ids: list[int] = []
     for row in rows:
         cand_desc = json.loads(row["payload"]).get("description", "")
-        if (
-            jaccard_similarity(new_desc, cand_desc) >= JACCARD_THRESHOLD
-            or levenshtein_normalized(new_desc, cand_desc) <= LEVENSHTEIN_THRESHOLD
-        ):
+        if descriptions_overlap(new_desc, cand_desc):
             superseded_ids.append(row["id"])
 
     return superseded_ids

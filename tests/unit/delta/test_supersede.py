@@ -11,6 +11,7 @@ from memlora.delta.supersede import (
     JACCARD_THRESHOLD,
     LEVENSHTEIN_THRESHOLD,
     apply_supersession,
+    descriptions_overlap,
     detect_supersession,
     events_overlap,
     jaccard_similarity,
@@ -18,6 +19,33 @@ from memlora.delta.supersede import (
     normalize_for_overlap,
 )
 from memlora.storage.events import Event
+
+
+def _naive_overlap(a: str, b: str) -> bool:
+    """The pre-optimization overlap rule, for parity checks."""
+    return (
+        jaccard_similarity(a, b) >= JACCARD_THRESHOLD
+        or levenshtein_normalized(a, b) <= LEVENSHTEIN_THRESHOLD
+    )
+
+
+class TestDescriptionsOverlapPruneIsExact:
+    """The length-bound prune must never change the overlap result."""
+
+    _PAIRS = [
+        ("Use SQLite for local storage", "Use SQLite for local storage"),      # identical
+        ("Use SQLite for local storage", "Use SQLite for the local store"),    # near
+        ("Use SQLite for local storage", "Adopt Postgres in production"),      # different
+        ("Never log secrets", "Never ever log any secrets to disk anywhere"),  # length-disparate
+        ("auth", "authentication subsystem rewrite end to end"),               # short vs long
+        ("", "Use SQLite"),                                                    # empty
+        ("Redis Streams for the queue", "Use Redis Streams for the queue"),    # near, prefixed
+    ]
+
+    @pytest.mark.parametrize("a,b", _PAIRS)
+    def test_matches_naive(self, a: str, b: str) -> None:
+        assert descriptions_overlap(a, b) == _naive_overlap(a, b)
+        assert descriptions_overlap(b, a) == _naive_overlap(b, a)  # symmetric
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
