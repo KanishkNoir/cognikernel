@@ -380,7 +380,10 @@ def rebuild_from_raw(
                 candidates = extract_session(transcript, session_meta)
                 for event in candidates:
                     event.evidence_id = evidence_id
-                stats = execute_merge(sidecar_conn, session_id, candidates)
+                stats = execute_merge(
+                    sidecar_conn, session_id, candidates,
+                    embed_events=config.embedding_enabled,
+                )
                 _update_symbol_graph(sidecar_conn, project_id, str(project_path), git_diff=None, session_id=session_id)
                 total_extracted += len(candidates)
                 total_inserted += stats.get("inserted", 0)

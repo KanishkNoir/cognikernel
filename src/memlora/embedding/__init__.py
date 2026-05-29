@@ -13,12 +13,15 @@ render hot path.
 """
 from __future__ import annotations
 
+from memlora.embedding.backfill import backfill_embeddings
+from memlora.embedding.input import embedding_input
 from memlora.embedding.model import (
     EMBEDDING_DIM,
     EMBEDDING_MODEL_VERSION,
     embed_text,
     is_available,
 )
+from memlora.embedding.retrieval import find_related, recall
 from memlora.embedding.store import (
     cosine_matches,
     load_embeddings,
@@ -30,7 +33,11 @@ __all__ = [
     "EMBEDDING_MODEL_VERSION",
     "embed_text",
     "is_available",
+    "embedding_input",
     "cosine_matches",
     "load_embeddings",
     "upsert_embedding",
+    "recall",
+    "find_related",
+    "backfill_embeddings",
 ]

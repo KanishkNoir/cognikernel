@@ -140,13 +140,14 @@ def execute_merge(
 # ── transaction-internal helpers (no conn.commit()) ───────────────────────────
 
 def _store_event_embedding(conn: sqlite3.Connection, event_id: int, event: Event) -> None:
-    """Compute + store the event's description embedding. Best-effort, no-op if
-    the model is unavailable (degrades supersession to lexical)."""
+    """Compute + store the event's embedding from its composed input (E1).
+    Best-effort, no-op if the model is unavailable (degrades to lexical)."""
     try:
+        from memlora.embedding.input import embedding_input
         from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text
         from memlora.embedding.store import upsert_embedding
 
-        vec = embed_text(event.payload.get("description", ""))
+        vec = embed_text(embedding_input(event.payload, event.event_type))
         if vec is not None:
             upsert_embedding(conn, event_id, vec, EMBEDDING_MODEL_VERSION)
     except Exception as exc:  # never let embedding failures break the merge

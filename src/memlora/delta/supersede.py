@@ -200,7 +200,7 @@ def find_superseded(conn: sqlite3.Connection, new_event: Event) -> list[int]:
 
     rows = conn.execute(
         """
-        SELECT id, payload, created_at FROM events
+        SELECT id, payload, created_at, evidence_id FROM events
         WHERE project_id    = ?
           AND event_type    = ?
           AND archived      = 0
@@ -217,15 +217,17 @@ def find_superseded(conn: sqlite3.Connection, new_event: Event) -> list[int]:
         new_event.payload.get("authority", ""), _AUTHORITY_DEFAULT
     )
     new_created = new_event.created_at
+    new_evidence = new_event.evidence_id
 
-    # Semantic axis (optional): embed the new description, cosine over stored
-    # candidate vectors. Empty dict when the model or vectors are unavailable.
+    # Semantic axis (optional): embed the new event's composed input (E1), cosine
+    # over stored candidate vectors. Empty dict when model/vectors unavailable.
     sem_matches: dict[int, float] = {}
     try:
+        from memlora.embedding.input import embedding_input
         from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text
         from memlora.embedding.store import cosine_matches, load_embeddings
 
-        query_vec = embed_text(new_desc)
+        query_vec = embed_text(embedding_input(new_event.payload, new_event.event_type))
         if query_vec is not None:
             cand_emb = load_embeddings(
                 conn, [r["id"] for r in rows], EMBEDDING_MODEL_VERSION
@@ -238,6 +240,12 @@ def find_superseded(conn: sqlite3.Connection, new_event: Event) -> list[int]:
 
     superseded: list[int] = []
     for row in rows:
+        # Provenance gate (E2): only supersede across a DIFFERENT transcript. A
+        # match within the same evidence is a duplicate capture of one statement
+        # (restatement), not a later evolution — so it must not be superseded.
+        if new_evidence is not None and row["evidence_id"] == new_evidence:
+            continue
+
         cand_payload = json.loads(row["payload"])
         cand_desc = cand_payload.get("description", "")
 

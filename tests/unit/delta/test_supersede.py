@@ -60,6 +60,33 @@ class TestFindSuperseded:
         )
         assert find_superseded(conn, new) == []
 
+    def test_same_evidence_not_superseded(self, conn: sqlite3.Connection) -> None:
+        """E2: a match within the SAME transcript is a restatement, not evolution."""
+        seed_evidence(conn, 1)
+        seed_event(
+            conn, content_hash="h_a", created_at=1000, evidence_id=1,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, evidence_id=1,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        assert find_superseded(conn, new) == []
+
+    def test_cross_evidence_superseded(self, conn: sqlite3.Connection) -> None:
+        """E2: the same decision re-asserted in a DIFFERENT transcript supersedes."""
+        seed_evidence(conn, 1)
+        seed_evidence(conn, 2)
+        old_id = seed_event(
+            conn, content_hash="h_a", created_at=1000, evidence_id=1,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, evidence_id=2,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        assert old_id in find_superseded(conn, new)
+
     @pytest.mark.skipif(not is_available(), reason="embedding model not installed")
     def test_semantic_supersedes_paraphrase(self, conn: sqlite3.Connection) -> None:
         bcrypt_desc = "We will use bcrypt for password hashing."
@@ -129,14 +156,29 @@ def seed_event(conn: sqlite3.Connection, **overrides: Any) -> int:
         """
         INSERT INTO events
             (project_id, session_id, created_at, event_type,
-             payload, content_hash, weight, mention_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             payload, content_hash, weight, mention_count, evidence_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (e.project_id, e.session_id, e.created_at, e.event_type,
-         payload_json, e.content_hash, e.weight, e.mention_count),
+         payload_json, e.content_hash, e.weight, e.mention_count, e.evidence_id),
     )
     conn.commit()
     return cursor.lastrowid  # type: ignore[return-value]
+
+
+def seed_evidence(conn: sqlite3.Connection, evidence_id: int, project_id: str = "proj1") -> None:
+    """Insert a minimal raw_evidence row so events.evidence_id FK is satisfiable."""
+    conn.execute(
+        """
+        INSERT INTO raw_evidence
+            (id, project_id, session_id, source_type, captured_at,
+             content_sha256, content_encoding, content_blob,
+             original_size_bytes, stored_size_bytes)
+        VALUES (?, ?, 'sess1', 'transcript', ?, ?, 'zlib', ?, 1, 1)
+        """,
+        (evidence_id, project_id, evidence_id, f"sha{evidence_id}", b"x"),
+    )
+    conn.commit()
 
 
 # ── normalize_for_overlap ─────────────────────────────────────────────────────
