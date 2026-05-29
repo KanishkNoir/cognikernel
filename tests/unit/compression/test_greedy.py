@@ -102,6 +102,32 @@ class TestGreedyFill:
         assert "CONSTRAINT_HARD" in _MANDATORY_TYPES
         assert "APPROACH_ABANDONED_DO_NOT_RETRY" in _MANDATORY_TYPES
 
+    def test_mandatory_authorities_constant(self) -> None:
+        from memlora.compression.greedy import _MANDATORY_AUTHORITIES
+        assert "user_stated" in _MANDATORY_AUTHORITIES
+
+    def test_user_stated_thread_survives_over_assistant_musing(self) -> None:
+        """Tier-1.5: a low-weight user-stated thread must not be evicted by a
+        high-weight assistant musing under budget pressure."""
+        user_thread = _make_event(
+            event_type="THREAD_OPEN",
+            description="JWT authentication end-to-end.",
+            weight=0.01,
+            authority="user_stated",
+            content_hash="u" * 64,
+        )
+        assistant_musing = _make_event(
+            event_type="THREAD_OPEN",
+            description="Maybe revisit membership tiers.",
+            weight=5.0,
+            authority="assistant_decided",
+            content_hash="m" * 64,
+        )
+        result = greedy_fill([user_thread, assistant_musing], budget_tokens=1)
+        descriptions = {e.payload["description"] for e in result}
+        assert "JWT authentication end-to-end." in descriptions
+        assert "Maybe revisit membership tiers." not in descriptions
+
 
 class TestCompressFieldLevel:
     def test_already_under_target_unchanged(self) -> None:

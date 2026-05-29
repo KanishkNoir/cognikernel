@@ -13,6 +13,13 @@ _MANDATORY_TYPES: frozenset[str] = frozenset({
     "CONSTRAINT_HARD",
     "APPROACH_ABANDONED_DO_NOT_RETRY",
 })
+# Authority values whose events are budget-exempt regardless of event_type.
+# A user-stated fact — above all the active thread — must never be evicted by
+# an assistant musing that merely accreted more dedup weight (the Tier-1.5
+# mis-ranking bug). Mirror of memlora.extraction.authority.USER_STATED, kept as
+# a bare string so the SessionStart render path avoids importing the heavy
+# extraction package.
+_MANDATORY_AUTHORITIES: frozenset[str] = frozenset({"user_stated"})
 _MANDATORY_TOKEN_LIMIT: int = 500
 _COMPONENT_TOKEN_LIMIT: int = 150
 _COMPONENT_MAX_COUNT: int = 5
@@ -31,8 +38,14 @@ def greedy_fill(events: list["Event"], budget_tokens: int) -> list["Event"]:
     """
     non_archived = [e for e in events if not e.archived]
 
-    # Phase 1 — mandatory (budget-exempt guardrail)
-    mandatory = [e for e in non_archived if e.event_type in _MANDATORY_TYPES]
+    # Phase 1 — mandatory (budget-exempt guardrail). Protect both the mandatory
+    # event types and any user-stated event (authority gate) so the user's own
+    # statements — notably the active thread — survive budget pressure.
+    mandatory = [
+        e for e in non_archived
+        if e.event_type in _MANDATORY_TYPES
+        or e.payload.get("authority") in _MANDATORY_AUTHORITIES
+    ]
     # Capture original ids BEFORE _compress_mandatory returns shallow copies so
     # Phase 2 correctly excludes them even after the list is replaced.
     mandatory_ids = {id(e) for e in mandatory}
