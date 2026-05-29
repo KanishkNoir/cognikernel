@@ -12,6 +12,7 @@ from memlora.config import Config
 from memlora.integration.session import init_project, session_end
 from memlora.storage.connection import get_connection, get_db_path, hash_project_path
 from memlora.telemetry.ingest import (
+    whole_session_rollup,
     ingest_session_jsonl,
     store_telemetry,
     get_cache_stats,
@@ -191,7 +192,8 @@ class TestGetCacheStats:
         stats = get_cache_stats(conn, project_id)
         assert stats["sessions_with_data"] == 0
         assert stats["avg_cache_hit_rate"] == 0.0
-        assert stats["total_tokens_saved"] == 0
+        assert stats["total_cache_read_tokens"] == 0
+        assert stats["effective_tokens_saved"] == 0
 
     def test_computes_cache_hit_rate(self, db_conn) -> None:
         conn, project_id = db_conn
@@ -205,7 +207,19 @@ class TestGetCacheStats:
         assert stats["sessions_with_data"] == 1
         assert abs(stats["avg_cache_hit_rate"] - 0.80) < 0.01
 
-    def test_tokens_saved_equals_cache_read_sum(self, db_conn) -> None:
+    def test_cache_creation_counts_against_hit_rate(self, db_conn) -> None:
+        # 200 input, 200 cache_creation, 600 read → 600/1000 = 0.60 (creation is
+        # NOT a cache hit). The old formula read/(input+read) would report 0.75.
+        conn, project_id = db_conn
+        store_telemetry(conn, {
+            "project_id": project_id, "session_id": "s1",
+            "input_tokens": 200, "cache_creation_tokens": 200,
+            "cache_read_tokens": 600, "output_tokens": 50,
+        })
+        stats = get_cache_stats(conn, project_id)
+        assert abs(stats["avg_cache_hit_rate"] - 0.60) < 0.01
+
+    def test_cache_read_and_effective_saved(self, db_conn) -> None:
         conn, project_id = db_conn
         for i, (inp, read) in enumerate([(100, 500), (200, 1000)]):
             store_telemetry(conn, {
@@ -214,7 +228,9 @@ class TestGetCacheStats:
                 "cache_read_tokens": read, "output_tokens": 50,
             })
         stats = get_cache_stats(conn, project_id)
-        assert stats["total_tokens_saved"] == 1500
+        assert stats["total_cache_read_tokens"] == 1500
+        # cache_read billed ~0.1x → ~90% effective saving.
+        assert stats["effective_tokens_saved"] == 1350
 
     def test_recent_sessions_limited_to_ten(self, db_conn) -> None:
         conn, project_id = db_conn
@@ -226,6 +242,30 @@ class TestGetCacheStats:
             })
         stats = get_cache_stats(conn, project_id)
         assert len(stats["recent_sessions"]) <= 10
+
+
+# ── whole_session_rollup ──────────────────────────────────────────────────────
+
+class TestWholeSessionRollup:
+    def test_empty(self, db_conn) -> None:
+        conn, project_id = db_conn
+        roll = whole_session_rollup(conn, project_id)
+        assert roll["sessions_with_data"] == 0
+        assert roll["totals"] == {"input": 0, "cache_creation": 0, "cache_read": 0, "output": 0}
+
+    def test_sums_and_billed_equivalent(self, db_conn) -> None:
+        conn, project_id = db_conn
+        store_telemetry(conn, {
+            "project_id": project_id, "session_id": "s1",
+            "input_tokens": 1000, "cache_creation_tokens": 400,
+            "cache_read_tokens": 2000, "output_tokens": 300,
+        })
+        roll = whole_session_rollup(conn, project_id)
+        assert roll["sessions_with_data"] == 1
+        assert roll["totals"]["cache_read"] == 2000
+        # 1000 + round(1.25*400) + round(0.1*2000) = 1000 + 500 + 200 = 1700
+        assert roll["billed_equivalent_input_tokens"] == 1700
+        assert len(roll["sessions"]) == 1
 
 
 # ── find_and_ingest_telemetry ─────────────────────────────────────────────────

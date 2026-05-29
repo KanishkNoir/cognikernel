@@ -482,10 +482,12 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
         print("  no telemetry - run 'memlora telemetry <project_path>' to ingest")
     else:
         hit_pct = cache_stats["avg_cache_hit_rate"] * 100
-        saved = cache_stats["total_tokens_saved"]
+        read = cache_stats["total_cache_read_tokens"]
+        saved = cache_stats["effective_tokens_saved"]
         print(f"  sessions with data : {n}")
         print(f"  avg cache hit rate : {hit_pct:.1f}%")
-        print(f"  total tokens saved : {saved:,}")
+        print(f"  cache reads served : {read:,} tok")
+        print(f"  effective saved    : {saved:,} tok (read billed ~0.1x)")
         recent = cache_stats["recent_sessions"]
         if recent:
             print("  last sessions      :")

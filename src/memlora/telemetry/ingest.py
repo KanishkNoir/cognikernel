@@ -89,14 +89,22 @@ def store_telemetry(conn: sqlite3.Connection, row: dict[str, Any]) -> None:
     conn.commit()
 
 
+# cache_read tokens are billed at ~0.1x base input on Anthropic pricing, so the
+# saving vs re-sending the same tokens uncached is ~90%, not 100%.
+_CACHE_READ_DISCOUNT: float = 0.9
+
+
 def get_cache_stats(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
     """Return cache effectiveness summary for a project.
 
     Keys:
-      sessions_with_data  — number of sessions with telemetry
-      avg_cache_hit_rate  — mean(cache_read / (input + cache_read)) across sessions (0.0–1.0)
-      total_tokens_saved  — sum of cache_read_tokens (tokens served from cache)
-      recent_sessions     — list of last 10 rows, newest first
+      sessions_with_data       — number of sessions with telemetry
+      avg_cache_hit_rate       — mean(read / (input + cache_creation + read)) across sessions.
+                                 cache_creation is in the denominator because those tokens were
+                                 written to the cache (~1.25x), not served from it.
+      total_cache_read_tokens  — Σ cache_read_tokens (tokens served from cache this period)
+      effective_tokens_saved   — ≈ 0.9 × total_cache_read_tokens; the honest saving vs uncached
+      recent_sessions          — list of last 10 rows, newest first
     """
     rows = conn.execute(
         """
@@ -113,19 +121,21 @@ def get_cache_stats(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]
         return {
             "sessions_with_data": 0,
             "avg_cache_hit_rate": 0.0,
-            "total_tokens_saved": 0,
+            "total_cache_read_tokens": 0,
+            "effective_tokens_saved": 0,
             "recent_sessions": [],
         }
 
     hit_rates: list[float] = []
-    total_saved = 0
+    total_read = 0
     for row in rows:
         inp = row["input_tokens"]
+        create = row["cache_creation_tokens"]
         read = row["cache_read_tokens"]
-        total = inp + read
-        if total > 0:
-            hit_rates.append(read / total)
-        total_saved += read
+        denom = inp + create + read
+        if denom > 0:
+            hit_rates.append(read / denom)
+        total_read += read
 
     avg_hit_rate = sum(hit_rates) / len(hit_rates) if hit_rates else 0.0
 
@@ -143,8 +153,57 @@ def get_cache_stats(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]
     return {
         "sessions_with_data": len(rows),
         "avg_cache_hit_rate": avg_hit_rate,
-        "total_tokens_saved": total_saved,
+        "total_cache_read_tokens": total_read,
+        "effective_tokens_saved": int(round(_CACHE_READ_DISCOUNT * total_read)),
         "recent_sessions": recent,
+    }
+
+
+def whole_session_rollup(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
+    """Aggregate per-session totals into one whole-project token report.
+
+    This is the top-line meter for between-mode/before-after comparison: the
+    sum a session actually costs is input + cache_creation + cache_read (read
+    weighted at ~0.1x gives the billed-equivalent). Returns raw sums plus a
+    billed-equivalent input figure and per-session rows for drill-down.
+    """
+    rows = conn.execute(
+        """
+        SELECT session_id, input_tokens, cache_creation_tokens,
+               cache_read_tokens, output_tokens
+        FROM api_telemetry
+        WHERE project_id = ?
+        ORDER BY ingested_at ASC
+        """,
+        (project_id,),
+    ).fetchall()
+
+    totals = {"input": 0, "cache_creation": 0, "cache_read": 0, "output": 0}
+    sessions: list[dict[str, int]] = []
+    for r in rows:
+        totals["input"] += r["input_tokens"]
+        totals["cache_creation"] += r["cache_creation_tokens"]
+        totals["cache_read"] += r["cache_read_tokens"]
+        totals["output"] += r["output_tokens"]
+        sessions.append({
+            "session_id": r["session_id"],
+            "input": r["input_tokens"],
+            "cache_creation": r["cache_creation_tokens"],
+            "cache_read": r["cache_read_tokens"],
+            "output": r["output_tokens"],
+        })
+
+    # Billed-equivalent input tokens: cache_creation ~1.25x, cache_read ~0.1x.
+    billed_equiv_input = (
+        totals["input"]
+        + int(round(1.25 * totals["cache_creation"]))
+        + int(round(0.1 * totals["cache_read"]))
+    )
+    return {
+        "sessions_with_data": len(rows),
+        "totals": totals,
+        "billed_equivalent_input_tokens": billed_equiv_input,
+        "sessions": sessions,
     }
 
 
