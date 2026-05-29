@@ -12,6 +12,7 @@ from memlora.storage.projections import (
     load_or_rebuild,
     load_projection,
     needs_rebuild,
+    projection_to_events,
     rebuild_projection,
     save_projection,
 )
@@ -113,8 +114,12 @@ class TestRebuildProjection:
         insert(conn, "COMPONENT_STATUS", "h2",
                payload={"path": "src/api.py", "status": "blocked"})
         proj = rebuild_projection(conn, "proj1")
+        # Latest event is the representative status...
         assert proj.component_map["src/api.py"]["content_hash"] == "h2"
         assert proj.component_map["src/api.py"]["payload"]["status"] == "blocked"
+        # ...but mention_count accumulates across both collapsed events so that
+        # hot-file tallies match the historical raw-event aggregation.
+        assert proj.component_map["src/api.py"]["mention_count"] == 2
 
     def test_ranked_decisions_sorted_by_weight_desc(self, conn: sqlite3.Connection) -> None:
         insert(conn, "DECISION", "h1", weight=0.5)
@@ -243,6 +248,68 @@ class TestComponentMapCanonicalization:
         proj = rebuild_projection(conn, "proj1")
         rec = proj.component_map["app/models.py"]
         assert rec["payload"]["path"] == "app/models.py"
+
+
+# ── composite weighting (Unit 3) ──────────────────────────────────────────────
+
+class TestCompositeWeighting:
+    def test_composite_replaces_raw_weight(self, conn: sqlite3.Connection) -> None:
+        """A single-mention DECISION's stored weight is replaced by the composite
+        (base 0.7 × neutral recency/repetition/centrality/activity/type) — proof
+        compute_weight is now a live, non-test caller."""
+        insert(conn, "DECISION", "h1", weight=1.0, session_id="s1")
+        proj = rebuild_projection(conn, "proj1")
+        assert abs(proj.ranked_decisions[0]["weight"] - 0.7) < 1e-6
+
+    def test_recent_decision_ranks_above_stale(self, conn: sqlite3.Connection) -> None:
+        """Recency now influences ranking: two equally-mentioned decisions, the
+        one from a later session ranks higher even with identical raw weight."""
+        insert(conn, "DECISION", "old", weight=1.0, session_id="s1")
+        insert(conn, "THREAD_OPEN", "t", session_id="s2",
+               payload={"description": "advance the session clock", "state": "x"})
+        insert(conn, "DECISION", "new", weight=1.0, session_id="s3")
+        proj = rebuild_projection(conn, "proj1")
+        hashes = [r["content_hash"] for r in proj.ranked_decisions]
+        assert hashes.index("new") < hashes.index("old")
+
+    def test_constraint_hard_outweighs_decision(self, conn: sqlite3.Connection) -> None:
+        """Type multiplier is live: a hard constraint (base 1.0 × type 1.5)
+        scores well above a decision (base 0.7 × type 1.0) at equal raw weight."""
+        insert(conn, "CONSTRAINT_HARD", "c", weight=1.0, session_id="s1")
+        insert(conn, "DECISION", "d", weight=1.0, session_id="s1")
+        proj = rebuild_projection(conn, "proj1")
+        assert proj.hard_constraints[0]["weight"] > proj.ranked_decisions[0]["weight"]
+
+
+# ── projection_to_events (render source) ──────────────────────────────────────
+
+class TestProjectionToEvents:
+    def test_roundtrips_all_buckets_id_sorted(self, conn: sqlite3.Connection) -> None:
+        insert(conn, "CONSTRAINT_HARD", "h1")
+        insert(conn, "DECISION", "h2")
+        insert(conn, "APPROACH_ABANDONED_DO_NOT_RETRY", "h3")
+        insert(conn, "COMPONENT_STATUS", "h4",
+               payload={"path": "src/a.py", "status": "stable"})
+        insert(conn, "THREAD_OPEN", "h5",
+               payload={"description": "do work", "state": "in_progress"})
+        proj = rebuild_projection(conn, "proj1")
+        events = projection_to_events(proj)
+        assert {e.event_type for e in events} == {
+            "CONSTRAINT_HARD", "DECISION", "APPROACH_ABANDONED_DO_NOT_RETRY",
+            "COMPONENT_STATUS", "THREAD_OPEN",
+        }
+        ids = [e.id for e in events]
+        assert ids == sorted(ids)
+
+    def test_component_mention_sum_preserved(self, conn: sqlite3.Connection) -> None:
+        insert(conn, "COMPONENT_STATUS", "h1",
+               payload={"path": "src/api.py", "status": "stable"})
+        insert(conn, "COMPONENT_STATUS", "h2",
+               payload={"path": "src/api.py", "status": "blocked"})
+        events = projection_to_events(rebuild_projection(conn, "proj1"))
+        comp = [e for e in events if e.event_type == "COMPONENT_STATUS"]
+        assert len(comp) == 1
+        assert comp[0].mention_count == 2
 
 
 # ── load_or_rebuild ───────────────────────────────────────────────────────────

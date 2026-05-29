@@ -189,8 +189,8 @@ def render_state(
     config: Config | None = None,
 ) -> str:
     """Return the rendered injection block — what would be prepended to the LLM system prompt."""
-    from memlora.storage.events import get_events_for_projection
     from memlora.storage import symbol_files as sf
+    from memlora.storage.projections import load_or_rebuild, projection_to_events
     from memlora.compression.greedy import greedy_fill
     from memlora.injection.ordering import make_injection_context
     from memlora.injection.template import render_with_budget_enforcement
@@ -203,7 +203,10 @@ def render_state(
 
     with get_connection(db_path) as conn:
         run_migrations(conn)
-        events = get_events_for_projection(conn, project_id, after_id=0)
+        # Source events from the projection (single partition + component-collapse
+        # site, behind the high-water cache) rather than re-querying + re-routing
+        # all events on every render.
+        events = projection_to_events(load_or_rebuild(conn, project_id))
         session_count: int = conn.execute(
             """
             SELECT COUNT(DISTINCT session_id)
