@@ -375,13 +375,14 @@ def generate_summary(ctx: InjectionContext) -> str:
 # ── token counting ────────────────────────────────────────────────────────────
 
 def count_tokens_accurate(text: str) -> int:
-    """Token count via tiktoken (cl100k_base); falls back to len/4 if unavailable."""
-    try:
-        import tiktoken
-        encoder = tiktoken.get_encoding("cl100k_base")
-        return len(encoder.encode(text))
-    except Exception:
-        return max(1, len(text) // 4)
+    """Token count via the single canonical counter (tiktoken cl100k_base).
+
+    Delegates to `compression.token_count.count_tokens` so the renderer and
+    `greedy_fill` share one counter (and one cached encoder) rather than two
+    independent implementations.
+    """
+    from memlora.compression.token_count import count_tokens
+    return count_tokens(text)
 
 
 # ── budget enforcement ────────────────────────────────────────────────────────

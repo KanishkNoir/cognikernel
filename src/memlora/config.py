@@ -10,6 +10,13 @@ EXPECTED_PROJECTION_VERSION: int = 1
 
 VALID_HOOK_POLICIES = frozenset({"advisory", "strict"})
 
+# Single authoritative ceiling for the rendered injection block, set from the
+# Unit 7a baseline measurement (see research/beta/promotion_criteria.md). This
+# is the one number the render path enforces: greedy selection, the section
+# budgets, and the global backstop all derive from config.token_budget, which
+# defaults to this.
+DEFAULT_TOKEN_BUDGET: int = 1500
+
 
 @dataclass
 class SectionBudgets:
@@ -39,8 +46,12 @@ class SectionBudgets:
 @dataclass
 class Config:
     memlora_dir: Path = field(default_factory=lambda: Path.home() / ".memlora")
-    token_budget: int = 2000
-    skeleton_budget: int = 800
+    token_budget: int = DEFAULT_TOKEN_BUDGET
+    # Sub-cap for the AST skeleton section. Shrunk 800 → 600 (Unit 6): with
+    # PageRank-ranked entries the most-central files survive the smaller budget,
+    # so this concentrates value rather than dropping content blindly. Non-skeleton
+    # sections measure ~600 tok, so 600 + 600 leaves headroom under the 1500 ceiling.
+    skeleton_budget: int = 600
     wal_warning_threshold_bytes: int = 100 * 1024 * 1024
     grep_cache_enabled: bool = False
     ckl_mode: bool = False
