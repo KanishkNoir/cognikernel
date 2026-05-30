@@ -10,6 +10,12 @@ fields so the model clusters by *what the decision is about*:
 
 Kept deliberately short: over-stuffing dilutes the vector. The composition is
 deterministic, so a change here is a model_version-level change (re-embed).
+
+IMPORTANT: if you change what this function composes, bump
+`embedding.model.EMBEDDING_INPUT_VERSION`. That folds into the stored
+`model_version`, so existing vectors (encoding the old composition) are
+invalidated and backfilled in place. Without the bump, old vectors silently
+mismatch new queries.
 """
 from __future__ import annotations
 

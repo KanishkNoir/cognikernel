@@ -46,3 +46,17 @@ class TestBackfill:
         _insert(conn, 1, {"description": "Use argon2id for hashing"})
         assert backfill_embeddings(conn, "p1") == 1
         assert backfill_embeddings(conn, "p1") == 0  # already embedded for this model_version
+
+    def test_input_version_bump_triggers_reembed_in_place(self, conn: sqlite3.Connection) -> None:
+        """#3: a vector from a prior composition (stale version) is re-embedded
+        under the current version, replacing the row (event_id PK — no orphan)."""
+        import numpy as np
+
+        from memlora.embedding.store import upsert_embedding
+
+        _insert(conn, 1, {"description": "Use argon2id for hashing"})
+        upsert_embedding(conn, 1, np.zeros(384, dtype="float32"), "bge-small-en-v1.5+in0")
+        assert backfill_embeddings(conn, "p1") == 1  # current-version row missing → re-embed
+        rows = conn.execute("SELECT model_version FROM event_embeddings WHERE event_id=1").fetchall()
+        assert len(rows) == 1  # replaced in place, not duplicated
+        assert rows[0]["model_version"] == EMBEDDING_MODEL_VERSION

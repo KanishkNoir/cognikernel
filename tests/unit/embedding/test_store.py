@@ -25,6 +25,21 @@ def _norm(values) -> np.ndarray:
 
 
 class TestEmbeddingStore:
+    def test_model_version_encodes_input_version(self) -> None:
+        """#3: the stored version folds in the composition (input) version."""
+        from memlora.embedding.model import EMBEDDING_INPUT_VERSION, EMBEDDING_MODEL_VERSION
+        assert f"in{EMBEDDING_INPUT_VERSION}" in EMBEDDING_MODEL_VERSION
+
+    def test_input_version_bump_invalidates_old_vectors(self, conn: sqlite3.Connection) -> None:
+        """A composition change (input-version bump) takes old vectors out of the
+        current version space — load_embeddings filters them out so backfill
+        re-embeds. Old rows remain retrievable only under their own version."""
+        from memlora.embedding.model import EMBEDDING_MODEL_VERSION
+        stale = "bge-small-en-v1.5+in0"  # a prior composition
+        upsert_embedding(conn, 1, _norm([1.0, 0.0]), stale)
+        assert load_embeddings(conn, [1], EMBEDDING_MODEL_VERSION) == {}
+        assert 1 in load_embeddings(conn, [1], stale)
+
     def test_roundtrip(self, conn: sqlite3.Connection) -> None:
         v = _norm([1.0, 0.0, 0.0, 0.0])
         upsert_embedding(conn, 1, v, "m1")
