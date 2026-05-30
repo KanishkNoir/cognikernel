@@ -8,7 +8,7 @@ Operator set (position-based, all have high semantic stability in LLM training):
   ¬   prohibition / must-not        (before object: ¬ SQL_DELETE)
   →   implication / dependency      (X → Y: "X uses Y")
   ←   derived-from / source-of      (reserved — not used by current patterns)
-  ∅   null / rejected / empty       (subject ∅: "celery ∅")
+  ∅   null / rejected / empty       (subject ∅: "<approach> ∅")
   |   or / alternatives             (reserved — compositional future use)
   &   and / conjunction             (reserved — compositional future use)
   =   equals / is-defined-as        (reserved — compositional future use)

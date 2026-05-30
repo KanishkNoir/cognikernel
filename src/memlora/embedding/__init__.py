@@ -3,8 +3,8 @@
 A small, local, offline embedding model (via fastembed/ONNX — no API, no network
 at inference once cached) turns event descriptions into vectors. These power
 *semantic* candidate retrieval for supersession/dedup — catching decisions that
-mean the same thing in different words ("use bcrypt for hashing" vs "switch to
-argon2id for hashing") that the lexical Jaccard/Levenshtein path misses.
+mean the same thing in different words (semantically near but lexically distinct)
+that the lexical Jaccard/Levenshtein path misses.
 
 The model is OPTIONAL: if fastembed is not installed (or fails to load),
 `embed_text` returns None and every consumer degrades to the existing lexical

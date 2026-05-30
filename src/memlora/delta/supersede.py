@@ -168,14 +168,14 @@ def apply_supersession(
 #
 # On top of that gated floor, the *candidate* set is found by lexical overlap
 # (descriptions_overlap) OR — when `use_embeddings` is True — a semantic cosine
-# axis that also catches paraphrased corrections lexical overlap misses
-# ("use bcrypt for hashing" -> "switch to argon2id for hashing"). The semantic
+# axis that also catches paraphrased corrections lexical overlap misses — a
+# decision restated later in different, lexically-distinct words. The semantic
 # axis is purely additive: with embeddings off (or the model absent) matching
 # degrades to gated-lexical, never to ungated.
 
 # Empirically set for bge-small-en-v1.5: unrelated same-type decisions cluster
-# <= ~0.66, genuine paraphrases ("use bcrypt for hashing" vs "adopt argon2id as
-# the hashing scheme") land ~0.75-0.89. 0.75 sits in that gap and biases toward
+# <= ~0.66, genuine paraphrases of one decision (lexically distinct, same meaning)
+# land ~0.75-0.89. 0.75 sits in that gap and biases toward
 # precision — a false supersession deletes a still-valid decision (worse than
 # keeping a stale one alongside). Should be validated/swept per-model on real
 # project data (the A/B benchmark is the intended tuning instrument).

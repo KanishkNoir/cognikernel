@@ -60,9 +60,18 @@ class Config:
     read_cache_ttl_hours: int = 24
     deny_retry_window_seconds: int = 60
     # When True, session_end stores a local embedding per event and supersession
-    # uses the hybrid (semantic + temporal + authority) finder. Default off:
-    # opt-in, gradual rollout, A/B-able. Degrades to lexical if the model is absent.
-    embedding_enabled: bool = False
+    # adds the semantic axis on top of the always-on gated lexical floor — catching
+    # decisions restated across sessions in different words (semantically near but
+    # lexically distinct) that token-overlap matching misses. Default ON: a memory
+    # layer that displaces the agent's own notes (init seeds "do not record
+    # decisions here") must at least match what those notes do for free, and
+    # lexical-only matching cannot catch semantic paraphrase. Safe to default ON:
+    # degrades to lexical when fastembed is unavailable, and supersession is
+    # reversible (sets superseded_by, never deletes).
+    # CAVEAT: this makes SUPERSESSION_COSINE_THRESHOLD load-bearing by default, so a
+    # false positive can hide a still-valid decision from the injection — the
+    # supersession-precision eval is release-critical rather than optional.
+    embedding_enabled: bool = True
     section_budgets: SectionBudgets = field(default_factory=SectionBudgets)
 
     @property
