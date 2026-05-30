@@ -8,9 +8,14 @@ The decision tree (per v2 plan §2):
   STEP 2 — SKELETON-BASED GATING (only under strict policy):
     Lookup canonical_path in symbol_files:
       Case A  freshness='fresh' AND scan_status='scanned' AND symbol_count > 0:
-              Check denied_reads for the same (project, session, path):
-                If within retry window  → ALLOW as 'body_needed_retry'
-                Otherwise               → DENY (record in denied_reads)
+              Verify freshness against the file's mtime (the `freshness` flag is
+              only updated by the Write/Edit hook; an external edit — git
+              checkout, another editor, codegen — leaves it falsely 'fresh'):
+                If mtime > refreshed_at  → mark row stale, ALLOW (skeleton can no
+                                           longer vouch for these signatures)
+              Otherwise check denied_reads for the same (project, session, path):
+                If within retry window   → ALLOW as 'body_needed_retry'
+                Otherwise                → DENY (record in denied_reads)
       Case B  freshness='stale'         → ALLOW (skeleton may be out of date)
       Case C  scan_status in {parse_error, ignored} → ALLOW (no signatures to offer)
       Case D  symbol_count = 0          → ALLOW (no public surface to defer to)
@@ -25,6 +30,7 @@ permission-decision protocol.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 
@@ -33,6 +39,13 @@ from memlora.storage import denied_reads as dr
 from memlora.storage import read_cache as rc
 from memlora.storage import symbol_files as sf
 from memlora.utils.paths import canonicalize_path
+
+# A 'fresh' row is only trusted if the file on disk hasn't changed since the scan.
+# This margin absorbs clock/mtime-resolution jitter between the write that set the
+# file's mtime and the scan that set refreshed_at, so a just-scanned file is never
+# spuriously judged stale. External edits we care about (git checkout, manual
+# edits, codegen) land seconds or more after the scan, well beyond this margin.
+_MTIME_STALE_MARGIN_MS = 1000
 
 
 # ── public types ─────────────────────────────────────────────────────────────
@@ -133,6 +146,15 @@ def decide_pretool_read(
     if file_row.symbol_count == 0:
         return Decision(action="allow", reason="no_public_symbols")
 
+    # Freshness verification — `freshness` is only a flag, and nothing flips it
+    # back to 'stale' for edits made outside the Write/Edit hook (git checkout,
+    # external editor, codegen). Verify it against the file's mtime so a 'fresh'
+    # row that no longer matches disk is recorded stale and the read is allowed,
+    # rather than denying with signatures the skeleton can no longer vouch for.
+    if _changed_since_scan(project_path, canonical, file_row.refreshed_at):
+        sf.mark_stale(conn, project_id, canonical)
+        return Decision(action="allow", reason="symbol_files_mtime_stale")
+
     # Case A — fresh, scanned, has symbols. Apply 60s retry escape hatch.
     if dr.was_denied_within(
         conn, project_id, session_id, canonical,
@@ -160,6 +182,27 @@ def decide_pretool_read(
         ),
         reason="skeleton_fresh_first_denial",
     )
+
+
+# ── freshness verification ───────────────────────────────────────────────────
+
+
+def _changed_since_scan(project_path: str, canonical: str, refreshed_at_ms: int) -> bool:
+    """True if the file's mtime is newer than the last scan (beyond jitter margin).
+
+    Pure `os.stat` — no file read, so it costs nothing in tokens and the cache
+    benefit of a deny is preserved. If the file can't be stat'd (deleted /
+    unreadable), return False so we fall back to the stored flag rather than
+    flip-flopping the decision on a transient error.
+    """
+    # No real scan timestamp (sentinel/unset) → can't compare; trust the flag.
+    if refreshed_at_ms <= 0:
+        return False
+    try:
+        mtime_ms = int(os.stat(os.path.join(project_path, canonical)).st_mtime * 1000)
+    except OSError:
+        return False
+    return mtime_ms > refreshed_at_ms + _MTIME_STALE_MARGIN_MS
 
 
 # ── post-tool outcome resolution ─────────────────────────────────────────────

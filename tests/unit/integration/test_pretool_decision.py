@@ -239,6 +239,90 @@ def test_fresh_scanned_with_symbols_denies_first_attempt(
     assert dr.was_denied_within(conn, "p1", "s1", "app/main.py", now_ms=10_000)
 
 
+# STEP 2 Case A — freshness verification (external-edit detection) ------------
+
+
+def test_externally_edited_fresh_file_allows_and_marks_stale(
+    conn: sqlite3.Connection, tmp_path: Path,
+) -> None:
+    """#2: a 'fresh' row whose file changed since the scan (mtime > refreshed_at)
+    must not be trusted — allow the read and record the row stale, so the
+    skeleton never vouches for signatures it can no longer back."""
+    project = _project(tmp_path)
+    abs_path = _touch(project, "app/main.py")  # real file, mtime ≈ now
+    # Scanned long ago relative to the file's mtime → external edit since.
+    sf.upsert(
+        conn, "p1", "app/main.py",
+        freshness="fresh", scan_status="scanned", symbol_count=5,
+        refreshed_at=1_000,  # epoch ~1970 ms; file mtime is ~now
+    )
+
+    d = _decide(conn, file_path=abs_path, project_path=project)
+
+    assert d.action == "allow"
+    assert d.reason == "symbol_files_mtime_stale"
+    # The drift was persisted so future lookups short-circuit via Case B.
+    assert sf.get(conn, "p1", "app/main.py").freshness == "stale"
+
+
+def test_unchanged_fresh_file_still_denies(
+    conn: sqlite3.Connection, tmp_path: Path,
+) -> None:
+    """A file scanned at-or-after its mtime is genuinely fresh → still denied
+    (the verification must not produce false staleness on freshly-scanned files)."""
+    project = _project(tmp_path)
+    abs_path = _touch(project, "app/main.py")
+    # Default refreshed_at = now (set after the touch) → mtime ≤ refreshed_at.
+    sf.upsert(
+        conn, "p1", "app/main.py",
+        freshness="fresh", scan_status="scanned", symbol_count=5,
+    )
+
+    d = _decide(conn, file_path=abs_path, project_path=project)
+
+    assert d.is_deny
+    assert d.reason == "skeleton_fresh_first_denial"
+
+
+def test_zero_refreshed_at_falls_back_to_flag(
+    conn: sqlite3.Connection, tmp_path: Path,
+) -> None:
+    """A sentinel/unset refreshed_at (<=0) must not force staleness — fall back
+    to the flag (deny) rather than disabling skeleton-trust for the row."""
+    project = _project(tmp_path)
+    abs_path = _touch(project, "app/main.py")
+    sf.upsert(
+        conn, "p1", "app/main.py",
+        freshness="fresh", scan_status="scanned", symbol_count=5,
+        refreshed_at=0,
+    )
+
+    d = _decide(conn, file_path=abs_path, project_path=project)
+
+    assert d.is_deny
+    assert d.reason == "skeleton_fresh_first_denial"
+
+
+def test_missing_file_falls_back_to_flag(
+    conn: sqlite3.Connection, tmp_path: Path,
+) -> None:
+    """If the file can't be stat'd, fall back to the stored flag (deny), not a
+    transient flip to allow."""
+    project = _project(tmp_path)
+    # No file on disk; row claims fresh + scanned.
+    sf.upsert(
+        conn, "p1", "ghost.py",
+        freshness="fresh", scan_status="scanned", symbol_count=5,
+        refreshed_at=1_000,
+    )
+    abs_path = str(Path(project) / "ghost.py")
+
+    d = _decide(conn, file_path=abs_path, project_path=project)
+
+    assert d.is_deny
+    assert d.reason == "skeleton_fresh_first_denial"
+
+
 # STEP 2 Case A — retry within window (escape hatch) --------------------------
 
 
