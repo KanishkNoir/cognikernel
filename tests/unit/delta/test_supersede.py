@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -86,6 +87,71 @@ class TestFindSuperseded:
             payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
         )
         assert old_id in find_superseded(conn, new)
+
+    # ── gates are the baseline even with the semantic axis OFF ────────────────
+    # use_embeddings=False is the config.embedding_enabled=False merge path: the
+    # temporal/authority/provenance gates must still apply, and no embedding
+    # model may be loaded.
+
+    def test_lexical_match_with_gates_embeddings_off(self, conn: sqlite3.Connection) -> None:
+        old_id = seed_event(
+            conn, content_hash="h_old", created_at=1000,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_new", created_at=2000,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        assert old_id in find_superseded(conn, new, use_embeddings=False)
+
+    def test_embeddings_off_does_not_load_model(self, conn: sqlite3.Connection) -> None:
+        """The default path must never touch the embedding model (P5/P6)."""
+        old_id = seed_event(
+            conn, content_hash="h_old", created_at=1000,
+            payload={"description": "Use SQLite for local storage"},
+        )
+        new = make_event(
+            content_hash="h_new", created_at=2000,
+            payload={"description": "Use SQLite for local storage"},
+        )
+        with patch("memlora.embedding.model.embed_text") as mock_embed:
+            result = find_superseded(conn, new, use_embeddings=False)
+            mock_embed.assert_not_called()
+        assert old_id in result
+
+    def test_temporal_gate_holds_with_embeddings_off(self, conn: sqlite3.Connection) -> None:
+        seed_event(
+            conn, content_hash="h_future", created_at=5000,
+            payload={"description": "Use SQLite for local storage"},
+        )
+        new = make_event(
+            content_hash="h_now", created_at=2000,
+            payload={"description": "Use SQLite for local storage"},
+        )
+        assert find_superseded(conn, new, use_embeddings=False) == []
+
+    def test_authority_gate_holds_with_embeddings_off(self, conn: sqlite3.Connection) -> None:
+        seed_event(
+            conn, content_hash="h_user", created_at=1000,
+            payload={"description": "Use SQLite for local storage", "authority": "user_stated"},
+        )
+        new = make_event(
+            content_hash="h_inferred", created_at=2000,
+            payload={"description": "Use SQLite for local storage", "authority": "inferred_from_code"},
+        )
+        assert find_superseded(conn, new, use_embeddings=False) == []
+
+    def test_provenance_gate_holds_with_embeddings_off(self, conn: sqlite3.Connection) -> None:
+        seed_evidence(conn, 1)
+        seed_event(
+            conn, content_hash="h_a", created_at=1000, evidence_id=1,
+            payload={"description": "Use SQLite for local storage"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, evidence_id=1,
+            payload={"description": "Use SQLite for local storage"},
+        )
+        assert find_superseded(conn, new, use_embeddings=False) == []
 
     @pytest.mark.skipif(not is_available(), reason="embedding model not installed")
     def test_semantic_supersedes_paraphrase(self, conn: sqlite3.Connection) -> None:

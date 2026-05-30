@@ -33,7 +33,6 @@ from memlora.delta.decay import (
 from memlora.delta.supersede import (
     apply_supersession,
     descriptions_overlap,
-    detect_supersession,
     find_superseded,
 )
 from memlora.storage.events import (
@@ -84,9 +83,14 @@ def execute_merge(
     On failure, the transaction is rolled back and the error written to the
     dead-letter queue (extraction_failures).
 
-    When `embed_events` is True (config.embedding_enabled), each event gets a
-    local embedding stored and supersession uses the hybrid semantic+temporal+
-    authority finder. When False, behavior is the legacy lexical path exactly.
+    Supersession always runs through `find_superseded`, so the temporal,
+    authority, and provenance gates are the baseline regardless of embeddings —
+    a lower-trust, newer, or same-transcript event never supersedes. The
+    `embed_events` flag (config.embedding_enabled) only toggles the *semantic*
+    candidate axis on top of that gated lexical floor: when True, each event also
+    gets a local embedding stored and cosine retrieval contributes extra
+    candidates; when False, no embedding model is touched and matching is
+    gated-lexical only.
     """
     if not candidates:
         return {"inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0, "archived": 0}
@@ -103,9 +107,9 @@ def execute_merge(
 
                 if embed_events:
                     _store_event_embedding(conn, row_id, event)
-                    sup_ids = find_superseded(conn, event)
-                else:
-                    sup_ids = detect_supersession(conn, event)
+                # Gated supersession is the baseline (temporal + authority +
+                # provenance). `embed_events` only adds the semantic axis.
+                sup_ids = find_superseded(conn, event, use_embeddings=embed_events)
                 stats["superseded"] += apply_supersession(conn, row_id, sup_ids)
                 stats["superseded"] += _cross_type_dedup(conn, row_id, event)
 

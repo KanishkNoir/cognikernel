@@ -154,19 +154,24 @@ def apply_supersession(
     return len(superseded_ids)
 
 
-# ── hybrid supersession: semantic retrieval gated by temporal + authority ─────
+# ── gated supersession: temporal + authority + provenance, with optional semantic ─
 #
-# The lexical path (descriptions_overlap) misses paraphrased corrections like
-# "use bcrypt for hashing" -> "switch to argon2id for hashing". `find_superseded`
-# adds a *semantic* axis (local embeddings) for candidate retrieval, then uses
-# the structured metadata CogniKernel already stores as the *decision* axis that
-# similarity alone cannot provide:
+# `find_superseded` is the single supersession entry point for the merge. The
+# three structured gates are the ALWAYS-ON baseline — they apply whether or not
+# embeddings are enabled, because they are correctness properties independent of
+# the retrieval mechanism (decoupled from config.embedding_enabled by design):
 #   - temporal direction: a new event only supersedes an OLDER one (created_at);
 #   - authority precedence: a lower-trust event never supersedes a higher-trust
-#     one (e.g. inferred-from-code must not overwrite a user-stated decision).
-# Lexical overlap remains an OR-fallback, and if the embedding model is absent
-# the semantic axis simply contributes nothing — behavior degrades to
-# temporal+authority-gated lexical matching.
+#     one (e.g. inferred-from-code must not overwrite a user-stated decision);
+#   - provenance: a match within the SAME transcript (evidence_id) is a
+#     restatement, not an evolution, so it is never superseded.
+#
+# On top of that gated floor, the *candidate* set is found by lexical overlap
+# (descriptions_overlap) OR — when `use_embeddings` is True — a semantic cosine
+# axis that also catches paraphrased corrections lexical overlap misses
+# ("use bcrypt for hashing" -> "switch to argon2id for hashing"). The semantic
+# axis is purely additive: with embeddings off (or the model absent) matching
+# degrades to gated-lexical, never to ungated.
 
 # Empirically set for bge-small-en-v1.5: unrelated same-type decisions cluster
 # <= ~0.66, genuine paraphrases ("use bcrypt for hashing" vs "adopt argon2id as
@@ -188,12 +193,21 @@ _AUTHORITY_PRECEDENCE: dict[str, int] = {
 _AUTHORITY_DEFAULT = 2
 
 
-def find_superseded(conn: sqlite3.Connection, new_event: Event) -> list[int]:
-    """Hybrid supersession candidate finder (semantic + temporal + authority).
+def find_superseded(
+    conn: sqlite3.Connection,
+    new_event: Event,
+    *,
+    use_embeddings: bool = True,
+) -> list[int]:
+    """Gated supersession finder (temporal + authority + provenance + lexical/semantic).
 
-    Returns ids of active, same-type events that `new_event` supersedes. Safe
-    when embeddings are unavailable (falls back to temporal+authority-gated
-    lexical overlap). The new event is assumed to be the most recent assertion.
+    Returns ids of active, same-type events that `new_event` supersedes. The
+    three structured gates always apply. `use_embeddings` toggles only the
+    semantic candidate axis: when False, no embedding model is loaded and
+    matching is gated-lexical (the safe baseline for config.embedding_enabled =
+    False); when True (and the model is available), cosine retrieval contributes
+    additional candidates on top. The new event is assumed to be the most recent
+    assertion.
     """
     if new_event.event_type not in _SUPERSESSION_TYPES:
         return []
@@ -219,24 +233,27 @@ def find_superseded(conn: sqlite3.Connection, new_event: Event) -> list[int]:
     new_created = new_event.created_at
     new_evidence = new_event.evidence_id
 
-    # Semantic axis (optional): embed the new event's composed input (E1), cosine
-    # over stored candidate vectors. Empty dict when model/vectors unavailable.
+    # Semantic axis (optional, additive): embed the new event's composed input
+    # (E1), cosine over stored candidate vectors. Skipped entirely when
+    # use_embeddings is False so no embedding model is loaded on the default
+    # path. Empty dict when disabled or when the model/vectors are unavailable.
     sem_matches: dict[int, float] = {}
-    try:
-        from memlora.embedding.input import embedding_input
-        from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text
-        from memlora.embedding.store import cosine_matches, load_embeddings
+    if use_embeddings:
+        try:
+            from memlora.embedding.input import embedding_input
+            from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text
+            from memlora.embedding.store import cosine_matches, load_embeddings
 
-        query_vec = embed_text(embedding_input(new_event.payload, new_event.event_type))
-        if query_vec is not None:
-            cand_emb = load_embeddings(
-                conn, [r["id"] for r in rows], EMBEDDING_MODEL_VERSION
-            )
-            sem_matches = cosine_matches(
-                query_vec, cand_emb, SUPERSESSION_COSINE_THRESHOLD
-            )
-    except Exception:
-        sem_matches = {}
+            query_vec = embed_text(embedding_input(new_event.payload, new_event.event_type))
+            if query_vec is not None:
+                cand_emb = load_embeddings(
+                    conn, [r["id"] for r in rows], EMBEDDING_MODEL_VERSION
+                )
+                sem_matches = cosine_matches(
+                    query_vec, cand_emb, SUPERSESSION_COSINE_THRESHOLD
+                )
+        except Exception:
+            sem_matches = {}
 
     superseded: list[int] = []
     for row in rows:

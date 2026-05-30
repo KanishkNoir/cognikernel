@@ -175,6 +175,61 @@ class TestExecuteMergeSupersession:
         assert row["superseded_by"] is not None
 
 
+# ── execute_merge — baseline gates (embeddings off) ───────────────────────────
+
+class TestExecuteMergeBaselineGates:
+    """With embed_events=False (default), supersession runs through the gated
+    finder — the temporal/authority/provenance gates are the baseline, not the
+    legacy ungated lexical path."""
+
+    def test_cross_session_overlap_supersedes(self, conn: sqlite3.Connection) -> None:
+        ev1 = store_evidence(conn, "proj1", "sess0", "transcript", b"session-0")
+        ev2 = store_evidence(conn, "proj1", "sess1", "transcript", b"session-1")
+        old = make_event(
+            content_hash="old_hash", created_at=1000, evidence_id=ev1,
+            payload={"description": "Use SQLite for persistent local storage"},
+        )
+        old_id = insert_event(conn, old)
+        new = make_event(
+            content_hash="new_hash", created_at=2000, evidence_id=ev2,
+            payload={"description": "Use SQLite for persistent local data storage"},
+        )
+        execute_merge(conn, "sess1", [new])
+        row = conn.execute("SELECT superseded_by FROM events WHERE id = ?", (old_id,)).fetchone()
+        assert row["superseded_by"] is not None
+
+    def test_same_evidence_overlap_not_superseded(self, conn: sqlite3.Connection) -> None:
+        """Same transcript = restatement, not evolution — provenance gate holds."""
+        ev = store_evidence(conn, "proj1", "sess1", "transcript", b"one-session")
+        old = make_event(
+            content_hash="old_hash", created_at=1000, evidence_id=ev,
+            payload={"description": "Use SQLite for persistent local storage"},
+        )
+        old_id = insert_event(conn, old)
+        new = make_event(
+            content_hash="new_hash", created_at=2000, evidence_id=ev,
+            payload={"description": "Use SQLite for persistent local data storage"},
+        )
+        execute_merge(conn, "sess1", [new])
+        row = conn.execute("SELECT superseded_by FROM events WHERE id = ?", (old_id,)).fetchone()
+        assert row["superseded_by"] is None
+
+    def test_older_candidate_does_not_supersede_newer(self, conn: sqlite3.Connection) -> None:
+        """Temporal gate: an incoming event never supersedes a newer existing one."""
+        future = make_event(
+            content_hash="future_hash", created_at=5000,
+            payload={"description": "Use SQLite for persistent local storage"},
+        )
+        future_id = insert_event(conn, future)
+        new = make_event(
+            content_hash="now_hash", created_at=2000,
+            payload={"description": "Use SQLite for persistent local data storage"},
+        )
+        execute_merge(conn, "sess1", [new])
+        row = conn.execute("SELECT superseded_by FROM events WHERE id = ?", (future_id,)).fetchone()
+        assert row["superseded_by"] is None
+
+
 # ── execute_merge — cascade ───────────────────────────────────────────────────
 
 class TestExecuteMergeCascade:
