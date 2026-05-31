@@ -7,16 +7,44 @@ import sys
 from pathlib import Path
 
 from memlora.config import Config
-from memlora.integration.session import (
-    get_projection,
-    init_project,
-    rebuild_from_raw,
-    render_state,
-    session_end,
-)
+
+# `memlora.integration.session` (and its extraction / symbol / tree-sitter stack)
+# is imported lazily inside the handlers that need it, NOT at module top — so the
+# `python -m memlora hook-*` hot path (hook-pretool fires on every Read) never pays
+# for the heavy stack it doesn't use. See main()'s hook fast-path dispatch (CK-6a).
+
+
+def _ensure_utf8_output() -> None:
+    """Make CLI/hook output encoding-safe on non-UTF-8 consoles (e.g. Windows
+    cp1252). The rendered block uses non-ASCII (the skeleton's '→'), which raises
+    UnicodeEncodeError when printed to a cp1252 stdout. Best-effort: reconfigure
+    stdout/stderr to UTF-8 with replacement; leave streams that can't reconfigure.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+# Hook subcommand → integration.hooks entrypoint. Dispatched before argparse and
+# before any heavy import so the per-Read hook stays light (CK-6a).
+_HOOK_ENTRYPOINTS = {
+    "hook-session-start": "session_start_main",
+    "hook-stop": "stop_main",
+    "hook-pretool": "pretool_main",
+    "hook-posttool": "posttool_main",
+    "hook-posttool-read": "posttool_read_main",
+}
 
 
 def main() -> None:
+    _ensure_utf8_output()
+    argv = sys.argv[1:]
+    if argv and argv[0] in _HOOK_ENTRYPOINTS:
+        from memlora.integration import hooks
+        getattr(hooks, _HOOK_ENTRYPOINTS[argv[0]])()
+        return
     parser = argparse.ArgumentParser(
         prog="memlora",
         description="MemLoRA Edge — structured session memory for AI coding assistants",
@@ -188,16 +216,18 @@ def main() -> None:
 def _cmd_init(args: argparse.Namespace) -> None:
     import shutil
 
+    from memlora.integration.session import init_project
     project_id = init_project(args.project_path)
     project_path = Path(args.project_path).resolve()
 
     # Use forward slashes — hooks run through bash on Windows; backslashes break them
     python_exe = (shutil.which("python") or "python").replace("\\", "/")
-    scripts_base = Path(__file__).resolve().parent.parent.parent.parent / "scripts"
 
-    def _hook_cmd(script: str) -> str:
-        script_path = str(scripts_base / script).replace("\\", "/")
-        return f"{python_exe} {script_path}"
+    def _hook_cmd(subcommand: str) -> str:
+        # Path-portable: invoke the installed package (`python -m memlora <sub>`)
+        # rather than an absolute script path, so moving the repo or reinstalling
+        # never breaks the registered hooks (CK-6a). Requires `memlora` importable.
+        return f"{python_exe} -m memlora {subcommand}"
 
     # ── .claude/settings.json ─────────────────────────────────────────────────
     claude_dir = project_path / ".claude"
@@ -217,14 +247,14 @@ def _cmd_init(args: argparse.Namespace) -> None:
         "SessionStart": [
             {
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_session_start_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-session-start")}
                 ]
             }
         ],
         "Stop": [
             {
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-stop")}
                 ]
             }
         ],
@@ -232,7 +262,7 @@ def _cmd_init(args: argparse.Namespace) -> None:
             {
                 "matcher": "Read",
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_pretool_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-pretool")}
                 ],
             }
         ],
@@ -240,19 +270,19 @@ def _cmd_init(args: argparse.Namespace) -> None:
             {
                 "matcher": "Write",
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_posttool_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-posttool")}
                 ],
             },
             {
                 "matcher": "Edit",
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_posttool_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-posttool")}
                 ],
             },
             {
                 "matcher": "Read",
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_posttool_read_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-posttool-read")}
                 ],
             },
         ],
@@ -365,6 +395,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     if getattr(args, "git_diff", None):
         git_diff = Path(args.git_diff).read_text(encoding="utf-8")
 
+    from memlora.integration.session import session_end
     stats = session_end(
         args.project_path,
         session_id,
@@ -378,6 +409,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
 
 
 def _cmd_show(args: argparse.Namespace) -> None:
+    from memlora.integration.session import get_projection, render_state
     if args.as_json:
         proj = get_projection(args.project_path)
         data = {
@@ -614,6 +646,7 @@ def _cmd_failures(args: argparse.Namespace) -> None:
 
 
 def _cmd_rebuild(args: argparse.Namespace) -> None:
+    from memlora.integration.session import rebuild_from_raw
     config = Config.load()
     stats = rebuild_from_raw(
         project_path=args.project_path,

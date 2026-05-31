@@ -38,10 +38,10 @@ def test_init_writes_claude_settings_with_posttool_read_hook(
     matchers = {entry["matcher"] for entry in settings["hooks"]["PostToolUse"]}
 
     assert matchers == {"Write", "Edit", "Read"}
-    # Each entry should reference a memlora_*_hook.py script.
+    # CK-6a: path-portable `python -m memlora hook-posttool[-read]` (no abs script path).
     for entry in settings["hooks"]["PostToolUse"]:
         cmd = entry["hooks"][0]["command"]
-        assert "memlora_posttool" in cmd
+        assert "-m memlora hook-posttool" in cmd
 
 
 def test_init_writes_per_project_config_with_strict_policy(

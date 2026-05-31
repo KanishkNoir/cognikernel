@@ -1,52 +1,19 @@
-"""Claude Code SessionStart hook — injects CogniKernel state at every session start.
+"""Back-compat shim for the SessionStart hook (CK-6a).
 
-Fires on: startup, resume, compact, clear.
-All sources receive the injection block via additionalContext so Claude never
-needs to call get_session_state manually. This makes injection reliable even
-when Claude reads CLAUDE.md or project files before consulting the MCP tool.
+The logic now lives in memlora.integration.hooks.session_start_main. New projects
+register `python -m memlora hook-session-start`; this shim keeps older
+settings.json entries (absolute script path) working.
 """
 from __future__ import annotations
 
-import json
 import sys
+from pathlib import Path
 
-_REINJECT_SOURCES = frozenset({"startup", "resume", "compact", "clear"})
-
-
-def main() -> None:
-    try:
-        raw = sys.stdin.read()
-        payload = json.loads(raw) if raw.strip() else {}
-    except Exception:
-        return
-
-    source = payload.get("source", "")
-    if source not in _REINJECT_SOURCES:
-        return
-
-    cwd = payload.get("cwd", "")
-    if not cwd:
-        return
-
-    try:
-        from memlora.integration.session_start import handle_session_start
-        context = handle_session_start(cwd)
-    except Exception:
-        return
-
-    if not context:
-        return
-
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": context,
-        }
-    }))
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 if __name__ == "__main__":
     try:
-        main()
+        from memlora.integration.hooks import session_start_main
+        session_start_main()
     except Exception:
         pass  # never block Claude
