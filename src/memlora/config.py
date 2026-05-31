@@ -59,19 +59,16 @@ class Config:
     hook_policy: str = "advisory"  # "advisory" (legacy) | "strict" (deny-by-default)
     read_cache_ttl_hours: int = 24
     deny_retry_window_seconds: int = 60
-    # When True, session_end stores a local embedding per event and supersession
-    # adds the semantic axis on top of the always-on gated lexical floor — catching
-    # decisions restated across sessions in different words (semantically near but
-    # lexically distinct) that token-overlap matching misses. Default ON: a memory
-    # layer that displaces the agent's own notes (init seeds "do not record
-    # decisions here") must at least match what those notes do for free, and
-    # lexical-only matching cannot catch semantic paraphrase. Safe to default ON:
-    # degrades to lexical when fastembed is unavailable, and supersession is
-    # reversible (sets superseded_by, never deletes).
-    # CAVEAT: this makes SUPERSESSION_COSINE_THRESHOLD load-bearing by default, so a
-    # false positive can hide a still-valid decision from the injection — the
-    # supersession-precision eval is release-critical rather than optional.
-    embedding_enabled: bool = True
+    # Default OFF (reverted from on). Re-validation on real same-project data
+    # (scripts/_mob_d9_revalidate.py) showed the semantic axis cannot separate a
+    # genuine correction from an unrelated decision in the same project by cosine
+    # (TP 0.658 vs FP 0.654 — see SUPERSESSION_COSINE_THRESHOLD), so an auto-
+    # supersession driven by it deletes valid decisions (a precision failure, the
+    # error we bias against). Until subject-keying provides the missing
+    # discriminator, embeddings stay opt-in and supersession degrades to gated-
+    # lexical. The recall / find_related MCP tools (rank-and-return, human judges)
+    # are unaffected and remain useful with embeddings on.
+    embedding_enabled: bool = False
     section_budgets: SectionBudgets = field(default_factory=SectionBudgets)
 
     @property
