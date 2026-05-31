@@ -24,6 +24,13 @@ def init_project(
     db_path = get_db_path(config, project_id)
     with get_connection(db_path) as conn:
         run_migrations(conn)
+        # Persist the resolved path so resource discovery can reverse-map
+        # project_id → path (cognikernel://projects MCP resource, CK-5).
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('project_path', ?)",
+            (str(Path(project_path).resolve()),),
+        )
+        conn.commit()
     _log.info("init_project.done", extra={"project_id": project_id, "db": str(db_path)})
     return project_id
 
