@@ -97,13 +97,96 @@ def descriptions_overlap(desc_a: str, desc_b: str) -> bool:
     return levenshtein_normalized(desc_a, desc_b) <= LEVENSHTEIN_THRESHOLD
 
 
+# ── subject-keyed supersession (revived from a6b5d15) ────────────────────────
+#
+# `descriptions_overlap` (Jaccard + Levenshtein) misses the canonical case where
+# a decision's *choice* changes but its *topic* stays the same — the choice verbs
+# and tool names differ enough that token overlap falls below threshold. Extracting
+# the *topic* the decision is about (independent of the specific choice) provides
+# a third discriminating axis.
+#
+# Gated by SUBJECT_MATCH_MIN_JACCARD (0.3) so a shared *generic* topic alone
+# cannot force a supersession — the two descriptions must also share enough tokens
+# to indicate genuine relatedness. Combined predicate: `supersedes` = lexical OR
+# same-subject-gated. Additive only: can add supersessions, never remove.
+
+SUBJECT_MATCH_MIN_JACCARD: float = 0.3
+
+_DECISION_VERB = (
+    r"(?:use|using|adopt\w*|choos\w*|chose|switch\w*|stick\w*\s+with|"
+    r"go\w*\s+with|prefer\w*|replac\w*|will\s+use|going\s+to\s+use|we'?ll\s+use)"
+)
+_TOPIC_RE = re.compile(
+    rf"\b{_DECISION_VERB}\b[\w './+-]*?\b(?:for|to|as|in)\s+"
+    r"(?P<topic>[a-z0-9][\w +./-]*?)\s*"
+    r"(?:\binstead\b|\brather\b|\bbecause\b|\bsince\b|[.,;:]|$)",
+    re.IGNORECASE,
+)
+_PROHIBIT_RE = re.compile(
+    r"\b(?:never\s+use|do\s+not\s+use|don'?t\s+use|avoid|abandon\w*|drop|reject\w*)\s+"
+    r"(?P<thing>[a-z0-9][\w./+-]*)",
+    re.IGNORECASE,
+)
+_LEADING_ARTICLE = re.compile(
+    r"^(?:the|a|an|our|this|that|these|those)\s+", re.IGNORECASE
+)
+
+
+def _normalize_subject_str(text: str) -> str:
+    s = re.sub(r"[^\w\s]", " ", text.lower())
+    s = re.sub(r"\s+", " ", s).strip()
+    s = _LEADING_ARTICLE.sub("", s)
+    toks = [t for t in s.split() if t not in STOPWORDS and len(t) > 2]
+    return " ".join(toks)
+
+
+def derive_subject(description: str) -> str:
+    """Best-effort topic of a decision/constraint, normalized; '' if none found.
+
+    Extracts what the decision is *about* (the noun phrase following a choice verb
+    + for/to/as/in), independent of which specific choice was made. Prohibition
+    patterns extract the thing being rejected.
+    """
+    if not description:
+        return ""
+    m = _TOPIC_RE.search(description)
+    if m:
+        topic = _normalize_subject_str(m.group("topic"))
+        if topic:
+            return topic
+    m = _PROHIBIT_RE.search(description)
+    if m:
+        thing = _normalize_subject_str(m.group("thing"))
+        if thing:
+            return thing
+    return ""
+
+
+def subject_supersedes(desc_a: str, desc_b: str) -> bool:
+    """True when two descriptions share a derived subject and are related enough.
+
+    Requires both descriptions to derive the same non-empty topic AND share at
+    least SUBJECT_MATCH_MIN_JACCARD token overlap — so a shared *generic* topic
+    alone (e.g. 'the API') cannot force an unrelated pair to supersede.
+    """
+    sa = derive_subject(desc_a)
+    if not sa or sa != derive_subject(desc_b):
+        return False
+    return jaccard_similarity(desc_a, desc_b) >= SUBJECT_MATCH_MIN_JACCARD
+
+
+def supersedes(desc_a: str, desc_b: str) -> bool:
+    """Combined supersession predicate: textual overlap OR same-subject (gated)."""
+    return descriptions_overlap(desc_a, desc_b) or subject_supersedes(desc_a, desc_b)
+
+
 def events_overlap(event_a: Event, event_b: Event) -> bool:
     """Return True if two events express the same concept in different words."""
     if event_a.event_type != event_b.event_type:
         return False
     desc_a = event_a.payload.get("description", "")
     desc_b = event_b.payload.get("description", "")
-    return descriptions_overlap(desc_a, desc_b)
+    return supersedes(desc_a, desc_b)
 
 
 def detect_supersession(
@@ -134,7 +217,7 @@ def detect_supersession(
     superseded_ids: list[int] = []
     for row in rows:
         cand_desc = json.loads(row["payload"]).get("description", "")
-        if descriptions_overlap(new_desc, cand_desc):
+        if supersedes(new_desc, cand_desc):
             superseded_ids.append(row["id"])
 
     return superseded_ids
@@ -285,7 +368,7 @@ def find_superseded(
         if new_auth < cand_auth:
             continue
 
-        if row["id"] in sem_matches or descriptions_overlap(new_desc, cand_desc):
+        if row["id"] in sem_matches or supersedes(new_desc, cand_desc):
             superseded.append(row["id"])
 
     return superseded

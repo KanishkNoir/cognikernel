@@ -21,12 +21,16 @@ from memlora.delta.merge import execute_merge, merge_event
 from memlora.delta.supersede import (
     JACCARD_THRESHOLD,
     LEVENSHTEIN_THRESHOLD,
+    SUBJECT_MATCH_MIN_JACCARD,
     apply_supersession,
+    derive_subject,
     detect_supersession,
     events_overlap,
     find_superseded,
     jaccard_similarity,
     levenshtein_normalized,
+    subject_supersedes,
+    supersedes,
 )
 
 __all__ = [
@@ -34,9 +38,11 @@ __all__ = [
     "DECAY_FACTOR",
     "JACCARD_THRESHOLD",
     "LEVENSHTEIN_THRESHOLD",
+    "SUBJECT_MATCH_MIN_JACCARD",
     "apply_decay_pass",
     "apply_supersession",
     "cascade_component_status",
+    "derive_subject",
     "detect_supersession",
     "events_overlap",
     "execute_merge",
@@ -44,4 +50,6 @@ __all__ = [
     "jaccard_similarity",
     "levenshtein_normalized",
     "merge_event",
+    "subject_supersedes",
+    "supersedes",
 ]

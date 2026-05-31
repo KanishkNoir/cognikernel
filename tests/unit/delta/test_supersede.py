@@ -12,6 +12,7 @@ from memlora.delta.supersede import (
     JACCARD_THRESHOLD,
     LEVENSHTEIN_THRESHOLD,
     apply_supersession,
+    derive_subject,
     descriptions_overlap,
     detect_supersession,
     events_overlap,
@@ -19,6 +20,8 @@ from memlora.delta.supersede import (
     jaccard_similarity,
     levenshtein_normalized,
     normalize_for_overlap,
+    subject_supersedes,
+    supersedes,
 )
 from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text, is_available
 from memlora.embedding.store import upsert_embedding
@@ -170,6 +173,61 @@ class TestFindSuperseded:
             payload={"description": argon_desc, "authority": "assistant_decided"},
         )
         assert old_id in find_superseded(conn, new)
+
+
+class TestDeriveSubject:
+    """derive_subject extracts the *topic* a decision is about (not the choice)."""
+
+    def test_choice_for_topic(self) -> None:
+        assert derive_subject("We will use bcrypt for password hashing.") == "password hashing"
+
+    def test_switch_keeps_topic_not_choice(self) -> None:
+        assert derive_subject(
+            "we will use argon2id for password hashing instead of bcrypt."
+        ) == "password hashing"
+
+    def test_prohibition_subject_is_the_rejected_thing(self) -> None:
+        assert derive_subject("Do not use Celery, we will never revisit it.") == "celery"
+
+    def test_no_subject_returns_empty(self) -> None:
+        assert derive_subject("This sentence has no decision verb pattern.") == ""
+
+    def test_unrelated_decisions_no_subject(self) -> None:
+        assert derive_subject("Composite PK on (project_id, user_id) instead of a surrogate UUID.") == ""
+        assert derive_subject("Use UUID primary keys.") == ""
+        assert derive_subject("Scrypt / PBKDF2 fine, but bcrypt is what FastAPI docs default to.") == ""
+
+
+class TestSubjectSupersedes:
+    def test_same_topic_different_choice_supersedes(self) -> None:
+        # "Redis for caching" → "Memcached for caching": same topic, different tool,
+        # Jaccard = 1/3 = 0.33 — below the 0.6 descriptions_overlap threshold but
+        # above the 0.3 subject_supersedes Jaccard floor. Subject-keying catches it.
+        a = "We will use Redis for caching."
+        b = "We will use Memcached for caching."
+        assert not descriptions_overlap(a, b)
+        assert subject_supersedes(a, b)
+        assert supersedes(a, b)
+
+    def test_no_subject_on_either_does_not_supersede(self) -> None:
+        a = "Composite PK on (project_id, user_id) instead of a surrogate UUID."
+        b = "we will use argon2id for password hashing instead of bcrypt."
+        assert not subject_supersedes(a, b)
+
+    def test_same_subject_but_jaccard_too_low_does_not_supersede(self) -> None:
+        # Both about "password hashing" but genuinely different decisions —
+        # the Jaccard floor keeps them distinct.
+        a = "We will use argon2id for password hashing."
+        b = "Set the memory cost to 64 megabytes for password hashing."
+        assert not supersedes(a, b)
+
+    def test_mobc_false_positive_protection(self) -> None:
+        """None of the MOBC false-positive candidates (Composite PK, UUID PK,
+        the Scrypt ecosystem note) should be superseded by a hashing correction."""
+        correction = "we will use argon2id for password hashing instead of bcrypt."
+        assert not supersedes(correction, "Composite PK on (project_id, user_id) instead of a surrogate UUID.")
+        assert not supersedes(correction, "Use UUID primary keys.")
+        assert not supersedes(correction, "Scrypt / PBKDF2 fine but bcrypt is FastAPI default.")
 
 
 def _naive_overlap(a: str, b: str) -> bool:
