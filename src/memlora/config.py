@@ -59,6 +59,23 @@ class Config:
     hook_policy: str = "advisory"  # "advisory" (legacy) | "strict" (deny-by-default)
     read_cache_ttl_hours: int = 24
     deny_retry_window_seconds: int = 60
+    # When True, a UserPromptSubmit hook injects a short memory snippet alongside
+    # each user prompt — only when a high-confidence, non-redundant hit exists.
+    # Default OFF (sprint-plan flag). Register `memlora hook-user-prompt` in
+    # settings.json to enable. Ships behind the kill-criterion (inject on <~30% of
+    # prompts, per-turn tokens under budget, quality not reduced — else stays as a
+    # pull-only recall MCP tool). See integration/hooks.py:user_prompt_submit_main.
+    query_time_injection: bool = False
+    # Cosine relevance bar for per-prompt injection. Higher = more selective (fewer
+    # injections). Start conservative; tune based on measured injection rate.
+    query_injection_threshold: float = 0.75
+    # Hard token ceiling for the per-turn snippet (excluding overhead).
+    query_injection_max_tokens: int = 200
+    # When True, SubagentStop fires the extraction pipeline on the subagent's
+    # transcript and merges decisions into the parent project DB. Default ON once
+    # SubagentStop is wired in settings.json (register hook-subagent-stop).
+    capture_subagents: bool = True
+
     # Default OFF (reverted from on). Re-validation on real same-project data
     # (scripts/_mob_d9_revalidate.py) showed the semantic axis cannot separate a
     # genuine correction from an unrelated decision in the same project by cosine
@@ -165,6 +182,14 @@ class Config:
             kwargs["deny_retry_window_seconds"] = int(data["deny_retry_window_seconds"])
         if "embedding_enabled" in data:
             kwargs["embedding_enabled"] = bool(data["embedding_enabled"])
+        if "query_time_injection" in data:
+            kwargs["query_time_injection"] = bool(data["query_time_injection"])
+        if "query_injection_threshold" in data:
+            kwargs["query_injection_threshold"] = float(data["query_injection_threshold"])
+        if "query_injection_max_tokens" in data:
+            kwargs["query_injection_max_tokens"] = int(data["query_injection_max_tokens"])
+        if "capture_subagents" in data:
+            kwargs["capture_subagents"] = bool(data["capture_subagents"])
         if "section_budgets" in data and isinstance(data["section_budgets"], dict):
             sb = data["section_budgets"]
             kwargs["section_budgets"] = SectionBudgets(
