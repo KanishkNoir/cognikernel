@@ -12,6 +12,16 @@ supersession silently hides a still-valid decision, so we bias to **precision**.
 Cases are generic/domain-neutral on purpose (no benchmark-specific decisions), and
 descriptions are deliberately bare (no `subject`) to measure the realistic case
 where trie-extracted events lack structured subjects.
+
+LIMITATION (found post-hoc, do not trust the band without fixing this): the
+negatives below are cross-DOMAIN (caching vs input validation, etc.) and are easy
+to separate. Re-validation on real same-PROJECT data
+(scripts/_mob_d9_revalidate.py) showed unrelated decisions within one project share
+domain vocabulary and cluster with genuine corrections at ~0.63-0.66 — NON-separable
+by cosine. So a clean precision/recall band HERE does not imply real-world
+precision. This eval must be hardened with same-domain, distinct-decision negatives
+before any threshold recommendation from it is trusted. See the
+SUPERSESSION_COSINE_THRESHOLD comment in delta/supersede.py.
 """
 from __future__ import annotations
 
