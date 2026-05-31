@@ -173,13 +173,16 @@ def apply_supersession(
 # axis is purely additive: with embeddings off (or the model absent) matching
 # degrades to gated-lexical, never to ungated.
 
-# Empirically set for bge-small-en-v1.5: unrelated same-type decisions cluster
-# <= ~0.66, genuine paraphrases of one decision (lexically distinct, same meaning)
-# land ~0.75-0.89. 0.75 sits in that gap and biases toward
-# precision — a false supersession deletes a still-valid decision (worse than
-# keeping a stale one alongside). Should be validated/swept per-model on real
-# project data (the A/B benchmark is the intended tuning instrument).
-SUPERSESSION_COSINE_THRESHOLD: float = 0.75
+# Calibrated by the CK-E6 sweep (tests/eval/test_supersession_precision.py) on
+# bge-small-en-v1.5: on a generic labeled set, unrelated same-type decisions only
+# begin false-matching below ~0.60, while genuine lexically-distinct paraphrases
+# land from ~0.60 up. 0.60-0.65 is a precision=1.0 / recall=1.0 band; 0.65 is
+# chosen for the most precision margin above the false-positive onset — a false
+# supersession deletes a still-valid decision, worse than keeping a stale one —
+# while retaining full recall on the eval set. (The prior 0.75 was over-
+# conservative: precision 1.0 but recall 0.67, missing real corrections.)
+# Re-sweep per model; the eval is the tuning instrument.
+SUPERSESSION_COSINE_THRESHOLD: float = 0.65
 
 # Higher = more authoritative. A new event must be >= a candidate's precedence
 # to supersede it. Mirrors extraction.authority string constants.
