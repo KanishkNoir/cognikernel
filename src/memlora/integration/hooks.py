@@ -222,12 +222,28 @@ def session_start_main() -> None:
             }
         }))
 
-        # Warm the embedding model while the session is starting — this amortises
-        # the fastembed cold-load cost so the UserPromptSubmit hook (CK-1) never
-        # pays it on the first prompt. Best-effort: failure is silent.
+        # Warm the model AND backfill any events that lack a vector at the
+        # current model_version. This runs once at session start (fast after the
+        # first pass — only new/unembedded events are processed). By the time
+        # the first UserPromptSubmit fires, recall is semantic-ready.
         try:
-            from memlora.embedding.model import is_available
-            is_available()  # triggers lru_cache load if model is installed
+            from memlora.embedding.model import is_available, EMBEDDING_MODEL_VERSION
+            if cwd and is_available():
+                from memlora.config import Config as _Cfg
+                from memlora.embedding.backfill import backfill_embeddings
+                from memlora.storage.connection import (
+                    get_connection as _gc,
+                    get_db_path as _gd,
+                    hash_project_path as _hp,
+                )
+                from memlora.storage.migrations import run_migrations as _rm
+                _cfg = _Cfg.load(project_path=cwd)
+                _pid = _hp(cwd)
+                _db = _gd(_cfg, _pid)
+                if _db.exists():
+                    with _gc(_db) as _conn:
+                        _rm(_conn)
+                        backfill_embeddings(_conn, _pid)
         except Exception:
             pass
     except Exception:

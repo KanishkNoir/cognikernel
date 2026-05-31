@@ -105,10 +105,15 @@ def execute_merge(
                 stats[outcome] += 1
                 event.id = row_id  # needed by cascade_component_status
 
-                if embed_events:
-                    _store_event_embedding(conn, row_id, event)
+                # Always store embeddings when the model is available — recall
+                # (rank-and-return, agent judges) benefits from semantic retrieval
+                # regardless of whether semantic *supersession* is enabled.
+                # The precision failure was about auto-supersession, not retrieval.
+                # _store_event_embedding is best-effort and never breaks the merge.
+                _store_event_embedding(conn, row_id, event)
                 # Gated supersession is the baseline (temporal + authority +
-                # provenance). `embed_events` only adds the semantic axis.
+                # provenance). `embed_events` (config.embedding_enabled) still
+                # controls whether the semantic axis fires for auto-supersession.
                 sup_ids = find_superseded(conn, event, use_embeddings=embed_events)
                 stats["superseded"] += apply_supersession(conn, row_id, sup_ids)
                 stats["superseded"] += _cross_type_dedup(conn, row_id, event)

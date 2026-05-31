@@ -76,15 +76,18 @@ class Config:
     # SubagentStop is wired in settings.json (register hook-subagent-stop).
     capture_subagents: bool = True
 
-    # Default OFF (reverted from on). Re-validation on real same-project data
-    # (scripts/_mob_d9_revalidate.py) showed the semantic axis cannot separate a
-    # genuine correction from an unrelated decision in the same project by cosine
-    # (TP 0.658 vs FP 0.654 — see SUPERSESSION_COSINE_THRESHOLD), so an auto-
-    # supersession driven by it deletes valid decisions (a precision failure, the
-    # error we bias against). Until subject-keying provides the missing
-    # discriminator, embeddings stay opt-in and supersession degrades to gated-
-    # lexical. The recall / find_related MCP tools (rank-and-return, human judges)
-    # are unaffected and remain useful with embeddings on.
+    # Controls whether the *semantic axis fires for auto-supersession* (the
+    # precision-risky path). Default OFF: real-data validation showed cosine alone
+    # cannot separate a genuine correction from an unrelated same-project decision
+    # (TP/FP cosine gap 0.004). Subject-keying (supersede.py) now provides the
+    # structural discriminator, but the threshold is still unvalidated on a full
+    # representative set, so the auto-supersession semantic axis stays opt-in.
+    #
+    # NOTE: embedding *storage* is now DECOUPLED from this flag — vectors are
+    # always written when fastembed is installed (merge._store_event_embedding is
+    # always called), so recall / find_related are semantic regardless of this
+    # flag. This flag is now specifically about "use embeddings to find supersession
+    # candidates" — not about whether to store them or use them for recall.
     embedding_enabled: bool = False
     section_budgets: SectionBudgets = field(default_factory=SectionBudgets)
 

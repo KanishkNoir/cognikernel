@@ -67,12 +67,24 @@ def _lexical_recall(
 
 
 def _recall_hits(conn: sqlite3.Connection, project_id: str, query: str, k: int) -> list[dict]:
-    """Semantic recall when the model is available; deterministic lexical otherwise."""
+    """Semantic recall when vectors are stored; deterministic lexical otherwise.
+
+    Tries semantic first (embedding model + stored vectors). Falls back to the
+    deterministic lexical path when:
+      - the model is not installed, OR
+      - no events have stored vectors yet (e.g. before the first session_end with
+        the model available, or before a backfill has run at SessionStart).
+    This makes the hook correct even on a fresh install and progressively stronger
+    as the vector store fills in.
+    """
     from memlora.embedding.model import is_available
 
     if is_available():
         from memlora.embedding.retrieval import recall
-        return recall(conn, project_id, query, k=k)
+        hits = recall(conn, project_id, query, k=k)
+        if hits:
+            return hits
+        # No stored vectors yet — fall through to lexical so the hook isn't silent.
     return _lexical_recall(conn, project_id, query, k)
 
 
