@@ -35,6 +35,12 @@ _HOOK_ENTRYPOINTS = {
     "hook-pretool": "pretool_main",
     "hook-posttool": "posttool_main",
     "hook-posttool-read": "posttool_read_main",
+    # CK-1: UserPromptSubmit query-time injection (flag: query_time_injection)
+    "hook-user-prompt": "user_prompt_submit_main",
+    # CK-4: SubagentStop transcript extraction (flag: capture_subagents)
+    "hook-subagent-stop": "subagent_stop_main",
+    # CK-3a: PostToolUse:Grep cache storage (gate: grep_cache_enabled)
+    "hook-posttool-grep": "posttool_grep_main",
 }
 
 
@@ -285,7 +291,26 @@ def _cmd_init(args: argparse.Namespace) -> None:
                     {"type": "command", "command": _hook_cmd("hook-posttool-read")}
                 ],
             },
+            {
+                # CK-3a: cache grep results; gated by grep_cache_enabled in config.
+                "matcher": "Grep",
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-posttool-grep")}
+                ],
+            },
         ],
+        "SubagentStop": [
+            {
+                # CK-4: extract decisions from subagent transcripts; gated by
+                # capture_subagents in config (default True).
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-subagent-stop")}
+                ]
+            }
+        ],
+        # UserPromptSubmit (CK-1) is intentionally NOT registered by default —
+        # it fires on every prompt and ships behind the query_time_injection flag.
+        # Users opt in by adding it to settings.json after measuring injection rate.
     }
     settings_path.write_text(
         json.dumps(settings, indent=2), encoding="utf-8"

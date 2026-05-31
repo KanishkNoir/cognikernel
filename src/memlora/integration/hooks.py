@@ -58,6 +58,148 @@ def _pretool(decision: str, *, reason: str | None = None, context: str | None = 
     print(json.dumps({"hookSpecificOutput": out}))
 
 
+_HOOK_TIMEOUT_S = 3.0  # per-prompt budget; fail-open on breach
+
+
+# ── UserPromptSubmit — query-time injection (CK-1) ────────────────────────────
+
+
+def user_prompt_submit_main() -> None:
+    """Inject a short memory snippet alongside the user's prompt (CK-1).
+
+    Silence is the default: if nothing clears the relevance gate, print nothing
+    and exit 0 (Claude Code treats no-stdout-on-exit-0 as a pass-through). This
+    runs on every prompt; it must be fast — the embedding model is warmed at
+    SessionStart to amortise cold-load. Flag-gated: exits immediately when
+    query_time_injection is disabled.
+    """
+    import concurrent.futures
+
+    try:
+        payload = _read_payload()
+        cwd = payload.get("cwd", "")
+        prompt = payload.get("prompt", "")
+        if not cwd or not prompt:
+            return
+
+        from memlora.config import Config
+        config = Config.load(project_path=cwd)
+        if not config.query_time_injection:
+            return
+
+        from memlora.integration.query import recall_for_prompt
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(recall_for_prompt, cwd, prompt, config=config)
+            try:
+                snippet = fut.result(timeout=_HOOK_TIMEOUT_S)
+            except (concurrent.futures.TimeoutError, Exception):
+                snippet = ""
+
+        if not snippet:
+            return  # silence — print nothing, exit 0
+
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": snippet,
+            }
+        }))
+    except Exception:
+        pass  # never block the user
+
+
+# ── SubagentStop — subagent memory capture (CK-4) ─────────────────────────────
+
+
+def subagent_stop_main() -> None:
+    """Extract decisions from a subagent transcript into the parent project DB (CK-4).
+
+    SubagentStop stdin provides transcript_path (direct JSONL path) and cwd
+    (parent project dir) — no search required. Subagent events land with a
+    capped authority so they cannot override the main agent or the user.
+    """
+    try:
+        payload = _read_payload()
+        transcript_path = payload.get("transcript_path", "")
+        cwd = payload.get("cwd", "")
+        session_id = payload.get("session_id", "")
+        agent_id = payload.get("agent_id", "")
+
+        if not transcript_path or not cwd:
+            return
+
+        from memlora.config import Config
+        config = Config.load(project_path=cwd)
+        if not config.capture_subagents:
+            return
+
+        from pathlib import Path
+        jsonl = Path(transcript_path)
+        if not jsonl.exists():
+            return
+
+        raw_jsonl = jsonl.read_text(encoding="utf-8", errors="replace")
+        from memlora.extraction.jsonl_converter import jsonl_to_transcript
+        transcript = jsonl_to_transcript(raw_jsonl)
+
+        sub_session_id = agent_id or f"subagent_{session_id}"
+        from memlora.integration.session import session_end
+        session_end(
+            cwd,
+            sub_session_id,
+            transcript,
+            config=config,
+            evidence_source_type="subagent_transcript",
+            evidence_content=raw_jsonl,
+            evidence_source_path=transcript_path,
+        )
+    except Exception:
+        pass  # never block subagent teardown
+
+
+# ── PostToolUse:Grep — cache grep results (CK-3a) ─────────────────────────────
+
+
+def posttool_grep_main() -> None:
+    """Store Grep results in grep_cache (CK-3a).
+
+    PostToolUse:Grep fires after the tool completes; we cache the result so the
+    PreToolUse:Grep path can serve repeat identical searches from the DB. Enabled
+    only when grep_cache_enabled = True. Never raises — fail-open.
+    """
+    payload = _read_payload(strip_bom=True)
+    if payload.get("tool_name") != "Grep":
+        return
+    tool_input = payload.get("tool_input", {})
+    pattern = tool_input.get("pattern", "")
+    cwd = payload.get("cwd", "")
+    if not pattern or not cwd:
+        return
+    path_filter = tool_input.get("path", "") or ""
+    glob_filter = tool_input.get("glob", "") or ""
+    result_text = payload.get("tool_response", "") or payload.get("tool_result", "") or ""
+    if not isinstance(result_text, str):
+        result_text = json.dumps(result_text)
+    try:
+        from memlora.config import Config
+        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+        from memlora.storage.grep_cache import store_grep_result
+        from memlora.storage.migrations import run_migrations
+
+        cfg = Config.load()
+        if not cfg.grep_cache_enabled:
+            return
+        project_id = hash_project_path(cwd)
+        db_path = get_db_path(cfg, project_id)
+        if not db_path.exists():
+            return
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            store_grep_result(conn, project_id, pattern, path_filter, glob_filter, result_text)
+    except Exception:
+        pass
+
+
 # ── SessionStart ──────────────────────────────────────────────────────────────
 
 
@@ -79,6 +221,15 @@ def session_start_main() -> None:
                 "additionalContext": context,
             }
         }))
+
+        # Warm the embedding model while the session is starting — this amortises
+        # the fastembed cold-load cost so the UserPromptSubmit hook (CK-1) never
+        # pays it on the first prompt. Best-effort: failure is silent.
+        try:
+            from memlora.embedding.model import is_available
+            is_available()  # triggers lru_cache load if model is installed
+        except Exception:
+            pass
     except Exception:
         pass  # never block Claude
 

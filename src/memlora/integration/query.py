@@ -19,6 +19,11 @@ from memlora.storage.connection import get_connection, get_db_path, hash_project
 from memlora.storage.migrations import run_migrations
 
 _MAX_DESC = 140
+# Event types always in the static session-start block — skip them in per-prompt
+# injection to avoid re-injecting what the agent already has in context.
+_ALWAYS_INJECTED: frozenset[str] = frozenset({
+    "CONSTRAINT_HARD", "APPROACH_ABANDONED_DO_NOT_RETRY",
+})
 
 
 def _resolve(project_path: str, config: Config | None) -> tuple[str, Path]:
@@ -75,6 +80,48 @@ def _fmt_hit(h: dict, extra: str = "") -> str:
     subj = f"[{h['subject']}] " if h.get("subject") else ""
     desc = (h.get("description") or "")[:_MAX_DESC]
     return f"- ({h['event_type']} · {h['score']:.2f}{extra}) {subj}{desc}"
+
+
+def recall_for_prompt(
+    project_path: str,
+    prompt_text: str,
+    *,
+    config: Config | None = None,
+) -> str:
+    """Per-prompt injection candidate for the UserPromptSubmit hook (CK-1).
+
+    Returns a compact snippet (≤ config.query_injection_max_tokens chars) when a
+    high-confidence, non-redundant prior decision is relevant to `prompt_text`.
+    Returns '' (silence) when nothing clears the threshold — silence is the
+    default, not the fallback. The caller must check the flag and handle timeouts.
+    """
+    try:
+        config = config or Config.load(project_path=project_path)
+        project_id, db_path = _resolve(project_path, config)
+        if not db_path.exists():
+            return ""
+        threshold = config.query_injection_threshold
+        max_chars = config.query_injection_max_tokens * 4  # tok → approx chars
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            hits = _recall_hits(conn, project_id, prompt_text, 5)
+        # Filter: skip event types that are always in the static block.
+        hits = [h for h in hits if h.get("event_type") not in _ALWAYS_INJECTED]
+        # Apply relevance gate — inject nothing below threshold.
+        hits = [h for h in hits if h.get("score", 0) >= threshold]
+        if not hits:
+            return ""
+        lines = ["[CogniKernel — relevant prior context]"]
+        used = len(lines[0])
+        for h in hits:
+            line = _fmt_hit(h)
+            if used + len(line) + 1 > max_chars:
+                break
+            lines.append(line)
+            used += len(line) + 1
+        return "\n".join(lines) if len(lines) > 1 else ""
+    except Exception:  # never raise; silence on any error
+        return ""
 
 
 def recall_memory(project_path: str, query: str, limit: int = 8, config: Config | None = None) -> str:
