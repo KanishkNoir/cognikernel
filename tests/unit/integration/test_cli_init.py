@@ -112,6 +112,52 @@ def test_init_idempotent_does_not_overwrite_existing_project_config(
     assert 'hook_policy = "advisory"' in content
 
 
+def test_init_writes_claude_slash_commands(
+    init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
+) -> None:
+    """Every project gets in-session `.claude/commands/ck-*.md` slash commands."""
+    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "memlora_data"))
+
+    _cmd_init(init_args)
+
+    commands_dir = Path(init_args.project_path) / ".claude" / "commands"
+    expected = {"ck-doctor", "ck-show", "ck-failures", "ck-lookup", "ck-recall", "ck-related"}
+    written = {p.stem for p in commands_dir.glob("ck-*.md")}
+    assert expected <= written
+
+    # CLI-backed command: frontmatter scopes the Bash permission and the body
+    # `!`-executes the path-portable CLI against $CLAUDE_PROJECT_DIR.
+    doctor = (commands_dir / "ck-doctor.md").read_text(encoding="utf-8")
+    assert "allowed-tools: Bash(python -m memlora doctor:*)" in doctor
+    assert '!`python -m memlora doctor "$CLAUDE_PROJECT_DIR"`' in doctor
+
+    # MCP-backed command: steers to the tool, no Bash execution.
+    recall = (commands_dir / "ck-recall.md").read_text(encoding="utf-8")
+    assert "cognikernel `recall` MCP tool" in recall
+    assert "allowed-tools" not in recall
+    assert "argument-hint: <query>" in recall
+
+
+def test_init_writes_codex_skills(
+    init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
+) -> None:
+    """Codex picks up repo-level skills from `.agents/skills/<name>/SKILL.md`."""
+    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "memlora_data"))
+
+    _cmd_init(init_args)
+
+    skills_dir = Path(init_args.project_path) / ".agents" / "skills"
+    doctor = skills_dir / "ck-doctor" / "SKILL.md"
+    assert doctor.exists()
+    text = doctor.read_text(encoding="utf-8")
+    assert "name: ck-doctor" in text
+    assert "python -m memlora doctor ." in text
+
+    # MCP-backed skill points at the registered cognikernel MCP tool.
+    recall = (skills_dir / "ck-recall" / "SKILL.md").read_text(encoding="utf-8")
+    assert "cognikernel `recall` MCP tool" in recall
+
+
 def test_init_claude_md_mentions_strict_mode_and_skeleton(
     init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
 ) -> None:

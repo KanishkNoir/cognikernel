@@ -219,6 +219,109 @@ def main() -> None:
 
 # ── subcommand handlers ───────────────────────────────────────────────────────
 
+# ── In-session slash commands / skills (so operators never drop out of the
+# assistant to run the `memlora` CLI) ─────────────────────────────────────────
+# Two client surfaces, written by `memlora init` into every project:
+#   - Claude Code: `.claude/commands/<name>.md` — a slash command whose body
+#     `!`-executes the CLI and asks the model to summarise the output.
+#   - Codex:       `.agents/skills/<name>/SKILL.md` — a repo-level skill that
+#     instructs Codex to run the CLI itself. (Codex only discovers project skills
+#     from `.agents/skills`; `.codex/prompts` is user-home-only and deprecated.)
+# These files are CK-managed and rewritten on every init so template fixes
+# propagate. `recall` / `find_related` are MCP tools, so those wrappers steer the
+# model to the tool rather than shelling out (there is no `memlora recall` CLI).
+#
+# Spec tuple: (name, kind, target, takes_arg, blurb)
+#   kind="cli" → runs `memlora <target>`; kind="mcp" → steers to the <target> MCP tool.
+_AGENT_COMMANDS: list[tuple[str, str, str, bool, str]] = [
+    ("ck-doctor", "cli", "doctor", False,
+     "CogniKernel DB health: schema/projection version, job counts, telemetry, dead-letters."),
+    ("ck-show", "cli", "show", False,
+     "Render the current CogniKernel session-context block on demand."),
+    ("ck-failures", "cli", "failures", False,
+     "List CogniKernel dead-lettered extraction jobs for triage."),
+    ("ck-lookup", "cli", "lookup", True,
+     "Debug CogniKernel's strict Read-gate decision for a file path."),
+    ("ck-recall", "mcp", "recall", True,
+     "Recall prior CogniKernel decisions/constraints relevant to a query."),
+    ("ck-related", "mcp", "find_related", True,
+     "Find decisions and code areas related to a query via semantics and the import graph."),
+]
+
+
+def _write_claude_command(
+    commands_dir: Path, name: str, kind: str, target: str, takes_arg: bool, blurb: str
+) -> None:
+    """Write one `.claude/commands/<name>.md` slash command."""
+    front = ["---", f"description: {blurb}"]
+    if takes_arg:
+        front.append(f"argument-hint: {'<file-path>' if target == 'lookup' else '<query>'}")
+    if kind == "cli":
+        # Prefix-scoped permission so the `!` execution doesn't prompt every time.
+        front.append(f"allowed-tools: Bash(python -m memlora {target}:*)")
+    front.append("---")
+
+    if kind == "mcp":
+        body = (
+            f'Use the cognikernel `{target}` MCP tool with query "$ARGUMENTS" and '
+            f'project_path "$CLAUDE_PROJECT_DIR". Summarise the returned items; do '
+            "not re-read files for facts already covered.\n"
+        )
+    elif takes_arg:
+        body = (
+            f"Explain CogniKernel's `{target}` result for `$ARGUMENTS`, based on the "
+            "output below. Do not modify any files.\n\n"
+            f'!`python -m memlora {target} "$CLAUDE_PROJECT_DIR" "$ARGUMENTS"`\n'
+        )
+    else:
+        body = (
+            f"Run CogniKernel's `{target}` for this project and give a short, "
+            "actionable summary of the output below. Do not modify any files.\n\n"
+            f'!`python -m memlora {target} "$CLAUDE_PROJECT_DIR"`\n'
+        )
+    (commands_dir / f"{name}.md").write_text("\n".join(front) + "\n\n" + body, encoding="utf-8")
+
+
+def _write_codex_skill(
+    skills_dir: Path, name: str, kind: str, target: str, takes_arg: bool, blurb: str
+) -> None:
+    """Write one `.agents/skills/<name>/SKILL.md` repo-level Codex skill."""
+    skill_dir = skills_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    desc = f"{blurb} Use when the user asks for this CogniKernel/memlora operation."
+    front = f"---\nname: {name}\ndescription: {desc}\n---\n\n"
+
+    if kind == "mcp":
+        body = (
+            f"Use the cognikernel `{target}` MCP tool with the user's query and "
+            "project_path set to the repository root, then summarise the returned "
+            "decisions/constraints concisely.\n"
+        )
+    elif takes_arg:
+        body = (
+            f'From the repository root, run `python -m memlora {target} . "<PATH>"`, '
+            "substituting the path the user supplied, then explain the result. Do not "
+            "modify any files.\n"
+        )
+    else:
+        body = (
+            f"From the repository root, run `python -m memlora {target} .` and give a "
+            "short, actionable summary of the output. Do not modify any files.\n"
+        )
+    (skill_dir / "SKILL.md").write_text(front + body, encoding="utf-8")
+
+
+def _write_agent_commands(project_path: Path) -> None:
+    """Scaffold the Claude Code slash commands and Codex skills for a project."""
+    commands_dir = project_path / ".claude" / "commands"
+    commands_dir.mkdir(parents=True, exist_ok=True)
+    skills_dir = project_path / ".agents" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    for spec in _AGENT_COMMANDS:
+        _write_claude_command(commands_dir, *spec)
+        _write_codex_skill(skills_dir, *spec)
+
+
 def _cmd_init(args: argparse.Namespace) -> None:
     import shutil
 
@@ -375,17 +478,23 @@ documentation that the injection cannot replace.
     else:
         claude_md.write_text(ck_section, encoding="utf-8")
 
+    # ── In-session slash commands (Claude Code) + skills (Codex) ──────────────
+    _write_agent_commands(project_path)
+
     # ── Clean up any stale /memlora-extract slash command (enrichment removed) ──
     stale_slash = Path(project_path) / ".claude" / "commands" / "memlora-extract.md"
     if stale_slash.exists():
         stale_slash.unlink()
 
+    n_cmds = len(_AGENT_COMMANDS)
     print(f"Initialised project {project_id}")
     print(f"  path: {project_path}")
     print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/PreTool/PostTool [Write/Edit/Read])")
     print(f"  wrote: .mcp.json              (cognikernel MCP server)")
     print(f"  wrote: CLAUDE.md              (CogniKernel trust section)")
     print(f"  wrote: .memlora/config.toml   (hook_policy=strict)")
+    print(f"  wrote: .claude/commands/ck-*.md       ({n_cmds} Claude Code slash commands)")
+    print(f"  wrote: .agents/skills/ck-*/SKILL.md   ({n_cmds} Codex skills)")
 
 
 def _cmd_extract(args: argparse.Namespace) -> None:
