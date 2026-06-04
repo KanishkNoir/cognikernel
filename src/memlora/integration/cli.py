@@ -261,23 +261,30 @@ def _write_claude_command(
         front.append(f"allowed-tools: Bash(python -m memlora {target}:*)")
     front.append("---")
 
+    # The `!`-executed command MUST NOT contain a shell expansion: Claude Code
+    # static-checks it against `allowed-tools` before running and rejects any
+    # `$VAR` / `$(...)` ("Contains simple_expansion") because the expansion can't
+    # be verified — so the command silently fails to run. We therefore pass the
+    # project root as a literal `.` (slash-command `!`-bash runs from the project
+    # root), NOT `$CLAUDE_PROJECT_DIR`. `$ARGUMENTS` is safe — Claude Code
+    # substitutes it into the command string *before* the permission check.
     if kind == "mcp":
         body = (
-            f'Use the cognikernel `{target}` MCP tool with query "$ARGUMENTS" and '
-            f'project_path "$CLAUDE_PROJECT_DIR". Summarise the returned items; do '
-            "not re-read files for facts already covered.\n"
+            f'Use the cognikernel `{target}` MCP tool to answer: "$ARGUMENTS". Pass '
+            "project_path as the absolute path of this project's root directory. "
+            "Summarise the returned items; do not re-read files for facts already covered.\n"
         )
     elif takes_arg:
         body = (
             f"Explain CogniKernel's `{target}` result for `$ARGUMENTS`, based on the "
             "output below. Do not modify any files.\n\n"
-            f'!`python -m memlora {target} "$CLAUDE_PROJECT_DIR" "$ARGUMENTS"`\n'
+            f'!`python -m memlora {target} . "$ARGUMENTS"`\n'
         )
     else:
         body = (
             f"Run CogniKernel's `{target}` for this project and give a short, "
             "actionable summary of the output below. Do not modify any files.\n\n"
-            f'!`python -m memlora {target} "$CLAUDE_PROJECT_DIR"`\n'
+            f"!`python -m memlora {target} .`\n"
         )
     (commands_dir / f"{name}.md").write_text("\n".join(front) + "\n\n" + body, encoding="utf-8")
 

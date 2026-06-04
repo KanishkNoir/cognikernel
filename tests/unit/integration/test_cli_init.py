@@ -126,10 +126,16 @@ def test_init_writes_claude_slash_commands(
     assert expected <= written
 
     # CLI-backed command: frontmatter scopes the Bash permission and the body
-    # `!`-executes the path-portable CLI against $CLAUDE_PROJECT_DIR.
+    # `!`-executes the CLI against `.` (the project root the `!`-bash runs from).
     doctor = (commands_dir / "ck-doctor.md").read_text(encoding="utf-8")
     assert "allowed-tools: Bash(python -m memlora doctor:*)" in doctor
-    assert '!`python -m memlora doctor "$CLAUDE_PROJECT_DIR"`' in doctor
+    assert "!`python -m memlora doctor .`" in doctor
+
+    # Regression guard: the `!`-exec must NOT contain a shell expansion. Claude
+    # Code rejects `$VAR` in the permission pre-check ("simple_expansion") and the
+    # command silently fails — which is exactly the /ck-show, /ck-doctor breakage.
+    for p in commands_dir.glob("ck-*.md"):
+        assert "$CLAUDE_PROJECT_DIR" not in p.read_text(encoding="utf-8")
 
     # MCP-backed command: steers to the tool, no Bash execution.
     recall = (commands_dir / "ck-recall.md").read_text(encoding="utf-8")
