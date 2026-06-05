@@ -19,7 +19,10 @@ from memlora.embedding.model import (
     EMBEDDING_DIM,
     EMBEDDING_MODEL_VERSION,
     embed_text,
+    ensure_ready,
     is_available,
+    is_ready,
+    warm,
 )
 from memlora.embedding.retrieval import find_related, recall
 from memlora.embedding.store import (
@@ -33,6 +36,9 @@ __all__ = [
     "EMBEDDING_MODEL_VERSION",
     "embed_text",
     "is_available",
+    "is_ready",
+    "warm",
+    "ensure_ready",
     "embedding_input",
     "cosine_matches",
     "load_embeddings",

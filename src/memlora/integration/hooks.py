@@ -222,13 +222,16 @@ def session_start_main() -> None:
             }
         }))
 
-        # Warm the model AND backfill any events that lack a vector at the
-        # current model_version. This runs once at session start (fast after the
-        # first pass — only new/unembedded events are processed). By the time
-        # the first UserPromptSubmit fires, recall is semantic-ready.
+        # Kick the embedding model load in the background — NEVER block session
+        # start on the multi-minute cold download. Backfill any vector-less events
+        # only when the model is already resident (is_ready) so this stays O(ms);
+        # on a cold start the long-lived MCP server completes the download and a
+        # later `memlora warm` / extraction backfills. recall / per-prompt injection
+        # stay correct throughout via the deterministic lexical fallback.
         try:
-            from memlora.embedding.model import is_available, EMBEDDING_MODEL_VERSION
-            if cwd and is_available():
+            from memlora.embedding.model import is_ready, warm
+            warm()
+            if cwd and is_ready():
                 from memlora.config import Config as _Cfg
                 from memlora.embedding.backfill import backfill_embeddings
                 from memlora.storage.connection import (

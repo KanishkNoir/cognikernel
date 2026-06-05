@@ -71,20 +71,29 @@ def _recall_hits(conn: sqlite3.Connection, project_id: str, query: str, k: int) 
 
     Tries semantic first (embedding model + stored vectors). Falls back to the
     deterministic lexical path when:
-      - the model is not installed, OR
+      - fastembed is not installed, OR
+      - the model is not loaded *yet* (still downloading / cold) — we never block
+        the caller on the multi-minute first fetch, OR
       - no events have stored vectors yet (e.g. before the first session_end with
-        the model available, or before a backfill has run at SessionStart).
-    This makes the hook correct even on a fresh install and progressively stronger
-    as the vector store fills in.
+        the model available, or before a backfill has run).
+    This makes recall correct even on a fresh install and progressively stronger
+    as the model warms and the vector store fills in.
     """
-    from memlora.embedding.model import is_available
+    from memlora.embedding.model import is_ready, warm
 
-    if is_available():
+    # Kick the single background model load (no-op if already loading/loaded). In a
+    # long-lived process (the MCP server) this makes later recalls semantic; in a
+    # short-lived hook it just primes the persistent cache for next time.
+    warm()
+    # is_ready() is non-blocking: True only if the model is loaded RIGHT NOW. Until
+    # then we serve deterministic lexical recall rather than hang on the cold-start
+    # download — the bug that made `recall` take minutes.
+    if is_ready():
         from memlora.embedding.retrieval import recall
         hits = recall(conn, project_id, query, k=k)
         if hits:
             return hits
-        # No stored vectors yet — fall through to lexical so the hook isn't silent.
+        # No stored vectors yet — fall through to lexical so the caller isn't silent.
     return _lexical_recall(conn, project_id, query, k)
 
 

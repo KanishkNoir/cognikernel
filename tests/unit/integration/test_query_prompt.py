@@ -17,7 +17,7 @@ def test_recall_for_prompt_returns_empty_for_missing_project(tmp_path: Path) -> 
 
 def test_recall_for_prompt_returns_empty_when_no_hits(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MEMLORA_DIR", str(tmp_path))
-    monkeypatch.setattr("memlora.embedding.model.is_available", lambda: False)
+    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
     from memlora.integration.session import init_project
     proj = str(tmp_path / "proj")
     Path(proj).mkdir()
@@ -36,7 +36,7 @@ def test_recall_for_prompt_returns_empty_on_exception() -> None:
 def test_recall_for_prompt_skips_always_injected_types(tmp_path: Path, monkeypatch) -> None:
     """CONSTRAINT_HARD and DO_NOT_RETRY are always in the static block; skip them."""
     monkeypatch.setenv("MEMLORA_DIR", str(tmp_path))
-    monkeypatch.setattr("memlora.embedding.model.is_available", lambda: False)
+    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
 
     from memlora.config import Config
     from memlora.integration.session import init_project
@@ -66,7 +66,7 @@ def test_recall_for_prompt_skips_always_injected_types(tmp_path: Path, monkeypat
 def test_recall_for_prompt_respects_threshold_gate(tmp_path: Path, monkeypatch) -> None:
     """Threshold=1.0 → nothing can pass → silence even with matching content."""
     monkeypatch.setenv("MEMLORA_DIR", str(tmp_path))
-    monkeypatch.setattr("memlora.embedding.model.is_available", lambda: False)
+    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
 
     from memlora.config import Config
     from memlora.integration.session import init_project

@@ -1,6 +1,13 @@
+import os
 from pathlib import Path
 
 import pytest
+
+# `memlora init` now bundles a one-time embedding-model download (~130MB). Each
+# init test uses a fresh MEMLORA_DIR, so without this guard the suite would
+# re-download per test. Disable the auto-warm for the whole test session;
+# embedding behavior is covered explicitly by the embedding tests.
+os.environ.setdefault("MEMLORA_DISABLE_AUTO_WARM", "1")
 
 from memlora.storage.connection import get_connection
 from memlora.storage.migrations import run_migrations

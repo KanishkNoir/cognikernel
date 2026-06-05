@@ -59,7 +59,7 @@ def test_recall_memory_missing_project_returns_message(tmp_path) -> None:
 def test_recall_memory_end_to_end_lexical(tmp_path, monkeypatch) -> None:
     """Full wrapper, forced down the deterministic lexical path (model-independent)."""
     monkeypatch.setenv("MEMLORA_DIR", str(tmp_path))
-    monkeypatch.setattr("memlora.embedding.model.is_available", lambda: False)
+    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
 
     from memlora.config import Config
     from memlora.integration.session import init_project

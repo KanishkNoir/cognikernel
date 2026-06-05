@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -60,6 +61,11 @@ def main() -> None:
     # ── init ──────────────────────────────────────────────────────────────────
     p_init = sub.add_parser("init", help="Initialise the DB for a project")
     p_init.add_argument("project_path", help="Path to the project root")
+    p_init.add_argument(
+        "--no-warm",
+        action="store_true",
+        help="Skip the one-time embedding-model download (recall stays lexical until warmed)",
+    )
 
     # ── extract ───────────────────────────────────────────────────────────────
     p_extract = sub.add_parser(
@@ -193,6 +199,15 @@ def main() -> None:
     p_lookup.add_argument("project_path", help="Path to the project root")
     p_lookup.add_argument("file_path", help="File path to look up")
 
+    # ── warm ──────────────────────────────────────────────────────────────────
+    sub.add_parser(
+        "warm",
+        help=(
+            "Download + load the embedding model once into the persistent cache. "
+            "Run before benchmarking so no session pays the cold-start download."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -215,9 +230,47 @@ def main() -> None:
         _cmd_rebuild(args)
     elif args.command == "lookup":
         sys.exit(_cmd_lookup(args))
+    elif args.command == "warm":
+        _cmd_warm()
 
 
 # ── subcommand handlers ───────────────────────────────────────────────────────
+
+
+def _warm_embedding_model() -> bool:
+    """Best-effort: download + load the embedding model into the persistent cache.
+
+    The first fastembed fetch is ~130MB and can take minutes; doing it once, in the
+    foreground (init or `memlora warm`), means no hook or MCP `recall` ever pays
+    that cost mid-session. Prints status; returns True if the model is ready.
+    Never raises — recall degrades to deterministic lexical matching without it.
+    """
+    import importlib.util
+    import time
+
+    if importlib.util.find_spec("fastembed") is None:
+        print("embedding extra not installed — recall/find_related will use lexical matching.")
+        return False
+
+    from memlora.embedding.model import EMBEDDING_MODEL_VERSION, ensure_ready
+
+    print(f"warming embedding model ({EMBEDDING_MODEL_VERSION}); first run downloads ~130MB, please wait…")
+    t0 = time.monotonic()
+    try:
+        ok = ensure_ready(timeout=None)  # block fully: the one place a long wait is OK
+    except Exception:
+        ok = False
+    dt = time.monotonic() - t0
+    if ok:
+        print(f"embedding model ready in {dt:.1f}s — cached under MEMLORA_DIR/models (default ~/.memlora/models)")
+    else:
+        print("embedding model download failed — recall/find_related will use lexical matching.")
+    return ok
+
+
+def _cmd_warm() -> None:
+    if not _warm_embedding_model():
+        sys.exit(1)
 
 # ── In-session slash commands / skills (so operators never drop out of the
 # assistant to run the `memlora` CLI) ─────────────────────────────────────────
@@ -502,6 +555,15 @@ documentation that the injection cannot replace.
     print(f"  wrote: .memlora/config.toml   (hook_policy=strict)")
     print(f"  wrote: .claude/commands/ck-*.md       ({n_cmds} Claude Code slash commands)")
     print(f"  wrote: .agents/skills/ck-*/SKILL.md   ({n_cmds} Codex skills)")
+
+    # Bundle the one-time embedding-model download into init so the very first
+    # session never pays the multi-minute cold start (the bug behind the hung
+    # `recall`). Foreground + best-effort; only the first init per machine actually
+    # downloads — later inits load from the persistent cache. Opt out with
+    # `--no-warm`; MEMLORA_DISABLE_AUTO_WARM=1 disables it for tests/CI (set in
+    # tests/conftest.py so the suite never downloads 130MB per test).
+    if not getattr(args, "no_warm", False) and not os.environ.get("MEMLORA_DISABLE_AUTO_WARM"):
+        _warm_embedding_model()
 
 
 def _cmd_extract(args: argparse.Namespace) -> None:

@@ -180,4 +180,13 @@ def threads_resource(project_id: str) -> str:
 
 def run() -> None:
     """Start the MCP server over stdio."""
+    # Kick the embedding model load in the background as soon as the (long-lived)
+    # server starts, so by the time a `recall`/`find_related` call arrives the model
+    # is ready and the answer is semantic — without ever blocking the first call on
+    # the cold-start download (which falls back to lexical until the load finishes).
+    try:
+        from memlora.embedding.model import warm
+        warm()
+    except Exception:
+        pass
     _mcp.run(transport="stdio")
