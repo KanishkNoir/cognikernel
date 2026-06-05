@@ -154,6 +154,17 @@ _NOISY: list[tuple[str, str, str]] = [
     # User-prompt echo — verbatim task statements (imperative, assert no decision)
     ("Decide on the framework for the project.", "DECISION", "user"),
     ("Implement the CRUD endpoints and wire them in.", "DECISION", "user"),
+    # F3: status narration + empty/one-word fragments are not durable memory.
+    # (These are the actual noise events extracted in the Benchmark_CK run.)
+    ("Done.", "THREAD_CLOSE", "assistant"),
+    ("Nothing to do here.", "THREAD_OPEN", "assistant"),
+    ("Nothing to write — the work is done.", "THREAD_CLOSE", "assistant"),
+    ("I need to check before touching the schema.", "THREAD_OPEN", "assistant"),
+    ("Reading the body to check if it's implemented.", "THREAD_CLOSE", "assistant"),
+    ("Already fully implemented.", "THREAD_CLOSE", "assistant"),
+    ("The login endpoint is already fully implemented.", "THREAD_CLOSE", "assistant"),
+    ("From the session context, this is already decided — and closed.", "DECISION", "assistant"),
+    ("---", "DECISION", "assistant"),
     # Structural labels — markdown headings whose category name re-uses a signal phrase.
     # The label names a category, it isn't an instance of it. Storing the label as
     # the decision/abandonment is meta-discourse, not data.
@@ -194,6 +205,9 @@ _GOOD: list[tuple[str, str, str]] = [
     # Constraints survive regardless of source role
     ("The API must not use Redis.", "CONSTRAINT_HARD", "assistant"),
     ("All endpoints require explicit versioning under /v1/.", "CONSTRAINT_HARD", "user"),
+    # F3 must NOT harm a substantive thread ("We need to…" is a real work item,
+    # distinct from the dropped "I need to…" narration).
+    ("We need to implement JWT authentication end-to-end for the next session.", "THREAD_OPEN", "user"),
 ]
 
 
