@@ -116,10 +116,24 @@ _DECISION_VERB = (
     r"(?:use|using|adopt\w*|choos\w*|chose|switch\w*|stick\w*\s+with|"
     r"go\w*\s+with|prefer\w*|replac\w*|will\s+use|going\s+to\s+use|we'?ll\s+use)"
 )
-_TOPIC_RE = re.compile(
-    rf"\b{_DECISION_VERB}\b[\w './+-]*?\b(?:for|to|as|in)\s+"
-    r"(?P<topic>[a-z0-9][\w +./-]*?)\s*"
-    r"(?:\binstead\b|\brather\b|\bbecause\b|\bsince\b|[.,;:]|$)",
+# A decision verb anywhere in the sentence qualifies it as a choice (so "for X"
+# in arbitrary prose isn't mistaken for a topic).
+_VERB_RE = re.compile(rf"\b{_DECISION_VERB}\b", re.IGNORECASE)
+_TERMINATOR = r"(?:\binstead\b|\brather\b|\bbecause\b|\bsince\b|[.,;:]|$)"
+# PREFERRED topic: the purpose/role the choice serves ("… for password hashing",
+# "… as the cache"). This is the *stable* topic — it survives when the choice
+# changes ("to argon2id") — and it matches whether it precedes or follows the verb
+# ("For password hashing, use X" and "use X for password hashing"). Choosing this
+# over the to/in object fixes "switch from bcrypt to argon2id for password hashing"
+# (topic = "password hashing", not "argon2id").
+_FOR_TOPIC_RE = re.compile(
+    rf"\b(?:for|as)\s+(?P<topic>[a-z0-9][\w +./-]*?)\s*{_TERMINATOR}",
+    re.IGNORECASE,
+)
+# Fallback topic: the object right after the verb via to/in ("moved to Postgres").
+_TO_TOPIC_RE = re.compile(
+    rf"\b{_DECISION_VERB}\b[\w './+-]*?\b(?:to|in)\s+"
+    rf"(?P<topic>[a-z0-9][\w +./-]*?)\s*{_TERMINATOR}",
     re.IGNORECASE,
 )
 _PROHIBIT_RE = re.compile(
@@ -149,11 +163,15 @@ def derive_subject(description: str) -> str:
     """
     if not description:
         return ""
-    m = _TOPIC_RE.search(description)
-    if m:
-        topic = _normalize_subject_str(m.group("topic"))
-        if topic:
-            return topic
+    # Require a decision verb so "for X" in arbitrary prose isn't read as a topic.
+    if _VERB_RE.search(description):
+        # Prefer the purpose topic (for/as) over the choice object (to/in).
+        for rx in (_FOR_TOPIC_RE, _TO_TOPIC_RE):
+            m = rx.search(description)
+            if m:
+                topic = _normalize_subject_str(m.group("topic"))
+                if topic:
+                    return topic
     m = _PROHIBIT_RE.search(description)
     if m:
         thing = _normalize_subject_str(m.group("thing"))
@@ -281,6 +299,20 @@ _AUTHORITY_PRECEDENCE: dict[str, int] = {
 }
 _AUTHORITY_DEFAULT = 2
 
+# F1: types whose *choice* can evolve into a DIFFERENT type on the same subject —
+# e.g. a soft constraint ("passwords hashed with bcrypt") is later restated as a
+# decision ("switch to argon2id for password hashing"). Cross-type supersession is
+# allowed ONLY within this family and ONLY when the derived subject matches (the
+# stricter subject+Jaccard gate, never lexical-overlap-only or semantic-only), so
+# a decision and a constraint on the same topic must be a genuine restatement of
+# the same choice. The graveyard family (APPROACH_ABANDONED*) is excluded — that
+# evolution is handled by merge._cross_type_dedup, not subject keying.
+_CHOICE_FAMILY: frozenset[str] = frozenset({
+    "CONSTRAINT_HARD",
+    "CONSTRAINT_SOFT",
+    "DECISION",
+})
+
 
 def find_superseded(
     conn: sqlite3.Connection,
@@ -301,16 +333,25 @@ def find_superseded(
     if new_event.event_type not in _SUPERSESSION_TYPES:
         return []
 
+    # Candidate types: always the same type; plus, when the new event is in the
+    # choice family, the other choice-family types so a decision can supersede a
+    # same-subject constraint and vice-versa (F1). Cross-type matches are held to
+    # the stricter subject gate below.
+    cand_types = {new_event.event_type}
+    if new_event.event_type in _CHOICE_FAMILY:
+        cand_types |= _CHOICE_FAMILY
+    type_placeholders = ",".join("?" * len(cand_types))
+
     rows = conn.execute(
-        """
-        SELECT id, payload, created_at, evidence_id FROM events
+        f"""
+        SELECT id, payload, created_at, evidence_id, event_type FROM events
         WHERE project_id    = ?
-          AND event_type    = ?
+          AND event_type    IN ({type_placeholders})
           AND archived      = 0
           AND superseded_by IS NULL
           AND content_hash != ?
         """,
-        (new_event.project_id, new_event.event_type, new_event.content_hash),
+        (new_event.project_id, *sorted(cand_types), new_event.content_hash),
     ).fetchall()
     if not rows:
         return []
@@ -368,7 +409,15 @@ def find_superseded(
         if new_auth < cand_auth:
             continue
 
-        if row["id"] in sem_matches or supersedes(new_desc, cand_desc):
-            superseded.append(row["id"])
+        if row["event_type"] == new_event.event_type:
+            # Same type: the full predicate — semantic OR lexical OR subject-keyed.
+            if row["id"] in sem_matches or supersedes(new_desc, cand_desc):
+                superseded.append(row["id"])
+        else:
+            # Cross type (F1): require the stronger structural signal — same derived
+            # subject + Jaccard floor. Lexical-overlap-only / semantic-only is NOT
+            # enough across types, to protect precision.
+            if subject_supersedes(new_desc, cand_desc):
+                superseded.append(row["id"])
 
     return superseded

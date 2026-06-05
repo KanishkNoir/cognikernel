@@ -174,6 +174,79 @@ class TestFindSuperseded:
         )
         assert old_id in find_superseded(conn, new)
 
+    # ── F1: cross-type subject supersession ───────────────────────────────────
+
+    def test_cross_type_decision_supersedes_constraint_same_subject(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """F1 + Benchmark_CK regression: a DECISION supersedes a same-subject
+        CONSTRAINT_SOFT. bcrypt was stored as CONSTRAINT_SOFT and the argon2id
+        switch as a DECISION, so the same-type-only finder never compared them.
+        Cross-type matching (shared derived subject 'password hashing' + the
+        Jaccard floor) now links them — with the semantic axis OFF (default path).
+
+        Uses the ACTUAL Benchmark_CK user phrasings (topic-before-verb in S1; a
+        'from X to Y for TOPIC' switch in S2) so this proves the real end-to-end fix,
+        not just a clean canonical phrasing."""
+        seed_evidence(conn, 1)
+        seed_evidence(conn, 2)
+        old_id = seed_event(
+            conn, content_hash="h_bcrypt", created_at=1000, evidence_id=1,
+            event_type="CONSTRAINT_SOFT",
+            payload={"description": "For password hashing, we will use bcrypt.",
+                     "authority": "user_stated"},
+        )
+        new = make_event(
+            content_hash="h_argon", created_at=2000, evidence_id=2,
+            event_type="DECISION",
+            payload={"description": "After more research, we're switching from bcrypt "
+                                    "to argon2id for password hashing.",
+                     "authority": "user_stated"},
+        )
+        assert old_id in find_superseded(conn, new, use_embeddings=False)
+
+    def test_cross_type_requires_subject_match_unrelated_survives(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """F1 precision: cross-type needs a shared subject. An unrelated constraint
+        (no derivable subject) is never superseded by a hashing decision, even
+        though both are in the choice family."""
+        seed_evidence(conn, 1)
+        seed_evidence(conn, 2)
+        survivor = seed_event(
+            conn, content_hash="h_uuid", created_at=1000, evidence_id=1,
+            event_type="CONSTRAINT_HARD",
+            payload={"description": "Use UUID primary keys.", "authority": "user_stated"},
+        )
+        new = make_event(
+            content_hash="h_argon", created_at=2000, evidence_id=2,
+            event_type="DECISION",
+            payload={"description": "we will use argon2id for password hashing instead of bcrypt.",
+                     "authority": "user_stated"},
+        )
+        assert survivor not in find_superseded(conn, new, use_embeddings=False)
+
+    def test_cross_type_authority_gate_still_holds(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """F1 must not bypass the authority gate: a low-authority cross-type event
+        cannot supersede a higher-authority one."""
+        seed_evidence(conn, 1)
+        seed_evidence(conn, 2)
+        survivor = seed_event(
+            conn, content_hash="h_user", created_at=1000, evidence_id=1,
+            event_type="CONSTRAINT_SOFT",
+            payload={"description": "We will use bcrypt for password hashing.",
+                     "authority": "user_stated"},
+        )
+        new = make_event(
+            content_hash="h_inferred", created_at=2000, evidence_id=2,
+            event_type="DECISION",
+            payload={"description": "we will use argon2id for password hashing instead of bcrypt.",
+                     "authority": "inferred_from_code"},
+        )
+        assert survivor not in find_superseded(conn, new, use_embeddings=False)
+
 
 class TestDeriveSubject:
     """derive_subject extracts the *topic* a decision is about (not the choice)."""
@@ -185,6 +258,17 @@ class TestDeriveSubject:
         assert derive_subject(
             "we will use argon2id for password hashing instead of bcrypt."
         ) == "password hashing"
+
+    def test_switch_from_to_for_topic_real_phrasing(self) -> None:
+        # F4b: the actual Benchmark_CK S2 phrasing. "to argon2id" must NOT win over
+        # "for password hashing" — the purpose topic is the stable subject.
+        assert derive_subject(
+            "After more research, we're switching from bcrypt to argon2id for password hashing."
+        ) == "password hashing"
+
+    def test_topic_before_verb(self) -> None:
+        # F4b: the actual Benchmark_CK S1 phrasing — topic precedes the verb.
+        assert derive_subject("For password hashing, we will use bcrypt.") == "password hashing"
 
     def test_prohibition_subject_is_the_rejected_thing(self) -> None:
         assert derive_subject("Do not use Celery, we will never revisit it.") == "celery"

@@ -151,11 +151,9 @@ _NOISY: list[tuple[str, str, str]] = [
     ("As required by CLAUDE.md, all responses must be JSON.", "CONSTRAINT_HARD", "assistant"),
     ("Per CLAUDE.md, endpoints live under /v1/.", "CONSTRAINT_SOFT", "assistant"),
     ("The get_session_state call returned prior decisions.", "DECISION", "assistant"),
-    # User-prompt echo — verbatim task statements
+    # User-prompt echo — verbatim task statements (imperative, assert no decision)
     ("Decide on the framework for the project.", "DECISION", "user"),
     ("Implement the CRUD endpoints and wire them in.", "DECISION", "user"),
-    # DECISION events sourced from the user turn (not an architectural decision by the model)
-    ("We decided to use FastAPI.", "DECISION", "user"),
     # Structural labels — markdown headings whose category name re-uses a signal phrase.
     # The label names a category, it isn't an instance of it. Storing the label as
     # the decision/abandonment is meta-discourse, not data.
@@ -190,6 +188,9 @@ _GOOD: list[tuple[str, str, str]] = [
     ("We chose SQLite over PostgreSQL for local-first deployment.", "DECISION", "assistant"),
     ("FastAPI was selected for its automatic OpenAPI generation.", "DECISION", "assistant"),
     ("SQLAlchemy's ORM was chosen to avoid raw SQL migration drift.", "DECISION", "assistant"),
+    # F4: a DECISION the USER states is first-class (highest authority), not noise.
+    ("We decided to use FastAPI.", "DECISION", "user"),
+    ("We're switching from bcrypt to argon2id for password hashing.", "DECISION", "user"),
     # Constraints survive regardless of source role
     ("The API must not use Redis.", "CONSTRAINT_HARD", "assistant"),
     ("All endpoints require explicit versioning under /v1/.", "CONSTRAINT_HARD", "user"),
@@ -218,3 +219,22 @@ class TestNarrationFilter:
         assert len(events) == 1, (
             f"Expected substantive sentence to survive label filter, got {len(events)} events"
         )
+
+    def test_f4_user_decision_kept_with_user_authority(self) -> None:
+        """F4: a user-turn DECISION is captured with authority=user_stated.
+
+        Regression for Benchmark_CK: the user's 'switching from bcrypt to argon2id'
+        decision was previously blanket-dropped, so supersession had nothing to link.
+        """
+        events = _run_single(
+            "We're switching from bcrypt to argon2id for password hashing.",
+            "DECISION", "user",
+        )
+        assert len(events) == 1
+        assert events[0].event_type == "DECISION"
+        assert events[0].payload["authority"] == "user_stated"
+
+    def test_f4_user_prompt_echo_still_dropped(self) -> None:
+        """F4 must not regress the anti-echo guard — imperative prompts are not decisions."""
+        assert _run_single("Implement the CRUD endpoints.", "DECISION", "user") == []
+        assert _run_single("Decide on the framework.", "DECISION", "user") == []

@@ -204,9 +204,14 @@ def extract_events_from_matches(
                 event_type = "CONSTRAINT_SOFT"
                 confidence = min(confidence, 0.3)
 
-        # Drop DECISION events from non-assistant turns or echoed user prompts.
+        # F4: a DECISION stated in a USER turn is a first-class, highest-authority
+        # decision (authority=user_stated via default_authority_for_role) — keep it.
+        # Previously user-turn DECISIONs were blanket-dropped, which silently lost
+        # user-stated decisions like "we're switching from bcrypt to argon2id" and
+        # left supersession nothing to link. Still drop imperative prompt echoes
+        # ("implement X", "decide on Y") and questions, which assert no decision.
         if event_type == "DECISION":
-            if source_role != "assistant" or _USER_PROMPT_ECHO.match(description):
+            if _USER_PROMPT_ECHO.match(description) or is_question_description(description):
                 continue
 
         events.append(
