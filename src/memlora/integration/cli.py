@@ -509,27 +509,48 @@ def _cmd_init(args: argparse.Namespace) -> None:
     ck_section = """\
 ## CogniKernel — structured session memory
 
-This project uses CogniKernel. At the start of every session a
-`## Session context` block is automatically injected into your context.
-It is the canonical source for three categories of information:
+This project uses **CogniKernel** for cross-session memory. At the start of every
+session a `## Session context` block is injected automatically — it is the
+**canonical** source of truth for decisions, constraints, rejected approaches,
+open work, and codebase structure, and it **supersedes this file and your own
+recollection**. You never maintain memory by hand: the Stop hook extracts and
+persists decisions for you.
 
-1. **Architectural decisions and constraints** — the `### Hard constraints`
-   and `### Key decisions` sections supersede this file and any prior notes.
-2. **Codebase structure** — the `### Codebase skeleton` section lists every
-   file with extracted public symbols. **Do not Read/Glob a file whose path
-   appears in the skeleton unless you need the function body** (e.g., to
-   replace an implementation). Under strict mode (the default for new
-   projects), the PreToolUse hook will deny such Reads. If you genuinely
-   need the body, retry the same Read within 60 seconds and the second
-   attempt is allowed.
-3. **Open work** — the `### Active thread` section tracks the current focus.
+**The injected block covers:**
 
-If the session context block is missing, call the `get_session_state`
-cognikernel MCP tool.
+1. **Decisions & constraints** — `### Hard constraints` and `### Key decisions`.
+2. **Rejected approaches** — `### Do not retry`; never re-propose these.
+3. **Codebase structure** — `### Codebase skeleton` is an AST-derived **symbol
+   graph**: per-file classes / functions / methods and their import edges, ranked
+   by architectural centrality (PageRank over the import graph) so the most
+   connected files surface first. Treat it as a trustworthy map of the code.
+   **Do not Read/Glob a file whose path appears in the skeleton unless you need the
+   function body** (e.g. to replace an implementation). Under strict mode (the
+   default), the PreToolUse hook denies such Reads; if you genuinely need the body,
+   retry the same Read within 60 seconds and the retry is allowed.
+4. **Open work** — `### Active thread` tracks the current focus.
 
-Do not update this file with project decisions — the Stop hook persists them
-via extraction. Hand-written notes (this file) are fine as supplementary
-documentation that the injection cannot replace.
+**When something seems missing or you're unsure of a past decision, use
+CogniKernel's tools BEFORE re-reading files, Globbing, or asking the user to
+rediscover it:**
+
+| MCP tool | Use it to |
+| --- | --- |
+| `recall(query)` | Retrieve prior decisions/constraints relevant to a question — your FIRST move when a fact isn't in the block. No file reads. |
+| `find_related(query)` | Before changing a subsystem: surfaces related decisions AND code, fusing semantic similarity with the import graph (files that import / are imported by the target) — impact you'd otherwise miss. |
+| `get_session_state()` | Re-fetch the full block if it is absent from context. |
+
+Structured memory is also exposed as MCP **resources** (any client):
+`cognikernel://projects` and
+`cognikernel://project/{id}/{constraints,decisions,graveyard,skeleton,threads}`.
+
+**Slash commands** available to the user (Claude Code; Codex exposes the same as
+`$ck-*` skills): `/ck-recall <query>`, `/ck-related <query>`, `/ck-show`,
+`/ck-doctor`, `/ck-failures`, `/ck-lookup <file>`.
+
+**Do not write decisions, constraints, or architecture notes to this file** — the
+Stop hook persists them via extraction. Hand-written notes here are fine only as
+supplementary documentation the injection cannot replace.
 """
     if claude_md.exists():
         existing = claude_md.read_text(encoding="utf-8")

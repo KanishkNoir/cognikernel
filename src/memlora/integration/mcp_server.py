@@ -48,6 +48,11 @@ _mcp = FastMCP(
         "Call get_session_state only if the block is absent and you need project context. "
         "For targeted queries, use the recall or find_related tools, or read a specific "
         "resource (e.g. cognikernel://project/{id}/constraints) for structured typed memory. "
+        "If a decision or constraint seems missing from the block, call recall BEFORE "
+        "re-reading files, Globbing, or asking the user to rediscover it — the memory "
+        "likely has it. Use find_related before changing a subsystem to surface related "
+        "decisions and import-graph-adjacent code (the skeleton is an AST symbol "
+        "graph ranked by PageRank centrality). "
         "IMPORTANT: Do not write decisions, constraints, or architecture notes to CLAUDE.md "
         "or any other file. The Stop hook automatically extracts and persists all decisions."
     ),

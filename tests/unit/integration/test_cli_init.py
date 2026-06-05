@@ -178,3 +178,21 @@ def test_init_claude_md_mentions_strict_mode_and_skeleton(
     assert "Codebase skeleton" in text
     assert "PreToolUse" in text
     assert "60 seconds" in text  # retry window mentioned explicitly
+
+
+def test_init_claude_md_advertises_tools_and_recall_affordance(
+    init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
+) -> None:
+    """The trust section must make the agent aware of CogniKernel's full surface
+    (MCP tools + resources + slash commands) and, per F7, tell it to reach for
+    recall BEFORE re-reading files or asking the user to rediscover a decision."""
+    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "memlora_data"))
+
+    _cmd_init(init_args)
+
+    text = (Path(init_args.project_path) / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "recall(query)" in text
+    assert "find_related(query)" in text
+    assert "cognikernel://project/" in text          # resources advertised
+    assert "/ck-recall" in text                        # slash commands advertised
+    assert "BEFORE re-reading" in text                 # F7 behavioral nudge
