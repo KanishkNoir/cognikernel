@@ -136,6 +136,48 @@ _RE_ONLY = re.compile(
     re.IGNORECASE,
 )
 
+# ── F6: declarative convention/config facts (no decision verb) ────────────────
+# Conventions stated as plain facts ("URL prefix: /api/v1/", "JSON fields:
+# camelCase", "Component library: shadcn/ui") carry no decision verb, so the trie
+# misses them entirely — the D6/D7/D8 recall gaps. These patterns are keyed on
+# UNAMBIGUOUS tokens (URL paths, casing keywords, a whitelist of stack labels) so
+# recall rises without re-introducing the prose noise F3 removed. The full sentence
+# is kept as the description, so the verbatim convention is recallable.
+
+# D8 — API URL prefix. Two orders observed in real transcripts:
+#   Form A (keyword → path): "URL prefix: /api/v1/", "routes mount under /api/v1".
+_RE_URL_PREFIX = re.compile(
+    r"\b(?:url\s+prefix|api\s+prefix|route\s+prefix|prefix(?:ed)?|versioned\s+under|"
+    r"(?:routes?|endpoints?)\s+(?:\w+\s+){0,2}under|mount(?:ed)?\s+(?:under|at)|"
+    r"namespaced?\s+under)\b[^A-Za-z0-9/\n]{0,8}(?P<subject>/[A-Za-z0-9][\w./-]*)",
+    re.IGNORECASE,
+)
+#   Form B (path → keyword): "`/api/v1` as a mount prefix on the FastAPI app".
+_RE_URL_PREFIX_REV = re.compile(
+    r"(?P<subject>/[A-Za-z0-9][\w./-]*)[^A-Za-z0-9\n]{0,4}"
+    r"(?:as\s+(?:a\s+|the\s+)?)?(?:mount\s+|url\s+|route\s+|api\s+)?prefix\b",
+    re.IGNORECASE,
+)
+
+# D6 — casing convention: snake_case / camelCase / PascalCase / kebab-case.
+_RE_CASING = re.compile(
+    r"\b(?P<subject>snake_case|camelCase|PascalCase|kebab-case|SCREAMING_SNAKE_CASE)\b",
+    re.IGNORECASE,
+)
+
+# D7 (+ stack) — "Label: value" config lines for a whitelist of stack categories.
+_STACK_LABEL = (
+    r"component\s+library|ui\s+library|ui\s+components?|framework|database|orm|"
+    r"migrations?|state\s+management|styling|http\s+client|server\s+state|"
+    r"client\s+state|forms?|build\s+tool|password\s+hashing|background\s+tasks?|"
+    r"url\s+prefix|api\s+prefix|token\s+store|caching|pagination|jwt\s+secret"
+)
+_RE_CONFIG_LINE = re.compile(
+    rf"^\s*[-*|]?\s*\*{{0,2}}\s*(?P<label>{_STACK_LABEL})\s*\*{{0,2}}\s*:\s*\*{{0,2}}\s*"
+    r"(?P<subject>[A-Za-z0-9/][^\n|]{0,48}?)\s*(?:[.|]\s*|$)",
+    re.IGNORECASE,
+)
+
 
 PATTERNS: tuple[Pattern, ...] = (
     Pattern(
@@ -177,6 +219,39 @@ PATTERNS: tuple[Pattern, ...] = (
         base_confidence=0.7,
         role_filter=("user",),
         shape_guard=_starts_with_only,
+    ),
+    # F6: declarative convention/config facts (stated by user or assistant).
+    Pattern(
+        pattern_id="URL_PREFIX",
+        regex=_RE_URL_PREFIX,
+        event_type="CONSTRAINT_SOFT",
+        base_confidence=0.7,
+        role_filter=("user", "assistant"),
+        shape_guard=_not_a_question,
+    ),
+    Pattern(
+        pattern_id="URL_PREFIX_REV",
+        regex=_RE_URL_PREFIX_REV,
+        event_type="CONSTRAINT_SOFT",
+        base_confidence=0.7,
+        role_filter=("user", "assistant"),
+        shape_guard=_not_a_question,
+    ),
+    Pattern(
+        pattern_id="CASING",
+        regex=_RE_CASING,
+        event_type="CONSTRAINT_SOFT",
+        base_confidence=0.65,
+        role_filter=("user", "assistant"),
+        shape_guard=_not_a_question,
+    ),
+    Pattern(
+        pattern_id="CONFIG_LINE",
+        regex=_RE_CONFIG_LINE,
+        event_type="DECISION",
+        base_confidence=0.6,
+        role_filter=("user", "assistant"),
+        shape_guard=_not_a_question,
     ),
 )
 
@@ -260,7 +335,7 @@ def _extract_subjects(pattern: Pattern, match: re.Match) -> list[str]:
 # Trailing punctuation that callers don't want in the subject. Patterns
 # match up to a sentence terminator so the terminator can leak into the
 # capture; strip it here so downstream lookups don't see "PostgreSQL.".
-_TRAILING_PUNCT = ".,;:!?"
+_TRAILING_PUNCT = ".,;:!?*`"
 
 
 def _normalize_subject(subject: str) -> str:

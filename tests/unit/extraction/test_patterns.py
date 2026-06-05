@@ -229,3 +229,57 @@ class TestPipelineIntegration:
         # Multi-negation case yields both:
         assert any("Material UI" in s for s in subjects)
         assert any("Chakra" in s for s in subjects)
+
+
+# ── F6: declarative convention/config facts ───────────────────────────────────
+
+
+def _subjects(events, pattern_id=None):
+    return [
+        e.payload["subject"]
+        for e in events
+        if pattern_id is None or e.payload["matched_phrase"] == pattern_id
+    ]
+
+
+class TestF6DeclarativeFacts:
+    """Conventions stated as plain facts (no decision verb) — the D6/D7/D8 gaps."""
+
+    def test_url_prefix_keyword_then_path(self) -> None:
+        events = _run([_sent("All routes mount under /api/v1.", role="assistant")])
+        assert any("/api/v1" in s for s in _subjects(events, "URL_PREFIX"))
+
+    def test_url_prefix_path_then_keyword(self) -> None:
+        # Real Benchmark_CK phrasing: path precedes the keyword.
+        events = _run([_sent("/api/v1 as a mount prefix on the FastAPI app.", role="assistant")])
+        assert any("/api/v1" in s for s in _subjects(events, "URL_PREFIX_REV"))
+
+    def test_url_prefix_colon_form(self) -> None:
+        events = _run([_sent("URL prefix: /api/v1/", role="assistant")])
+        assert any("/api/v1" in s for s in _subjects(events))
+
+    def test_no_url_prefix_on_bare_endpoint_mention(self) -> None:
+        # An endpoint example with no prefix/mount keyword must NOT fire (precision).
+        events = _run([_sent("POST /api/v1/auth/login returns a token.", role="assistant")])
+        assert all(
+            e.payload["matched_phrase"] not in ("URL_PREFIX", "URL_PREFIX_REV")
+            for e in events
+        )
+
+    def test_casing_camel_and_snake(self) -> None:
+        events = _run([
+            _sent("JSON response fields are camelCase; DB columns are snake_case.", role="assistant")
+        ])
+        subs = {s.lower() for s in _subjects(events, "CASING")}
+        assert "camelcase" in subs and "snake_case" in subs
+
+    def test_casing_ignores_unrelated_prose(self) -> None:
+        events = _run([_sent("We refactored the helper into a cleaner shape.", role="assistant")])
+        assert all(e.payload["matched_phrase"] != "CASING" for e in events)
+
+    def test_config_line_library_no_markdown_leak(self) -> None:
+        events = _run([_sent("Component library: shadcn/ui on Radix UI.", role="assistant")])
+        cfg = [e for e in events if e.payload["matched_phrase"] == "CONFIG_LINE"]
+        assert any("shadcn/ui" in e.payload["subject"].lower() for e in cfg)
+        for e in cfg:  # markdown bold must not leak into the subject
+            assert not e.payload["subject"].endswith("*")

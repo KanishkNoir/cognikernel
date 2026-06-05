@@ -73,8 +73,14 @@ def extract_session(
         )
         # Pattern events skip the trie's structural-label filter (already
         # excluded by shape guards) but DO need sanitization + classification.
+        # Drop any whose description sanitizes to empty (a matched token with no
+        # recallable context is noise, not a fact).
+        _sanitized: list = []
         for pe in pattern_events:
             pe.payload["description"] = sanitize_description(pe.payload["description"])
+            if pe.payload["description"].strip():
+                _sanitized.append(pe)
+        pattern_events = _sanitized
 
         # A-4: co-capture the assistant's reply when a USER trie match landed.
         # These produce CONSTRAINT_SOFT events tagged
