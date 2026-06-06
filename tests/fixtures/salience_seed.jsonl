@@ -1,0 +1,166 @@
+{"text": "We'll use PostgreSQL as the primary datastore.", "label": "DECISION"}
+{"text": "Primary keys are UUIDs generated with uuid4().", "label": "DECISION"}
+{"text": "The default model alias resolves to the mid-tier model, not the flagship.", "label": "DECISION"}
+{"text": "Task assignment uses round-robin across the available workers.", "label": "DECISION"}
+{"text": "Routing picks the lowest-latency healthy deployment first.", "label": "DECISION"}
+{"text": "We select the primary deployment by priority order, then fall back.", "label": "DECISION"}
+{"text": "Fall back from the primary group to the cheaper group, then to the local one.", "label": "DECISION"}
+{"text": "The fallback chain goes frontier, then cheap, then local.", "label": "DECISION"}
+{"text": "Retries use up to 3 attempts with exponential backoff and jitter.", "label": "DECISION"}
+{"text": "We cap retries at 2 attempts per deployment, then advance to the next.", "label": "DECISION"}
+{"text": "Clients authenticate with a bearer token in the Authorization header.", "label": "DECISION"}
+{"text": "Callers send an API key in the X-API-Key header to authenticate.", "label": "DECISION"}
+{"text": "We'll use shadcn/ui for the component library.", "label": "DECISION"}
+{"text": "Background jobs run on a Postgres-backed outbox with a polling worker.", "label": "DECISION"}
+{"text": "The cache backend is Redis with a one-hour TTL.", "label": "DECISION"}
+{"text": "Streaming is delivered to clients over server-sent events.", "label": "DECISION"}
+{"text": "The tool registry exposes a register() method that takes a ToolSpec.", "label": "DECISION"}
+{"text": "Result objects carry a value, citations, and usage fields.", "label": "DECISION"}
+{"text": "We standardize on uv for packaging across the workspace.", "label": "DECISION"}
+{"text": "Tracing uses the OpenTelemetry GenAI semantic conventions.", "label": "DECISION"}
+{"text": "Idempotency keys live in Redis, shared across all instances.", "label": "DECISION"}
+{"text": "Virtual keys are stored as a SHA-256 hash of the raw token.", "label": "DECISION"}
+{"text": "The default password hasher is argon2id.", "label": "DECISION"}
+{"text": "We'll version the API under the /api/v1 prefix.", "label": "DECISION"}
+{"text": "Config is a single YAML file validated by pydantic at startup.", "label": "DECISION"}
+{"text": "Money is stored as an integer count of minor units in a BIGINT column.", "label": "DECISION"}
+{"text": "Server state for the frontend goes through TanStack Query.", "label": "DECISION"}
+{"text": "The worker looks tools up by name from the shared registry.", "label": "DECISION"}
+{"text": "Schema migrations are managed with Alembic.", "label": "DECISION"}
+{"text": "We embed prompts and match cache hits on cosine similarity above 0.97.", "label": "DECISION"}
+{"text": "Event IDs are UUIDv7 so they sort by creation time.", "label": "DECISION"}
+{"text": "The dispatcher marks an outbox row as sent in the same transaction.", "label": "DECISION"}
+{"text": "Provider keys are read from the environment at call time.", "label": "DECISION"}
+{"text": "We prefer Anthropic over OpenAI within each tier for predictability.", "label": "DECISION"}
+{"text": "The login endpoint issues a short-lived JWT signed with HS256.", "label": "DECISION"}
+
+{"text": "Secrets must never be written to logs under any log level.", "label": "CONSTRAINT_HARD"}
+{"text": "Provider API keys must never be stored in the database.", "label": "CONSTRAINT_HARD"}
+{"text": "The JWT secret must only come from the TASKFLOW_JWT_SECRET environment variable.", "label": "CONSTRAINT_HARD"}
+{"text": "Every upstream call must have a hard timeout; there is no unbounded option.", "label": "CONSTRAINT_HARD"}
+{"text": "All database access in request handlers must be async; no blocking calls.", "label": "CONSTRAINT_HARD"}
+{"text": "Side effects must be emitted exactly once through the outbox, never inline.", "label": "CONSTRAINT_HARD"}
+{"text": "Inbound webhooks must be deduplicated by their idempotency key.", "label": "CONSTRAINT_HARD"}
+{"text": "After the retry budget is exhausted the event must go to the dead-letter table, never dropped.", "label": "CONSTRAINT_HARD"}
+{"text": "Money must be stored as integer minor units, never as a float.", "label": "CONSTRAINT_HARD"}
+{"text": "Rate-limit counters must live in Redis so they survive multiple instances.", "label": "CONSTRAINT_HARD"}
+{"text": "One provider's failure must never be able to crash the gateway.", "label": "CONSTRAINT_HARD"}
+{"text": "OpenAI wire compatibility is non-negotiable; responses must be byte-for-byte correct.", "label": "CONSTRAINT_HARD"}
+{"text": "Tools must raise typed ToolError subclasses, never a bare exception.", "label": "CONSTRAINT_HARD"}
+{"text": "The retry policy lives in core; consumers must import it, never reimplement it.", "label": "CONSTRAINT_HARD"}
+{"text": "Bad configuration must be a fatal error at startup.", "label": "CONSTRAINT_HARD"}
+{"text": "Migrations must go through Alembic; no raw DDL in application code.", "label": "CONSTRAINT_HARD"}
+{"text": "PII must never appear in structured logs.", "label": "CONSTRAINT_HARD"}
+{"text": "All routes must be mounted under the versioned prefix.", "label": "CONSTRAINT_HARD"}
+{"text": "The hard timeout ceiling is a code constant operators cannot override.", "label": "CONSTRAINT_HARD"}
+{"text": "Every handler and every failure path must have a test.", "label": "CONSTRAINT_HARD"}
+{"text": "The raw virtual key must never be stored or logged.", "label": "CONSTRAINT_HARD"}
+{"text": "Production must use PostgreSQL, never SQLite.", "label": "CONSTRAINT_HARD"}
+{"text": "Step handlers must be pure and idempotent.", "label": "CONSTRAINT_HARD"}
+{"text": "The LLM enrichment step must never be able to hard-fail the pipeline.", "label": "CONSTRAINT_HARD"}
+{"text": "Upstream credentials must never be forwarded in client-facing headers.", "label": "CONSTRAINT_HARD"}
+{"text": "Connection strings must be logged only as [REDACTED].", "label": "CONSTRAINT_HARD"}
+{"text": "Timestamps must be stored in UTC as timestamptz.", "label": "CONSTRAINT_HARD"}
+{"text": "A cache must never be written for a request that failed upstream.", "label": "CONSTRAINT_HARD"}
+
+{"text": "Prefer snake_case for database columns and camelCase for JSON fields.", "label": "CONSTRAINT_SOFT"}
+{"text": "JSON response fields should follow our camelCase convention.", "label": "CONSTRAINT_SOFT"}
+{"text": "We generally keep handlers under a hundred lines for readability.", "label": "CONSTRAINT_SOFT"}
+{"text": "Prefer keyword arguments for any function with more than three parameters.", "label": "CONSTRAINT_SOFT"}
+{"text": "Log lines should include the event_id for correlation.", "label": "CONSTRAINT_SOFT"}
+{"text": "Tool names should be lowercase with underscores.", "label": "CONSTRAINT_SOFT"}
+{"text": "The usage ledger is append-only; rows are not updated in place.", "label": "CONSTRAINT_SOFT"}
+{"text": "Billing should record the model actually served, not the alias.", "label": "CONSTRAINT_SOFT"}
+{"text": "Pagination defaults to fifty items per page.", "label": "CONSTRAINT_SOFT"}
+{"text": "The health endpoint is public and reports provider reachability.", "label": "CONSTRAINT_SOFT"}
+{"text": "We prefer dependency injection over module-level singletons.", "label": "CONSTRAINT_SOFT"}
+{"text": "Public functions should carry docstrings.", "label": "CONSTRAINT_SOFT"}
+{"text": "A 504 response should not include the upstream error body.", "label": "CONSTRAINT_SOFT"}
+{"text": "Local-tier deployments are not cached since they are free.", "label": "CONSTRAINT_SOFT"}
+{"text": "Status transitions should go through an explicit enum.", "label": "CONSTRAINT_SOFT"}
+{"text": "The encryption key is a deployment secret and does not rotate without a redeploy.", "label": "CONSTRAINT_SOFT"}
+{"text": "Honor the Retry-After header on a 429, capped at eight seconds.", "label": "CONSTRAINT_SOFT"}
+{"text": "Tests should cover the duplicate-delivery path, not just the happy path.", "label": "CONSTRAINT_SOFT"}
+{"text": "The cache key is computed from the resolved model, not the alias.", "label": "CONSTRAINT_SOFT"}
+{"text": "Use TypeScript strict mode across the frontend.", "label": "CONSTRAINT_SOFT"}
+{"text": "Keep the dependency surface lean for the gateway.", "label": "CONSTRAINT_SOFT"}
+{"text": "Group routes by domain rather than by HTTP verb.", "label": "CONSTRAINT_SOFT"}
+{"text": "Cache entries expire after an hour to avoid serving stale completions.", "label": "CONSTRAINT_SOFT"}
+
+{"text": "We evaluated Celery but rejected it because it requires a Redis or RabbitMQ broker.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "Celery is ruled out; the broker overhead is too much for a local-dev setup.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "We will not use LangChain in the request path; it adds latency and hides control.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "LangChain's tool abstraction is rejected in favor of our typed ToolSpec.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "In-process rate limiting is rejected because counters don't survive multiple instances.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "We rejected sticky sessions for rate limiting; they break on instance restart.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "Inline synchronous side effects are abandoned; they give no exactly-once guarantee.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "Do not revisit MUI or Chakra; we deliberately chose a headless library instead.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "bcrypt is abandoned because it silently truncates passwords at 72 bytes.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "We will not store money as a float; that approach is permanently off the table.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "Round-robin routing was rejected because the deployments are not interchangeable.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "SQLite for local dev is rejected; we standardized on Postgres everywhere.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "Per-package retry logic is forbidden; that duplication was explicitly abandoned.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "Gossip-based counter sync is ruled out; eventual consistency always overshoots.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "We tried budget sharding and dropped it; it can't handle autoscaling.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+{"text": "Polling the provider with no timeout is a non-starter and will not be revisited.", "label": "APPROACH_ABANDONED_DO_NOT_RETRY"}
+
+{"text": "Next session we'll implement JWT authentication end-to-end.", "label": "THREAD"}
+{"text": "Open a work thread to build the durable worker that runs agents.", "label": "THREAD"}
+{"text": "The active work item is the fallback-and-retry router.", "label": "THREAD"}
+{"text": "We still need to wire the outbox dispatcher; that's the open task.", "label": "THREAD"}
+{"text": "Next up: build the research agent on top of the core SDK.", "label": "THREAD"}
+{"text": "Track this as the next thing to implement: the login form on the frontend.", "label": "THREAD"}
+{"text": "Remaining work: add the priority column migration and the PATCH endpoint.", "label": "THREAD"}
+{"text": "Let's pick up the rate limiter implementation next session.", "label": "THREAD"}
+{"text": "The next milestone is exposing the gateway tools over MCP.", "label": "THREAD"}
+{"text": "Carry forward the task of adding failure-path tests for the credit step.", "label": "THREAD"}
+{"text": "Open thread: implement the JWT dependency guard and token issuance.", "label": "THREAD"}
+{"text": "We need to add the semantic cache lookup as the next piece of work.", "label": "THREAD"}
+{"text": "The work item for tomorrow is the end-to-end payment.succeeded pipeline.", "label": "THREAD"}
+{"text": "Still to do: propagate the new trace_id field to both consumers.", "label": "THREAD"}
+
+{"text": "Propose the concrete stack and list every hard constraint we should lock in.", "label": "NOISE"}
+{"text": "Where do the rate-limit counters live when we run multiple instances?", "label": "NOISE"}
+{"text": "How do callers authenticate, and how do we store the provider keys?", "label": "NOISE"}
+{"text": "Design the usage ledger and be precise about how money is stored.", "label": "NOISE"}
+{"text": "What component library should we use on the frontend?", "label": "NOISE"}
+{"text": "Should we use LangChain inside the request path to normalize providers?", "label": "NOISE"}
+{"text": "Here's the proposed stack and constraint list for review.", "label": "NOISE"}
+{"text": "Here is the complete record of what was decided this session for the Stop hook to capture.", "label": "NOISE"}
+{"text": "Let me read the existing router before making changes.", "label": "NOISE"}
+{"text": "Now I'll implement the endpoint and add a test.", "label": "NOISE"}
+{"text": "I need to check the schema first.", "label": "NOISE"}
+{"text": "If the caller sets a 30-second timeout and two deployments each take 14 seconds, the second retry never fires.", "label": "NOISE"}
+{"text": "For example, a key could fire twice its limit straddling a minute boundary.", "label": "NOISE"}
+{"text": "It's the right tradeoff; the synchronous read adds latency for a rare event.", "label": "NOISE"}
+{"text": "Never retrievable after that.", "label": "NOISE"}
+{"text": "Done at write time in pure integer arithmetic.", "label": "NOISE"}
+{"text": "No call-site discipline required.", "label": "NOISE"}
+{"text": "Write the event anyway; an approximate record beats a gap.", "label": "NOISE"}
+{"text": "NonRetryableError(status_code) signals the router decided to stop.", "label": "NOISE"}
+{"text": "UpstreamError carries the status code and the raw body.", "label": "NOISE"}
+{"text": "Good — the crud module only touches the tasks table.", "label": "NOISE"}
+{"text": "Note that is_deleted is already handled by the base query.", "label": "NOISE"}
+{"text": "All eighteen tests pass now.", "label": "NOISE"}
+{"text": "The login endpoint is already fully implemented.", "label": "NOISE"}
+{"text": "Category two: named fields that should be bound carefully.", "label": "NOISE"}
+{"text": "Here is the reasoning, recorded for context.", "label": "NOISE"}
+{"text": "Let's walk through the three options before deciding.", "label": "NOISE"}
+{"text": "Option C is ruled out by the decision we already made above.", "label": "NOISE"}
+{"text": "This section describes the schema in detail.", "label": "NOISE"}
+{"text": "Proposed Stack and Hard Constraints.", "label": "NOISE"}
+{"text": "Per-request timeout, and what must never appear in logs.", "label": "NOISE"}
+{"text": "First, let me lay out the workspace layout.", "label": "NOISE"}
+{"text": "That makes sense for a local-first tool.", "label": "NOISE"}
+{"text": "The two viable approaches are reserve-and-refund or split accounting.", "label": "NOISE"}
+{"text": "As required by the session context, this is already decided.", "label": "NOISE"}
+{"text": "Confirm the API conventions and the pagination approach.", "label": "NOISE"}
+{"text": "Reading the request body now.", "label": "NOISE"}
+{"text": "Nothing to do here.", "label": "NOISE"}
+{"text": "We receive OpenAI-format JSON and must emit OpenAI-format JSON.", "label": "NOISE"}
+{"text": "Let me summarize what we covered.", "label": "NOISE"}
+{"text": "Below is the canonical serialization function.", "label": "NOISE"}
+{"text": "The table above lists the per-token pricing for each model.", "label": "NOISE"}
+{"text": "Generated with a small helper that uses the secrets module.", "label": "NOISE"}
+{"text": "Two layers, with a clear separation between them.", "label": "NOISE"}
+{"text": "Verification against current pricing follows.", "label": "NOISE"}

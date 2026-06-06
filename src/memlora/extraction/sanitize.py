@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import re
 
-_MAX_DESC = 120
+# v1 A-2: descriptions are facts and are NEVER truncated — truncation discards
+# the operative tail (a number / env var / model id). _HARD_DESC is only a
+# blob-guard (mis-segmented code dump), and even then keep_whole_fact cuts solely
+# at a complete sentence boundary, never mid-sentence. Rationale is context, not
+# the fact, so it stays ellipsis-truncatable at a tight budget.
+_HARD_DESC = 600
 _MAX_RATIONALE = 120
 
 # Block-level markdown patterns — applied per line, drop or strip the whole line.
@@ -50,13 +55,14 @@ _DECLARATIVE  = re.compile(
 def sanitize_description(text: str) -> str:
     """Return a clean, length-bounded description string.
 
-    Length cap is applied via memlora.extraction.normalize.smart_truncate so
-    the cut lands at a sentence or word boundary rather than mid-word (A-2).
+    Facts are never truncated (v1 A-2) — keep_whole_fact only guards against a
+    mis-segmented blob, and even then cuts at a complete sentence boundary, never
+    mid-sentence, never with an ellipsis.
     """
-    from memlora.extraction.normalize import smart_truncate
+    from memlora.extraction.normalize import keep_whole_fact
 
     cleaned = _clean(text)
-    return smart_truncate(cleaned, _MAX_DESC).rstrip()
+    return keep_whole_fact(cleaned, _HARD_DESC).rstrip()
 
 
 def sanitize_rationale(text: str) -> str:

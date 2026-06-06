@@ -1,0 +1,242 @@
+[
+ {
+  "event_type": "CONSTRAINT_HARD",
+  "text": "Propose the concrete stack and list every hard constraint and operational invariant we should lock in now."
+ },
+ {
+  "event_type": "THREAD_CLOSE",
+  "text": "1. OpenAI wire compatibility is non-negotiable. /v1/chat/completions (and /v1/models) must be byte-for-byte…."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "2. Streaming is first-class, not bolted on. Chunks must be proxied as they arrive, never buffered."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "3. Secrets never touch logs. Provider API keys and gateway bearer tokens are scrubbed at the logging boundary, not at…."
+ },
+ {
+  "event_type": "CONSTRAINT_HARD",
+  "text": "4. Every upstream call has a hard timeout. No configurable \"no timeout\" option — gate at 120 s max, configurable down…."
+ },
+ {
+  "event_type": "CONSTRAINT_HARD",
+  "text": "5. Provider isolation: one provider's failure cannot crash the gateway."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "4. /health is always public and never returns a key. It reports provider reachability (reachable/unreachable) by…."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "5. Config is validated at startup; bad config is a fatal error."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Providers in a model alias are cost/quality differentiated — you always want to prefer the primary (e.g."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "If the caller sets a 30 s timeout and two deployments each take 14 s to time out, the second retry never fires."
+ },
+ {
+  "event_type": "DECISION",
+  "text": "Propagate a deadline_exceeded error rather than ignoring the clock."
+ },
+ {
+  "event_type": "DECISION",
+  "text": "Callers relying on relay/default must be able to see they got claude-haiku-4-5 instead of claude-sonnet-4-6 — silent…."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "1. Check happens before the upstream call is made — never after."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Populated by a background job, never in the request path."
+ },
+ {
+  "event_type": "THREAD_CLOSE",
+  "text": "Done at write time in pure integer arithmetic."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Write the event anyway — an approximate record is better than a gap."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "2. usage_events is append-only. Schema migrations may add columns; they never drop or update rows."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "3. Store provider and model as the actual served values, never the alias. Billing must reflect what ran."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Never retrievable after that."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Never store the raw key."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "It's the right tradeoff; synchronous DB reads on every request add latency for an event that almost never happens."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Upstream credentials never touch the database."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "If a required key is missing and a deployment referencing that provider exists in config, startup fails (per the…."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Never re-read from env mid-flight, never interpolated into log strings."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "If a future requirement arises for per-virtual-key upstream credentials (multi-tenant: tenant A uses their own…."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "The RELAY_ENCRYPTION_KEY is a 32-byte key from environment — never in the database."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "No database lookup — this key never rotates without a redeploy, which is intentional: it is a deployment secret, not a…."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "3. Upstream provider keys never appear in logs, error responses, or HTTP headers forwarded to clients."
+ },
+ {
+  "event_type": "THREAD_CLOSE",
+  "text": "Model: resolved name, not alias. If relay/default → claude-sonnet-4-6, key on claude-sonnet-4-6."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "The cache always stores the complete non-streaming response as serialized JSON — never a partial stream."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "1 hour is conservative enough to avoid surprising callers with stale responses after a model update while still…."
+ },
+ {
+  "event_type": "THREAD_CLOSE",
+  "text": "1. Cache key is computed after model resolution, before the upstream call."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "2. Cache is never read or written for requests that failed upstream (non-2xx)."
+ },
+ {
+  "event_type": "CONSTRAINT_HARD",
+  "text": "3. Usage events are still written on a cache hit — the tokens were billed on the original request; they must not be…."
+ },
+ {
+  "event_type": "CONSTRAINT_HARD",
+  "text": "Safety: per-request timeout, and what must never appear in logs."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "No call-site discipline required."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Category 2: Named fields — never bound to a log event."
+ },
+ {
+  "event_type": "CONSTRAINT_HARD",
+  "text": "Regardless of pattern matching, these field names must never be passed to a logger:."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Regardless of pattern matching, these field names must never be passed to a logger:."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Log the virtual key ID (UUID), never the token."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Log the provider name, never the credential."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Tool call results never logged even when bodies are enabled — they frequently contain retrieved documents or PII."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Structlog's exc_info=True does not include locals by default — use only that."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "2. Upstream Authorization headers are set inside the httpx request object and never bound to a structlog context var."
+ },
+ {
+  "event_type": "CONSTRAINT_HARD",
+  "text": "3. The 300 s hard max is a module-level constant, not an env var. Operators cannot configure their way past it."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "4. A 504 response to the caller never includes the upstream error body."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "5. Redis and Postgres connection strings are injected via env var and logged only as [REDACTED] — never the resolved…."
+ },
+ {
+  "event_type": "THREAD_CLOSE",
+  "text": "5. Redis and Postgres connection strings are injected via env var and logged only as [REDACTED] — never the resolved…."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "2. vllm.base_url is the only secret-adjacent value permitted in YAML."
+ },
+ {
+  "event_type": "THREAD_OPEN",
+  "text": "Open the active work thread for next session: the end-to-end fallback+retry router."
+ },
+ {
+  "event_type": "DECISION",
+  "text": "Here is the complete record of what was decided this session, stated clearly so the Stop hook captures it, followed by…."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Single Docker image, no required external services beyond Postgres and Redis."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Upstream provider keys in env vars only (RELAY_PROVIDER_*), never in DB."
+ },
+ {
+  "event_type": "THREAD_CLOSE",
+  "text": "Key: SHA-256 of canonically serialized request (resolved model + all sampling params + messages), prefixed…."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Patterns: Anthropic keys, OpenAI keys, Relay virtual key tokens, admin key, generic Bearer tokens → [REDACTED]."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Named fields never logged: authorization, api_key, database_url, redis_url, etc."
+ },
+ {
+  "event_type": "THREAD_OPEN",
+  "text": "Thin per-provider adapters (to_provider / from_provider) instead."
+ },
+ {
+  "event_type": "DECISION",
+  "text": "Database: PostgreSQL."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Per-Request Timeout There are three distinct timeout values, not one."
+ },
+ {
+  "event_type": "CONSTRAINT_SOFT",
+  "text": "Here is the complete record of what was decided this session, stated clearly so the Stop hook captures it, followed by…."
+ }
+]

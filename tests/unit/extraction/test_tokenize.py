@@ -32,20 +32,36 @@ class TestCodeBlocks:
 
 class TestBullets:
     def test_each_bullet_is_own_sentence(self) -> None:
+        # v1 A-1: each bullet is still its own sentence, now flagged list_item
+        # with the leading marker stripped from the text.
         transcript = "Human: Constraints:\n- Cannot use Redis\n- Must not call network\n- No external APIs"
         sentences = tokenize(transcript)
-        bullets = [s for s in sentences if s.text.startswith("-")]
+        bullets = [s for s in sentences if s.list_item]
         assert len(bullets) == 3
+        # marker stripped — text no longer starts with "- "
+        assert all(not s.text.startswith(("-", "*", "•")) for s in bullets)
 
-    def test_bullet_text_preserved(self) -> None:
+    def test_bullet_marker_stripped_text_preserved(self) -> None:
+        # v1 A-1: the marker is gone but the fact text is intact.
         transcript = "Human: - We cannot use Redis"
         sentences = tokenize(transcript)
-        assert any("cannot use Redis" in s.text for s in sentences)
+        item = next(s for s in sentences if s.list_item)
+        assert item.text == "We cannot use Redis"
+
+    def test_numbered_list_marker_stripped(self) -> None:
+        # v1 A-1: numbered ordinals are stripped (no "4. " polluting the fact).
+        transcript = "Human:\n1. PostgreSQL only\n2. UUID primary keys"
+        sentences = tokenize(transcript)
+        items = [s for s in sentences if s.list_item]
+        assert len(items) == 2
+        assert items[0].text == "PostgreSQL only"
+        assert all(s.list_group_id == items[0].list_group_id for s in items)
+        assert items[0].list_group_id != -1
 
     def test_asterisk_bullets_recognized(self) -> None:
         transcript = "Human: * First rule\n* Second rule"
         sentences = tokenize(transcript)
-        bullets = [s for s in sentences if s.text.startswith("*")]
+        bullets = [s for s in sentences if s.list_item]
         assert len(bullets) == 2
 
 

@@ -93,3 +93,9 @@ tempCodeRunnerFile.py
 # OS
 .DS_Store
 Thumbs.db
+
+# Trained model artifacts (large binaries — regenerable from scripts/train_*.py)
+models/
+checkpoints/
+*.onnx
+# (small numpy heads under src/.../heads/*.npz are intentionally NOT ignored)

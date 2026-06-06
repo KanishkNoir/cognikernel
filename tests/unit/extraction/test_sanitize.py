@@ -29,8 +29,19 @@ class TestBlockLevelStripping:
     def test_strips_role_prefix(self) -> None:
         assert sanitize_description("Assistant: We chose SQLite") == "We chose SQLite"
 
-    def test_truncates_to_max_length(self) -> None:
-        assert len(sanitize_description("a" * 500)) <= 120
+    def test_facts_are_not_truncated_mid_value(self) -> None:
+        # v1 A-2: the operative tail of a fact (a number / env var / model id) must
+        # survive. The old 120-char cap severed exactly this.
+        fact = (
+            "Every upstream call has a hard timeout: no configurable no-timeout "
+            "option, the ceiling is gated at 120 s max and is configurable down "
+            "but never up past 300 s."
+        )
+        out = sanitize_description(fact)
+        assert "120 s" in out
+        assert "300 s" in out
+        assert not out.endswith("…")
+        assert not out.endswith("...")
 
 
 class TestInlineMarkdownStripping:
