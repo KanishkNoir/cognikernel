@@ -208,6 +208,24 @@ def main() -> None:
         ),
     )
 
+    # ── install-heads ───────────────────────────────────────────────────────────
+    p_install = sub.add_parser(
+        "install-heads",
+        help=(
+            "Install the v2 (SetFit) encoder ONNX body + tokenizer into the canonical "
+            "~/.memlora/models/salience_v2/ so v2/v2-broad extraction works outside a "
+            "repo checkout. Run once before benchmarking the encoder backend."
+        ),
+    )
+    p_install.add_argument(
+        "--source",
+        help="Dir containing body.onnx + tokenizer.json (default: the repo export output "
+             "at models/salience_setfit/onnx). Produce it with scripts/export_setfit_onnx.py.",
+    )
+    p_install.add_argument(
+        "--force", action="store_true", help="Overwrite artifacts already installed",
+    )
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -232,6 +250,8 @@ def main() -> None:
         sys.exit(_cmd_lookup(args))
     elif args.command == "warm":
         _cmd_warm()
+    elif args.command == "install-heads":
+        _cmd_install_heads(args)
 
 
 # ── subcommand handlers ───────────────────────────────────────────────────────
@@ -382,6 +402,44 @@ def _write_agent_commands(project_path: Path) -> None:
         _write_codex_skill(skills_dir, *spec)
 
 
+def _cmd_install_heads(args: argparse.Namespace) -> None:
+    """Copy the v2 encoder ONNX body + tokenizer into the canonical install path.
+
+    The 133 MB body.onnx is gitignored (regenerable), so it is not shipped. This
+    places it (and tokenizer.json) at <MEMLORA_DIR>/models/salience_v2/ — the first
+    location extraction.salience_v2._body_dir() checks — so v2 extraction resolves the
+    head outside a repo checkout (otherwise it silently fails open to legacy).
+    """
+    import os
+    import shutil
+
+    repo_default = Path(__file__).resolve().parents[3] / "models" / "salience_setfit" / "onnx"
+    src = Path(args.source).resolve() if args.source else repo_default
+    dest = (
+        Path(os.environ.get("MEMLORA_DIR") or (Path.home() / ".memlora"))
+        / "models" / "salience_v2"
+    )
+    needed = ["body.onnx", "tokenizer.json"]
+    missing = [f for f in needed if not (src / f).exists()]
+    if missing:
+        print(f"source is missing {missing} in {src}", file=sys.stderr)
+        print("Export the body first: python scripts/export_setfit_onnx.py", file=sys.stderr)
+        print("or point --source at a dir that has body.onnx + tokenizer.json.", file=sys.stderr)
+        sys.exit(1)
+
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in needed:
+        target = dest / f
+        if target.exists() and not args.force:
+            print(f"  exists (skip): {target}  — use --force to overwrite")
+            continue
+        shutil.copy2(src / f, target)
+        print(f"  installed: {target}  ({(src / f).stat().st_size / 1e6:.1f} MB)")
+    print(f"\nv2 encoder body installed to {dest}")
+    print('Enable it with  extractor = "v2-broad"  in .memlora/config.toml '
+          "(or MEMLORA_EXTRACTOR=v2-broad).")
+
+
 def _cmd_init(args: argparse.Namespace) -> None:
     import shutil
 
@@ -489,7 +547,15 @@ def _cmd_init(args: argparse.Namespace) -> None:
     if not project_cfg_path.exists():
         project_cfg_path.write_text(
             '# CogniKernel per-project config. Overrides ~/.memlora/config.toml.\n'
-            'hook_policy = "strict"\n',
+            'hook_policy = "strict"\n'
+            '\n'
+            '# Stage-2 extraction backend: legacy | v1 | v1-broad | v2 | v2-broad.\n'
+            '#   legacy   = deterministic keyword/Aho-Corasick pipeline (default).\n'
+            '#   v2-broad = SetFit fine-tuned encoder head (best quality). Requires the\n'
+            '#              ONNX body installed once: `python -m memlora install-heads`.\n'
+            '# The MEMLORA_EXTRACTOR env var overrides this. Heads fail open to legacy\n'
+            '# when artifacts are absent, so a non-legacy value is always safe.\n'
+            '# extractor = "v2-broad"\n',
             encoding="utf-8",
         )
 
