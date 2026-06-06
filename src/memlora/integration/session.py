@@ -87,7 +87,9 @@ def session_end(
         ended_at=now,
     )
     try:
-        candidates = extract_session(transcript, session_meta, git_diff=git_diff)
+        candidates = extract_session(
+            transcript, session_meta, git_diff=git_diff, extractor=config.extractor
+        )
         for event in candidates:
             event.evidence_id = evidence_id
 
@@ -384,7 +386,9 @@ def rebuild_from_raw(
             )
 
             try:
-                candidates = extract_session(transcript, session_meta)
+                candidates = extract_session(
+                    transcript, session_meta, extractor=config.extractor
+                )
                 for event in candidates:
                     event.evidence_id = evidence_id
                 stats = execute_merge(

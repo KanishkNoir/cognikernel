@@ -10,6 +10,15 @@ EXPECTED_PROJECTION_VERSION: int = 1
 
 VALID_HOOK_POLICIES = frozenset({"advisory", "strict"})
 
+# Extraction backend selector. `legacy` is the deterministic keyword/Aho-Corasick
+# pipeline (Stage 2). The `v1*` modes use the frozen-backbone learned salience head
+# (extraction/salience.py); the `v2*` modes use the SetFit fine-tuned head served
+# torch-free via ONNX (extraction/salience_v2.py). Plain modes (`v1`/`v2`) filter +
+# re-type the legacy candidate set; `-broad` modes classify every prose sentence.
+# All head paths fail open: a missing head/model falls back to legacy, so selecting
+# an encoder mode never breaks extraction.
+VALID_EXTRACTORS = frozenset({"legacy", "v1", "v1-broad", "v2", "v2-broad"})
+
 # Single authoritative ceiling for the rendered injection block, set from the
 # Unit 7a baseline measurement (see research/beta/promotion_criteria.md). This
 # is the one number the render path enforces: greedy selection, the section
@@ -89,6 +98,13 @@ class Config:
     # flag. This flag is now specifically about "use embeddings to find supersession
     # candidates" — not about whether to store them or use them for recall.
     embedding_enabled: bool = False
+
+    # Selects the Stage-2 extraction backend (see VALID_EXTRACTORS). Default
+    # `legacy` (the deterministic keyword pipeline) so existing projects are
+    # unchanged until they opt in. The `MEMLORA_EXTRACTOR` env var, when set,
+    # overrides this for ops/tests. The encoder heads fail open to legacy when
+    # their model artifacts are absent, so a non-legacy value is always safe.
+    extractor: str = "legacy"
     section_budgets: SectionBudgets = field(default_factory=SectionBudgets)
 
     @property
@@ -185,6 +201,13 @@ class Config:
             kwargs["deny_retry_window_seconds"] = int(data["deny_retry_window_seconds"])
         if "embedding_enabled" in data:
             kwargs["embedding_enabled"] = bool(data["embedding_enabled"])
+        if "extractor" in data:
+            extractor = str(data["extractor"]).lower()
+            if extractor not in VALID_EXTRACTORS:
+                raise ValueError(
+                    f"invalid extractor {extractor!r}; expected one of {sorted(VALID_EXTRACTORS)}"
+                )
+            kwargs["extractor"] = extractor
         if "query_time_injection" in data:
             kwargs["query_time_injection"] = bool(data["query_time_injection"])
         if "query_injection_threshold" in data:

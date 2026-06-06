@@ -10,6 +10,7 @@ Backpressure thresholds (from ARCHITECTURE.md §6):
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
@@ -20,6 +21,13 @@ from dataclasses import dataclass
 from memlora.storage.events import Event, insert_event, insert_extraction_failure
 
 _log = logging.getLogger("memlora.extraction")
+
+# Per-call extractor selection set by extract_session(). None means "no explicit
+# selection" (fall back to the env var, then legacy). The MEMLORA_EXTRACTOR env
+# var always wins over this so ops/tests can force a mode regardless of config.
+_EXTRACTOR_OVERRIDE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "memlora_extractor_override", default=None
+)
 
 _FOREGROUND_BYTES = 500 * 1_024          # 500 KB
 _HARD_CAP_BYTES   = 5 * 1_024 * 1_024   # 5 MB
@@ -37,10 +45,16 @@ def extract_session(
     transcript: str,
     session_meta: SessionMetadata,
     git_diff: str | None = None,
+    extractor: str | None = None,
 ) -> list[Event]:
     """Extract structured events from a transcript and optional git diff.
 
     Pure transformation — call persist_events() to write to the database.
+
+    `extractor` selects the Stage-2 backend (legacy | v1 | v1-broad | v2 |
+    v2-broad), normally `config.extractor`. The `MEMLORA_EXTRACTOR` env var, when
+    set, overrides it (ops/test escape hatch). None means "use the env var, else
+    legacy" — the historical behavior.
     """
     # Lazy imports avoid circular-import issues at module load time.
     from memlora.extraction.tokenize import tokenize
@@ -50,6 +64,30 @@ def extract_session(
     from memlora.extraction.hashing import compute_content_hash
     from memlora.extraction.git_augment import extract_git_events, cross_reference_signals
 
+    token = _EXTRACTOR_OVERRIDE.set(extractor)
+    try:
+        return _extract_session_impl(
+            transcript, session_meta, git_diff,
+            tokenize, get_scanner, extract_events_from_matches,
+            classify_event, compute_content_hash,
+            extract_git_events, cross_reference_signals,
+        )
+    finally:
+        _EXTRACTOR_OVERRIDE.reset(token)
+
+
+def _extract_session_impl(
+    transcript: str,
+    session_meta: SessionMetadata,
+    git_diff,
+    tokenize,
+    get_scanner,
+    extract_events_from_matches,
+    classify_event,
+    compute_content_hash,
+    extract_git_events,
+    cross_reference_signals,
+) -> list[Event]:
     transcript = _apply_size_limits(transcript, session_meta)
     events: list[Event] = []
 
@@ -166,10 +204,19 @@ _THREAD_CLOSE_VERB = re.compile(
 def _extractor_mode() -> str:
     """legacy | v1 | v1-broad | v2 | v2-broad.
 
-    v1* uses the frozen-backbone head (salience); v2* uses the SetFit fine-tuned head
-    (salience_v2). Plain modes filter legacy candidates; -broad classifies all sentences.
+    Resolution order: MEMLORA_EXTRACTOR env var (ops/test override) > the per-call
+    selection from extract_session(extractor=...) (normally config.extractor) >
+    legacy. v1* uses the frozen-backbone head (salience); v2* uses the SetFit
+    fine-tuned head (salience_v2). Plain modes filter legacy candidates; -broad
+    classifies all sentences.
     """
-    return os.environ.get("MEMLORA_EXTRACTOR", "legacy").lower()
+    env = os.environ.get("MEMLORA_EXTRACTOR")
+    if env:
+        return env.lower()
+    override = _EXTRACTOR_OVERRIDE.get()
+    if override:
+        return override.lower()
+    return "legacy"
 
 
 def _head_module():
