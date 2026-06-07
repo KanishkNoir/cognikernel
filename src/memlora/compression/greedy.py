@@ -159,10 +159,19 @@ def _compress_mandatory(
     if sum(estimate_tokens(e) for e in mandatory) <= target_tokens:
         return mandatory
 
-    # Last resort: truncate description
+    # Still over budget: DROP lowest-weight mandatory events — NEVER truncate a
+    # description. A clipped constraint ("...are sub-second transient...") destroys
+    # signal and is actively misleading; show fewer constraints in full instead.
+    # With well-formed extraction this branch is rarely hit — it triggers only when
+    # the store is flooded with low-value/over-captured constraints.
+    mandatory.sort(key=lambda e: e.weight, reverse=True)
+    kept: list = []
+    used = 0
     for e in mandatory:
-        desc = e.payload.get("description", "")
-        if len(desc) > 60:
-            e.payload["description"] = desc[:57] + "..."
-
-    return mandatory
+        cost = estimate_tokens(e)
+        if used + cost <= target_tokens:
+            kept.append(e)
+            used += cost
+    if not kept and mandatory:  # always keep at least the highest-weight one, whole
+        kept = [mandatory[0]]
+    return kept
