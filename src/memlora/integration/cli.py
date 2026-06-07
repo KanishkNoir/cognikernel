@@ -555,7 +555,9 @@ def _cmd_init(args: argparse.Namespace) -> None:
             '#              ONNX body installed once: `python -m memlora install-heads`.\n'
             '# The MEMLORA_EXTRACTOR env var overrides this. Heads fail open to legacy\n'
             '# when artifacts are absent, so a non-legacy value is always safe.\n'
-            '# extractor = "v2-broad"\n',
+            '# New projects default to the best mode (v2-broad). Install the ONNX body\n'
+            '# once with `python -m memlora install-heads`, or set this to "legacy".\n'
+            'extractor = "v2-broad"\n',
             encoding="utf-8",
         )
 
