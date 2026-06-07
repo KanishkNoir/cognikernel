@@ -24,6 +24,18 @@ _MANDATORY_TOKEN_LIMIT: int = 500
 _COMPONENT_TOKEN_LIMIT: int = 150
 _COMPONENT_MAX_COUNT: int = 5
 
+# R8 — authority precedence for the mandatory drop-to-fit: a user-stated fact outranks
+# an assistant-decided one, so when budget-exempt constraints overflow we keep the
+# user's real constraints and drop over-captured assistant prose first. Mirrors
+# extraction.authority constants (kept as bare strings to avoid importing extraction).
+_AUTHORITY_RANK: dict[str, int] = {
+    "user_stated": 3,
+    "assistant_decided": 2,
+    "llm": 2,
+    "assistant_answer_to_user_question": 1,
+    "inferred_from_code": 0,
+}
+
 
 def greedy_fill(events: list["Event"], budget_tokens: int) -> list["Event"]:
     """Select events greedily by weight to maximize value within the token budget.
@@ -103,26 +115,23 @@ def _compress_mandatory(
     mandatory: list["Event"],
     target_tokens: int,
 ) -> list["Event"]:
-    """Aggressively shrink mandatory items when they exceed the token limit."""
+    """Fit mandatory items into the token limit by DROPPING whole low-priority events.
+
+    Lossless render contract: never truncate a field (a clipped constraint destroys
+    signal). When budget-exempt constraints overflow, drop whole events worst-first by
+    (authority, weight) so a user-stated constraint outlives an over-captured assistant
+    one. Rarely hit with well-formed extraction. The events store is untouched — this
+    only shapes the rendered block.
+    """
     mandatory = [copy.copy(e) for e in mandatory]
     for e in mandatory:
         e.payload = dict(e.payload)
 
-    # Truncate rationale first
-    for e in mandatory:
-        rationale = e.payload.get("rationale", "")
-        if len(rationale) > 60:
-            e.payload["rationale"] = rationale[:57] + "..."
-
     if sum(estimate_tokens(e) for e in mandatory) <= target_tokens:
         return mandatory
 
-    # Still over budget: DROP lowest-weight mandatory events — NEVER truncate a
-    # description. A clipped constraint ("...are sub-second transient...") destroys
-    # signal and is actively misleading; show fewer constraints in full instead.
-    # With well-formed extraction this branch is rarely hit — it triggers only when
-    # the store is flooded with low-value/over-captured constraints.
-    mandatory.sort(key=lambda e: e.weight, reverse=True)
+    # R8: keep highest (authority, weight) first; drop the rest whole.
+    mandatory.sort(key=lambda e: (_AUTHORITY_RANK.get(e.payload.get("authority", ""), 2), e.weight), reverse=True)
     kept: list = []
     used = 0
     for e in mandatory:
