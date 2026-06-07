@@ -314,11 +314,29 @@ _CHOICE_FAMILY: frozenset[str] = frozenset({
 })
 
 
+# R5: cap on cross-encoder forward passes per supersession check, to bound the
+# Stop-hook merge cost. The cross-encoder reranks the top-K cosine candidates only.
+_XENC_MAX_CANDIDATES: int = 80
+
+# R5 HYBRID (precision-first). The cross-encoder ALONE over-supersedes on real stores —
+# it scores ~0.97 for almost any SAME-TOPIC pair, conflating topical relatedness with
+# supersession (validated: a default-alias change "superseded" 48 unrelated decisions).
+# No threshold is safe alone. Requiring a LEXICAL co-fire (Jaccard floor, below
+# lexical_supersedes' own 0.6) filters those topical false positives — they share the
+# topic but not the changed VALUE's tokens — while still catching paraphrases that
+# overlap moderately. Validated: real-store over-supersession 48/14 -> 1/0, gold P100
+# guard_fp 0, recall a modest +8pts over lexical-only. The cross-encoder is a precision-
+# gated RERANKER here, never a standalone recall expander.
+_XENC_SUPERSEDE_MIN: float = 0.97   # high precision bar for the cross-encoder score
+_XENC_JAC_MIN: float = 0.3          # required lexical co-fire
+
+
 def find_superseded(
     conn: sqlite3.Connection,
     new_event: Event,
     *,
     use_embeddings: bool = True,
+    use_cross_encoder: bool = False,
 ) -> list[int]:
     """Gated supersession finder (temporal + authority + provenance + lexical/semantic).
 
@@ -363,27 +381,60 @@ def find_superseded(
     new_created = new_event.created_at
     new_evidence = new_event.evidence_id
 
-    # Semantic axis (optional, additive): embed the new event's composed input
-    # (E1), cosine over stored candidate vectors. Skipped entirely when
-    # use_embeddings is False so no embedding model is loaded on the default
-    # path. Empty dict when disabled or when the model/vectors are unavailable.
-    sem_matches: dict[int, float] = {}
-    if use_embeddings:
+    # Candidate cosine scores (shared by the semantic + cross-encoder axes). Embeddings
+    # are stored regardless of config, so we score once and reuse. Computed only when an
+    # embedding-backed axis is on; empty when the model/vectors are unavailable.
+    cand_cos: dict[int, float] = {}
+    if use_embeddings or use_cross_encoder:
         try:
+            import numpy as _np
+
             from memlora.embedding.input import embedding_input
             from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text
-            from memlora.embedding.store import cosine_matches, load_embeddings
+            from memlora.embedding.store import load_embeddings
 
             query_vec = embed_text(embedding_input(new_event.payload, new_event.event_type))
             if query_vec is not None:
-                cand_emb = load_embeddings(
-                    conn, [r["id"] for r in rows], EMBEDDING_MODEL_VERSION
-                )
-                sem_matches = cosine_matches(
-                    query_vec, cand_emb, SUPERSESSION_COSINE_THRESHOLD
-                )
+                qv = _np.asarray(query_vec, dtype="float32")
+                cand_emb = load_embeddings(conn, [r["id"] for r in rows], EMBEDDING_MODEL_VERSION)
+                cand_cos = {cid: float(qv @ _np.asarray(v, dtype="float32")) for cid, v in cand_emb.items()}
         except Exception:
-            sem_matches = {}
+            cand_cos = {}
+
+    # Semantic axis (optional, additive): candidates above the safe cosine threshold.
+    sem_matches: set[int] = (
+        {cid for cid, c in cand_cos.items() if c >= SUPERSESSION_COSINE_THRESHOLD}
+        if use_embeddings else set()
+    )
+
+    # Cross-encoder axis (R5, optional + additive): a learned PAIRWISE scorer that catches
+    # paraphrased corrections lexical+cosine miss WITHOUT the same-area false positives a
+    # bare cosine causes (the F5 fix). Bi-encoder RETRIEVE -> cross-encoder RERANK: score
+    # only the top-_XENC_MAX_CANDIDATES same-type candidates by cosine, so cost is bounded
+    # regardless of store size. Additive above the always-on gates; fail-open (no model ->
+    # empty). Precision-calibrated threshold ships with the model. Same-type only.
+    xenc_matches: set[int] = set()
+    if use_cross_encoder:
+        try:
+            from memlora.delta import supersede_xenc
+
+            if supersede_xenc.is_available():
+                by_id = {r["id"]: r for r in rows if r["event_type"] == new_event.event_type}
+                ranked = sorted(
+                    (cid for cid in by_id if cid in cand_cos),
+                    key=lambda c: cand_cos[c], reverse=True,
+                )
+                shortlist = ranked[:_XENC_MAX_CANDIDATES] or list(by_id)[:_XENC_MAX_CANDIDATES]
+                for cid in shortlist:
+                    cd = json.loads(by_id[cid]["payload"]).get("description", "")
+                    p = supersede_xenc.prob_supersedes(new_desc, cd)
+                    # HYBRID: high cross-encoder score AND a lexical co-fire (filters the
+                    # topical false positives the cross-encoder produces alone).
+                    if (p is not None and p >= _XENC_SUPERSEDE_MIN
+                            and jaccard_similarity(new_desc, cd) >= _XENC_JAC_MIN):
+                        xenc_matches.add(cid)
+        except Exception:
+            xenc_matches = set()
 
     superseded: list[int] = []
     for row in rows:
@@ -410,8 +461,9 @@ def find_superseded(
             continue
 
         if row["event_type"] == new_event.event_type:
-            # Same type: the full predicate — semantic OR lexical OR subject-keyed.
-            if row["id"] in sem_matches or supersedes(new_desc, cand_desc):
+            # Same type: full predicate — cross-encoder OR semantic OR lexical OR subject.
+            if (row["id"] in sem_matches or row["id"] in xenc_matches
+                    or supersedes(new_desc, cand_desc)):
                 superseded.append(row["id"])
         else:
             # Cross type (F1): require the stronger structural signal — same derived

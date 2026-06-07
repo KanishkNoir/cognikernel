@@ -97,7 +97,9 @@ def session_end(
             ack_stage(conn, job_id, "PARSED", output_ref=f"events:{len(candidates)}")
             ack_stage(conn, job_id, "CLASSIFIED", output_ref=f"events:{len(candidates)}")
             stats = execute_merge(
-                conn, session_id, candidates, embed_events=config.embedding_enabled
+                conn, session_id, candidates,
+                embed_events=config.embedding_enabled,
+                use_cross_encoder=config.cross_encoder_supersession,
             )
             ack_stage(
                 conn,
@@ -394,6 +396,7 @@ def rebuild_from_raw(
                 stats = execute_merge(
                     sidecar_conn, session_id, candidates,
                     embed_events=config.embedding_enabled,
+                    use_cross_encoder=config.cross_encoder_supersession,
                 )
                 _update_symbol_graph(sidecar_conn, project_id, str(project_path), git_diff=None, session_id=session_id)
                 total_extracted += len(candidates)

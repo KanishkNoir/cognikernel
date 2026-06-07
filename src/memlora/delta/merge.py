@@ -86,6 +86,7 @@ def execute_merge(
     session_id: str,
     candidates: list[Event],
     embed_events: bool = False,
+    use_cross_encoder: bool = False,
 ) -> dict:
     """Run the full six-step merge inside a single transaction.
 
@@ -133,7 +134,9 @@ def execute_merge(
                 # Gated supersession is the baseline (temporal + authority +
                 # provenance). `embed_events` (config.embedding_enabled) still
                 # controls whether the semantic axis fires for auto-supersession.
-                sup_ids = find_superseded(conn, event, use_embeddings=embed_events)
+                sup_ids = find_superseded(
+                    conn, event, use_embeddings=embed_events, use_cross_encoder=use_cross_encoder
+                )
                 stats["superseded"] += apply_supersession(conn, row_id, sup_ids)
                 stats["superseded"] += _cross_type_dedup(conn, row_id, event)
 

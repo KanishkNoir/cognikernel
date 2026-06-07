@@ -90,7 +90,8 @@ def _load_corpus():
         if not line:
             continue
         r = json.loads(line)
-        label = 0 if r["relation"] == "unrelated" else 1
+        # 'complementary' (R5) is a hard NEGATIVE — same-area but both-valid, must not supersede.
+        label = 0 if r["relation"] in ("unrelated", "complementary") else 1
         rows.append((r["a"], r["b"], label))
     return rows
 
@@ -104,31 +105,29 @@ def _gold_pairs():
 
 
 def _pick_threshold(probs, labels):
-    """Precision-conservative threshold = the HIGHEST threshold still at max F1 on val.
+    """Precision-biased deployable threshold (R5, no gold-peeking).
 
-    The cross-encoder outputs are bimodal (positives ~0.96, negatives ~0.06). A
-    cleanly-separable val set gives F1=1 across the whole gap, so picking the LOWEST
-    such threshold (the old rule) pins the operating point at the bottom of the gap —
-    far too permissive once REAL same-area negatives (harder than the synthetic ones)
-    appear. Taking the UPPER edge of the max-F1 plateau sits the threshold just below
-    the lowest val positive, which is robust to the easy-negative bias. Not gold-peeking
-    — computed only on the training-distribution val split.
+    Lowest threshold whose VAL precision >= TARGET_PRECISION, maximizing recall there.
+    This only works because the val split now contains COMPLEMENTARY same-area hard
+    negatives (Phase 1): on the old easy-only val, low thresholds trivially hit 0.95
+    precision so this collapsed to ~0 (the F5 failure). With hard negatives present, the
+    precision floor forces a realistic threshold that generalizes to the gold guards.
+    Falls back to the max-precision threshold if none reaches the target.
     """
     import numpy as np
     probs = np.asarray(probs); labels = np.asarray(labels)
-    scored = []
+    best_fallback = (1.0, 0.0, 0.0)  # threshold, precision, recall
     for t in sorted(set(probs.tolist())):
         pred = probs >= t
         tp = int((pred & (labels == 1)).sum()); fp = int((pred & (labels == 0)).sum())
         fn = int((~pred & (labels == 1)).sum())
         prec = tp / (tp + fp) if (tp + fp) else 1.0
         rec = tp / (tp + fn) if (tp + fn) else 0.0
-        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
-        scored.append((f1, float(t), prec, rec))
-    best_f1 = max(s[0] for s in scored)
-    plateau = sorted((s for s in scored if abs(s[0] - best_f1) <= 1e-9), key=lambda s: s[1])
-    _, t, prec, rec = plateau[-1]  # highest threshold on the max-F1 plateau
-    return t, prec, rec
+        if prec >= TARGET_PRECISION:
+            return float(t), prec, rec
+        if prec > best_fallback[1]:
+            best_fallback = (float(t), prec, rec)
+    return best_fallback
 
 
 def main() -> int:

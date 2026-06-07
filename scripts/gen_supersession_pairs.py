@@ -153,6 +153,22 @@ RELATION_SPECS: dict[str, dict] = {
             "should replace the other. Include some easy cross-concern pairs too."
         ),
     },
+    # R5 Phase 1 — the hardest negative class (the cross-encoder's F5 confusion): two
+    # COMPLEMENTARY decisions in the SAME narrow area that BOTH stay true — neither
+    # supersedes the other. This is what a bare cosine (and the first cross-encoder)
+    # gets wrong. Labeled negative (should_supersede = False) by the trainer.
+    "complementary": {
+        "target": 400,
+        "instruction": (
+            "Write a pair of two DIFFERENT but COMPLEMENTARY decisions in the SAME narrow "
+            "area that are BOTH true at once — neither replaces the other. They operate at "
+            "different SCOPES or ASPECTS of the same area. Examples: 'priority-ordered "
+            "routing across tiers' vs 'round-robin within a tier'; 'cache completions for "
+            "1h' vs 'rate-limit at 100 rpm'; 'hash passwords with argon2id' vs 'hash API "
+            "keys with SHA-256'; 'UUID PK on users' vs 'composite PK on the events table'. "
+            "Share area vocabulary heavily but describe distinct, co-existing decisions."
+        ),
+    },
 }
 
 _SYS = (

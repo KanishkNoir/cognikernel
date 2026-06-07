@@ -99,6 +99,12 @@ class Config:
     # candidates" — not about whether to store them or use them for recall.
     embedding_enabled: bool = False
 
+    # R5 — use the learned cross-encoder as an additive supersession candidate axis
+    # (above the always-on temporal/authority/provenance gates). Default off and
+    # fail-open: with the flag off or the ONNX model absent, supersession degrades to
+    # the gated lexical (+optional cosine) baseline. Precision-safe by construction.
+    cross_encoder_supersession: bool = False
+
     # Selects the Stage-2 extraction backend (see VALID_EXTRACTORS). Default
     # `legacy` (the deterministic keyword pipeline) so existing projects are
     # unchanged until they opt in. The `MEMLORA_EXTRACTOR` env var, when set,
@@ -201,6 +207,8 @@ class Config:
             kwargs["deny_retry_window_seconds"] = int(data["deny_retry_window_seconds"])
         if "embedding_enabled" in data:
             kwargs["embedding_enabled"] = bool(data["embedding_enabled"])
+        if "cross_encoder_supersession" in data:
+            kwargs["cross_encoder_supersession"] = bool(data["cross_encoder_supersession"])
         if "extractor" in data:
             extractor = str(data["extractor"]).lower()
             if extractor not in VALID_EXTRACTORS:
