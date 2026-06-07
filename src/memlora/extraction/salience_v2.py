@@ -30,6 +30,13 @@ LABELS: tuple[str, ...] = (
 _HEAD_PATH = Path(__file__).resolve().parent / "heads" / "salience_v2.npz"
 _MAX_TOKENS = 512
 
+# R2 — confidence floor. A non-NOISE prediction must clear this softmax probability,
+# else the head is too unsure and the candidate is dropped as NOISE. Primary lever
+# against v2-broad over-capture (Relay: 379 active for ~18 facts). Coarse de-noiser,
+# not a calibrated probability — temperature calibration is the follow-on. Env-tunable
+# via MEMLORA_SIFT_FLOOR; 0.0 disables it.
+_FLOOR = float(os.environ.get("MEMLORA_SIFT_FLOOR", "0.5"))
+
 _lock = threading.Lock()
 _loaded = False
 _sess = None
@@ -113,7 +120,13 @@ def classify_scored(text: str) -> Optional[tuple[str, float]]:
     p = np.exp(z)
     p = p / p.sum()
     top = int(np.argmax(p))
-    return ((_labels or LABELS)[top], float(p[top]))
+    label = (_labels or LABELS)[top]
+    conf = float(p[top])
+    # R2 floor: an unsure non-NOISE prediction is dropped as NOISE rather than minted
+    # as a durable typed fact. ("NOISE", conf) is an explicit drop the caller honors.
+    if label != "NOISE" and conf < _FLOOR:
+        return ("NOISE", conf)
+    return (label, conf)
 
 
 def classify(text: str) -> Optional[str]:
