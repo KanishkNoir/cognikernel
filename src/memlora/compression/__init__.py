@@ -3,7 +3,6 @@
 Public API:
   compute_weight        — full multiplicative weight formula
   greedy_fill           — knapsack fill by weight within token budget
-  compress_field_level  — post-fill field truncation
   estimate_tokens       — len/4 token estimate for a single event
   recency_factor        — hyperbolic decay: 1/(1+α·t)
   repetition_factor     — logarithmic repetition boost
@@ -14,7 +13,7 @@ Public API:
   TYPE_MULTIPLIER       — per-type retrieval probability multipliers
 """
 from memlora.compression.centrality import centrality_factor, compute_file_centrality
-from memlora.compression.greedy import compress_field_level, greedy_fill
+from memlora.compression.greedy import greedy_fill
 from memlora.compression.recency import recency_factor
 from memlora.compression.token_count import estimate_tokens
 from memlora.compression.weights import (
@@ -30,7 +29,6 @@ __all__ = [
     "TYPE_MULTIPLIER",
     "activity_factor",
     "centrality_factor",
-    "compress_field_level",
     "compute_file_centrality",
     "compute_weight",
     "estimate_tokens",

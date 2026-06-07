@@ -97,48 +97,6 @@ def greedy_fill(events: list["Event"], budget_tokens: int) -> list["Event"]:
     return selected
 
 
-def compress_field_level(
-    events: list["Event"],
-    target_tokens: int,
-) -> list["Event"]:
-    """Field-level compression applied after greedy fill when budget is tight.
-
-    Compression stages (never applied to mandatory types at stage 1/2,
-    never applied to CONSTRAINT_HARD at stage 2):
-      1. Trim ``affected_files`` to first 3 entries.
-      2. Truncate ``rationale`` to 80 characters.
-
-    Never drops ``description`` and never compresses mandatory event types.
-    """
-    events = [copy.copy(e) for e in events]
-    for e in events:
-        e.payload = dict(e.payload)
-
-    if sum(estimate_tokens(e) for e in events) <= target_tokens:
-        return events
-
-    # Stage 1: trim affected_files (skip mandatory types)
-    for e in events:
-        if e.event_type in _MANDATORY_TYPES:
-            continue
-        files = e.payload.get("affected_files", [])
-        if len(files) > 3:
-            e.payload["affected_files"] = files[:3]
-
-    if sum(estimate_tokens(e) for e in events) <= target_tokens:
-        return events
-
-    # Stage 2: truncate rationale (skip CONSTRAINT_HARD)
-    for e in events:
-        if e.event_type == "CONSTRAINT_HARD":
-            continue
-        rationale = e.payload.get("rationale", "")
-        if len(rationale) > 80:
-            e.payload["rationale"] = rationale[:77] + "..."
-
-    return events
-
-
 # ── internal helpers ──────────────────────────────────────────────────────────
 
 def _compress_mandatory(
