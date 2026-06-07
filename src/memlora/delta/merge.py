@@ -33,6 +33,7 @@ from memlora.delta.decay import (
 from memlora.delta.supersede import (
     apply_supersession,
     find_superseded,
+    jaccard_similarity,
     supersedes,
 )
 from memlora.storage.events import (
@@ -58,6 +59,15 @@ _DEDUP_PRIORITY: dict[str, int] = {
     "CONSTRAINT_HARD": 2,
     "APPROACH_ABANDONED": 3,               # lowest
 }
+
+# R3 — echo fold. A NEAR-IDENTICAL same-type restatement (a recitation of an existing
+# fact, common in recall-heavy sessions) is folded into its canonical: bump
+# mention_count instead of minting a near-dup OR — worse — letting the newer recitation
+# supersede the original. Threshold is deliberately HIGH (well above supersession's 0.6)
+# so genuine refinements (e.g. "120 lines" -> "300 lines", Jaccard ~0.6) are NOT folded;
+# only verbatim-ish echoes. Lossless: raw_evidence retains the echo and its provenance is
+# linked to the canonical, exactly like exact-hash dedup.
+_ECHO_JACCARD: float = 0.85
 
 
 def merge_event(conn: sqlite3.Connection, event: Event) -> tuple[str, int]:
@@ -101,6 +111,15 @@ def execute_merge(
     try:
         with conn:
             for event in candidates:
+                # R3: fold a near-identical restatement (echo) into its canonical
+                # BEFORE supersession can fire — bump mention_count, never mint a
+                # near-dup or let a recitation supersede the original. Lossless.
+                echo_id = _find_echo(conn, event)
+                if echo_id is not None:
+                    _bump_event(conn, echo_id, event)
+                    event.id = echo_id
+                    stats["updated"] += 1
+                    continue
                 outcome, row_id = _insert_or_update(conn, event)
                 stats[outcome] += 1
                 event.id = row_id  # needed by cascade_component_status
@@ -225,6 +244,61 @@ def _insert_or_update(
             extractor_version="memlora.v2",
         )
     return outcome, row_id
+
+
+def _find_echo(conn: sqlite3.Connection, event: Event) -> int | None:
+    """Return the id of a near-identical active same-type event (a restatement), else None.
+
+    Only very-high lexical overlap (>= _ECHO_JACCARD) qualifies, so refinements and
+    distinct facts are never folded. Exact-hash dups are excluded here (handled by
+    _insert_or_update's UNIQUE-constraint path)."""
+    new_desc = event.payload.get("description", "")
+    if not new_desc.strip():
+        return None
+    rows = conn.execute(
+        """
+        SELECT id, payload FROM events
+        WHERE project_id    = ?
+          AND event_type    = ?
+          AND archived      = 0
+          AND superseded_by IS NULL
+          AND content_hash != ?
+        """,
+        (event.project_id, event.event_type, event.content_hash),
+    ).fetchall()
+    best_id, best_j = None, _ECHO_JACCARD
+    for row in rows:
+        cand = json.loads(row["payload"]).get("description", "")
+        j = jaccard_similarity(new_desc, cand)
+        if j >= best_j:
+            best_j, best_id = j, row["id"]
+    return best_id
+
+
+def _bump_event(conn: sqlite3.Connection, event_id: int, event: Event) -> None:
+    """Fold an echo into its canonical: bump mention_count + weight, link provenance.
+
+    Mirrors the exact-hash dedup path in _insert_or_update — the recitation strengthens
+    the canonical instead of creating a near-duplicate row."""
+    conn.execute(
+        """
+        UPDATE events
+        SET mention_count = mention_count + 1,
+            weight        = MIN(weight + ?, ?),
+            evidence_id   = COALESCE(evidence_id, ?)
+        WHERE id = ?
+        """,
+        (WEIGHT_INCREMENT_ON_DEDUP, MAX_EVENT_WEIGHT, event.evidence_id, event_id),
+    )
+    if event.evidence_id is not None:
+        from memlora.storage.evidence import link_event_provenance
+
+        link_event_provenance(
+            conn,
+            event_id=event_id,
+            evidence_id=event.evidence_id,
+            extractor_version="memlora.v2",
+        )
 
 
 def _apply_decay_inner(
