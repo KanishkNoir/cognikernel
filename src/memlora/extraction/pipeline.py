@@ -238,6 +238,21 @@ def _use_head_extractor() -> bool:
 _MIN_CONTENT_WORDS = 4
 _CONTENT_WORD_RE = re.compile(r"[a-z0-9]{3,}")
 
+# R1 — memory-meta self-reference: the assistant narrating CogniKernel's OWN memory
+# ("the session context has…", "the recall surfaces…", "graveyard records…") rather
+# than stating a project fact. These are extraction echoes from recall-heavy sessions.
+# We DEMOTE (not drop): weight collapses so they fall off the budget-ranked block while
+# staying in the store — real facts survive via their canonical (non-meta) capture, so
+# the retention gate stays green. Terms chosen to NOT match real project facts (e.g.
+# 'in-memory'/'in-process' decisions are excluded; 'graveyard' is a CogniKernel-only term).
+_MEMORY_META_RE = re.compile(
+    r"\b(session[- ]context|injection block|injected (?:session )?context|cognikernel|"
+    r"stop hook|graveyard|pending confirmation|memory confirms|recorded in memory|"
+    r"from memory|the recall (?:surfaces|surfaced|returns|returned|results|mentions|shows|tool))\b",
+    re.IGNORECASE,
+)
+_META_DEMOTE = 0.15  # weight multiplier for memory-meta sentences
+
 
 def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None) -> list[Event] | None:
     """Broad mode: classify every prose sentence; keep non-NOISE as typed events.
@@ -282,6 +297,9 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
         if chash in seen:
             continue
         seen.add(chash)
+        is_meta = bool(_MEMORY_META_RE.search(desc))
+        prov = provenance + "+meta" if is_meta else provenance
+        weight = conf * (_META_DEMOTE if is_meta else 1.0)
         ev = Event(
             project_id=session_meta.project_id,
             session_id=session_meta.session_id,
@@ -289,9 +307,9 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
             payload={
                 "description": desc_norm, "rationale": "", "confidence": conf,
                 "source_role": s.role, "matched_phrase": "HEAD", "affected_files": [],
-                "authority": default_authority_for_role(s.role), "provenance": provenance,
+                "authority": default_authority_for_role(s.role), "provenance": prov,
             },
-            content_hash=chash, weight=conf,
+            content_hash=chash, weight=weight,
         )
         augment_with_triple(ev)
         events.append(ev)
@@ -325,7 +343,10 @@ def _filter_and_retype_with_head(events: list[Event], head=None) -> list[Event] 
             label = "THREAD_CLOSE" if _THREAD_CLOSE_VERB.search(desc) else "THREAD_OPEN"
         e.event_type = label
         e.payload["confidence"] = conf
-        e.payload["provenance"] = (e.payload.get("provenance", "") + "+head").lstrip("+")
+        suffix = "+head+meta" if _MEMORY_META_RE.search(desc) else "+head"
+        if "+meta" in suffix:
+            e.weight = (e.weight or conf) * _META_DEMOTE
+        e.payload["provenance"] = (e.payload.get("provenance", "") + suffix).lstrip("+")
         kept.append(e)
     return kept
 
