@@ -403,41 +403,50 @@ def _write_agent_commands(project_path: Path) -> None:
 
 
 def _cmd_install_heads(args: argparse.Namespace) -> None:
-    """Copy the v2 encoder ONNX body + tokenizer into the canonical install path.
+    """Copy the trained encoder ONNX bodies + tokenizers into the canonical install paths.
 
-    The 133 MB body.onnx is gitignored (regenerable), so it is not shipped. This
-    places it (and tokenizer.json) at <MEMLORA_DIR>/models/salience_v2/ — the first
-    location extraction.salience_v2._body_dir() checks — so v2 extraction resolves the
-    head outside a repo checkout (otherwise it silently fails open to legacy).
+    The 133 MB body.onnx files are gitignored (regenerable), so they are not shipped. This
+    places them at <MEMLORA_DIR>/models/{salience_v2, supersession_xenc}/ — the locations
+    extraction.salience_v2 and delta.supersede_xenc resolve — so v2 extraction AND the
+    cross-encoder supersession axis work outside a repo checkout (else they fail open to
+    legacy / lexical). Each head is independent: a missing source is skipped, not fatal.
     """
     import os
     import shutil
 
-    repo_default = Path(__file__).resolve().parents[3] / "models" / "salience_setfit" / "onnx"
-    src = Path(args.source).resolve() if args.source else repo_default
-    dest = (
-        Path(os.environ.get("MEMLORA_DIR") or (Path.home() / ".memlora"))
-        / "models" / "salience_v2"
-    )
-    needed = ["body.onnx", "tokenizer.json"]
-    missing = [f for f in needed if not (src / f).exists()]
-    if missing:
-        print(f"source is missing {missing} in {src}", file=sys.stderr)
-        print("Export the body first: python scripts/export_setfit_onnx.py", file=sys.stderr)
-        print("or point --source at a dir that has body.onnx + tokenizer.json.", file=sys.stderr)
-        sys.exit(1)
+    repo_models = Path(__file__).resolve().parents[3] / "models"
+    models_root = Path(os.environ.get("MEMLORA_DIR") or (Path.home() / ".memlora")) / "models"
+    heads = [
+        ("v2 salience head", repo_models / "salience_setfit" / "onnx", "salience_v2"),
+        ("supersession cross-encoder", repo_models / "supersession_xenc" / "onnx", "supersession_xenc"),
+    ]
+    if args.source:  # explicit override installs just the salience head from that dir
+        heads = [("v2 salience head", Path(args.source).resolve(), "salience_v2")]
 
-    dest.mkdir(parents=True, exist_ok=True)
-    for f in needed:
-        target = dest / f
-        if target.exists() and not args.force:
-            print(f"  exists (skip): {target}  — use --force to overwrite")
+    needed = ["body.onnx", "tokenizer.json"]
+    installed_any = False
+    for label, src, dest_name in heads:
+        if not all((src / f).exists() for f in needed):
+            print(f"  skip [{label}]: source missing in {src} "
+                  "(export via scripts/export_setfit_onnx.py / export_xenc_onnx.py)")
             continue
-        shutil.copy2(src / f, target)
-        print(f"  installed: {target}  ({(src / f).stat().st_size / 1e6:.1f} MB)")
-    print(f"\nv2 encoder body installed to {dest}")
-    print('Enable it with  extractor = "v2-broad"  in .memlora/config.toml '
-          "(or MEMLORA_EXTRACTOR=v2-broad).")
+        dest = models_root / dest_name
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in needed:
+            target = dest / f
+            if target.exists() and not args.force:
+                print(f"  exists (skip): {target}  — use --force to overwrite")
+                continue
+            shutil.copy2(src / f, target)
+            print(f"  installed [{label}]: {target}  ({(src / f).stat().st_size / 1e6:.1f} MB)")
+        installed_any = True
+
+    if not installed_any:
+        print("no head artifacts found to install", file=sys.stderr)
+        sys.exit(1)
+    print(f"\nheads installed under {models_root}")
+    print('Enable in .memlora/config.toml:  extractor = "v2-broad"  and '
+          "(optional) cross_encoder_supersession = true.")
 
 
 def _cmd_init(args: argparse.Namespace) -> None:
@@ -557,7 +566,14 @@ def _cmd_init(args: argparse.Namespace) -> None:
             '# when artifacts are absent, so a non-legacy value is always safe.\n'
             '# New projects default to the best mode (v2-broad). Install the ONNX body\n'
             '# once with `python -m memlora install-heads`, or set this to "legacy".\n'
-            'extractor = "v2-broad"\n',
+            'extractor = "v2-broad"\n'
+            '\n'
+            '# Cross-encoder supersession axis (R5): catches a few paraphrased\n'
+            '# corrections lexical misses, precision-safe (additive above the\n'
+            '# temporal/authority/provenance gates; fail-open to lexical if the\n'
+            '# cross-encoder body is not installed). Needs `install-heads` + warm\n'
+            '# (embeddings) and adds some Stop-hook cost. Set false to use lexical only.\n'
+            'cross_encoder_supersession = true\n',
             encoding="utf-8",
         )
 
