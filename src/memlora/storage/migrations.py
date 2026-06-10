@@ -25,15 +25,34 @@ def _bootstrap_meta(conn: sqlite3.Connection) -> None:
 
     This is the chicken-and-egg bootstrap: we need meta to know which
     migrations to run, but meta is also created inside migration 001.
-    CREATE TABLE IF NOT EXISTS makes both calls safe.
+
+    Reads the sqlite_master catalog first (zero write cost) to detect the
+    fully-bootstrapped case (meta table exists + both rows present). This
+    makes `run_migrations` safe to call concurrently with the background
+    process-jobs worker — doctor/show won't fight the worker for the write
+    lock when nothing actually needs writing.
     """
+    # Fast path: meta table and both seed rows already exist — no writes needed.
+    try:
+        meta_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
+        ).fetchone()
+        if meta_exists:
+            rows = conn.execute(
+                "SELECT key FROM meta WHERE key IN ('schema_version','projection_version')"
+            ).fetchall()
+            if len(rows) >= 2:
+                return  # fully bootstrapped, skip all writes
+    except Exception:
+        pass  # if the read fails, fall through to the full bootstrap
+
+    # Slow path: table or seed rows are missing — do the writes.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
     conn.execute(
         "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '0')"
     )
-    # Fresh databases start at the current projection version — no rebuild needed.
     conn.execute(
         "INSERT OR IGNORE INTO meta (key, value) VALUES ('projection_version', ?)",
         (str(EXPECTED_PROJECTION_VERSION),),
@@ -47,6 +66,10 @@ def _run_schema_migrations(conn: sqlite3.Connection) -> None:
             "SELECT value FROM meta WHERE key = 'schema_version'"
         ).fetchone()[0]
     )
+
+    # Fast path: already up-to-date — no writes, no file I/O, no lock contention.
+    if current >= EXPECTED_SCHEMA_VERSION:
+        return
 
     for migration_file in sorted(_MIGRATIONS_DIR.glob("*.sql")):
         version = int(migration_file.stem.split("_")[0])
