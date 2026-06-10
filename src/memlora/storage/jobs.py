@@ -104,6 +104,12 @@ def claim_next_job(
     claimant: str,
     now_ms: int | None = None,
 ) -> ExtractionJob | None:
+    """Claim the oldest queued job for `job_category`. Returns None if none available.
+
+    Uses optimistic concurrency: the UPDATE includes `AND state IN (...)` so that
+    if two workers race on the same row, only the first commit succeeds (rowcount=1)
+    and the second sees rowcount=0 and retries. Safe under concurrent SQLite writers.
+    """
     now = now_ms if now_ms is not None else _now_ms()
     with conn:
         row = conn.execute(
@@ -118,14 +124,17 @@ def claim_next_job(
         ).fetchone()
         if row is None:
             return None
-        conn.execute(
+        result = conn.execute(
             """
             UPDATE extraction_jobs
             SET state='claimed', claimed_by=?, claimed_at=?, updated_at=?
-            WHERE id=?
+            WHERE id=? AND state IN ('queued', 'retryable_failure')
             """,
             (claimant, now, now, row["id"]),
         )
+        if result.rowcount == 0:
+            # Another worker claimed it between our SELECT and UPDATE — skip.
+            return None
     return get_job(conn, row["id"])
 
 

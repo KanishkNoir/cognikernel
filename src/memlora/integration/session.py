@@ -160,6 +160,170 @@ def json_like_stats(stats: dict[str, Any]) -> str:
     return json.dumps(stats, sort_keys=True, separators=(",", ":"))
 
 
+def session_capture(
+    project_path: str | Path,
+    session_id: str,
+    raw_jsonl: str,
+    config: Config | None = None,
+    git_diff: str | None = None,
+    evidence_source_type: str = "jsonl_transcript",
+    evidence_source_path: str = "",
+) -> dict[str, Any]:
+    """Store evidence + enqueue extraction job. Returns immediately without extracting.
+
+    This is the capture half of the I4 decoupled pipeline. It performs the fast,
+    I/O-only work: delta evidence storage (I3 chain) + job enqueue. The slow work
+    (extract_session + execute_merge + symbol graph) is handled by process_jobs(),
+    which runs as a detached worker subprocess so the Stop hook returns in <500ms.
+
+    Returns {"job_id": int, "evidence_id": int, "delta_mode": bool}.
+    """
+    from memlora.storage.cursors import get_cursor, slice_storage_delta
+    from memlora.storage.evidence import store_evidence
+    from memlora.storage.jobs import enqueue_extraction, recover_stuck_running_jobs
+
+    config = config or Config.load(project_path=project_path)
+    project_id = hash_project_path(project_path)
+    db_path = get_db_path(config, project_id)
+
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        recover_stuck_running_jobs(conn)
+        cursor = get_cursor(conn, project_id, session_id)
+
+    storage_bytes, is_delta_store = slice_storage_delta(raw_jsonl, cursor)
+    prev_ev_id = cursor.last_evidence_id if (is_delta_store and cursor) else None
+
+    with get_connection(db_path) as conn:
+        evidence_id = store_evidence(
+            conn,
+            project_id=project_id,
+            session_id=session_id,
+            source_type=evidence_source_type,
+            content=storage_bytes if is_delta_store else raw_jsonl,
+            source_path=evidence_source_path,
+            metadata={"git_diff": bool(git_diff), "chain_delta": is_delta_store},
+            prev_evidence_id=prev_ev_id,
+        )
+        job_id = enqueue_extraction(
+            conn,
+            project_id=project_id,
+            session_id=session_id,
+            evidence_id=evidence_id,
+            job_category="extract.transcript",
+        )
+    _log.info("session_capture.done", extra={
+        "session_id": session_id, "job_id": job_id,
+        "evidence_id": evidence_id, "is_delta": is_delta_store,
+    })
+    return {"job_id": job_id, "evidence_id": evidence_id, "delta_mode": is_delta_store}
+
+
+def process_jobs(
+    project_path: str | Path,
+    config: Config | None = None,
+    max_jobs: int = 50,
+) -> dict[str, Any]:
+    """Claim and process all queued extraction jobs for a project.
+
+    This is the processing half of the I4 decoupled pipeline. Runs as a detached
+    subprocess spawned by `memlora capture`. Processes jobs in oldest-first order,
+    advances the ingest cursor after each successful merge, then exits.
+
+    Returns summary stats: {"processed": int, "failed": int, "replayed": int}.
+    """
+    import os
+    from memlora.delta.merge import execute_merge
+    from memlora.extraction.pipeline import SessionMetadata, extract_session
+    from memlora.extraction.jsonl_converter import jsonl_to_transcript
+    from memlora.storage.cursors import get_cursor, save_cursor, slice_jsonl_for_extraction
+    from memlora.storage.evidence import load_full_transcript
+    from memlora.storage.jobs import (
+        ack_stage, claim_next_job, fail_job,
+        list_jobs, reclaim_stale_jobs, recover_stuck_running_jobs, replay_dead_letter,
+    )
+
+    config = config or Config.load(project_path=project_path)
+    project_id = hash_project_path(project_path)
+    db_path = get_db_path(config, project_id)
+    claimant = f"worker-{os.getpid()}"
+    processed = failed = replayed = 0
+
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        reclaim_stale_jobs(conn, stale_after_ms=2 * 60 * 1000)
+        recover_stuck_running_jobs(conn, stale_after_ms=2 * 60 * 1000)
+        # Promote dead-lettered jobs back to queued so they're re-processed.
+        dead_jobs = list_jobs(conn, project_id, state="dead_lettered", limit=max_jobs)
+        for dj in dead_jobs:
+            try:
+                replay_dead_letter(conn, dj.id)
+                replayed += 1
+            except Exception:
+                pass
+
+    for _ in range(max_jobs):
+        with get_connection(db_path) as conn:
+            job = claim_next_job(conn, "extract.transcript", claimant)
+        if job is None:
+            break
+
+        try:
+            with get_connection(db_path) as conn:
+                full_bytes = load_full_transcript(conn, job.evidence_id)
+                cursor = get_cursor(conn, project_id, job.session_id)
+
+            raw_jsonl = full_bytes.decode("utf-8", errors="replace")
+            extraction_slice, new_line_count, new_anchor = slice_jsonl_for_extraction(
+                raw_jsonl, cursor
+            )
+            transcript = jsonl_to_transcript(extraction_slice)
+
+            now = int(time.time() * 1000)
+            session_meta = SessionMetadata(
+                project_id=project_id,
+                session_id=job.session_id,
+                started_at=now,
+                ended_at=now,
+            )
+            candidates = extract_session(
+                transcript, session_meta, extractor=config.extractor
+            )
+            for event in candidates:
+                event.evidence_id = job.evidence_id
+
+            with get_connection(db_path) as conn:
+                ack_stage(conn, job.id, "PARSED", output_ref=f"events:{len(candidates)}")
+                ack_stage(conn, job.id, "CLASSIFIED", output_ref=f"events:{len(candidates)}")
+                stats = execute_merge(
+                    conn, job.session_id, candidates,
+                    embed_events=config.embedding_enabled,
+                    use_cross_encoder=config.cross_encoder_supersession,
+                )
+                ack_stage(conn, job.id, "MERGED", output_ref=json_like_stats(stats))
+                save_cursor(conn, project_id, job.session_id, new_line_count, new_anchor,
+                            last_evidence_id=job.evidence_id)
+                _update_symbol_graph(conn, project_id, str(project_path),
+                                     git_diff=None, session_id=job.session_id)
+                ack_stage(conn, job.id, "PROJECTED", output_ref="projection:invalidated")
+                ack_stage(conn, job.id, "COMPLETED", output_ref="process_jobs")
+            processed += 1
+            _log.info("process_jobs.job_done", extra={"job_id": job.id, "session_id": job.session_id})
+
+        except Exception as exc:
+            with get_connection(db_path) as conn:
+                try:
+                    fail_job(conn, job.id, "EXTRACTOR_BUG", str(exc))
+                except Exception:
+                    pass
+            failed += 1
+            _log.warning("process_jobs.job_failed", extra={"job_id": job.id, "error": str(exc)})
+
+    summary = {"processed": processed, "failed": failed, "replayed": replayed}
+    _log.info("process_jobs.done", extra=summary)
+    return summary
+
+
 def replay_job(
     project_path: str | Path,
     job_id: int,

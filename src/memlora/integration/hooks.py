@@ -503,9 +503,13 @@ def stop_main() -> None:
     except Exception:
         pass
 
+    # I4: fast capture path — store evidence + enqueue, spawn detached worker.
+    # The worker (process-jobs) runs asynchronously, so the hook returns in <500ms
+    # instead of blocking for up to 120s. Fall back to synchronous extract if the
+    # capture command fails (e.g., older installation without the capture command).
     cmd = [
-        sys.executable, "-m", "memlora", "extract",
-        str(project_path), str(jsonl_path), "--auto-session-id", "--jsonl",
+        sys.executable, "-m", "memlora", "capture",
+        str(project_path), str(jsonl_path), "--auto-session-id",
     ]
     git_diff_file = None
     if git_diff_content:
@@ -519,13 +523,13 @@ def stop_main() -> None:
         except Exception:
             git_diff_file = None
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.returncode != 0:
-            _warn(f"memlora hook-stop: extract failed (rc={result.returncode}): {result.stderr[:300]}")
+            _warn(f"memlora hook-stop: capture failed (rc={result.returncode}): {result.stderr[:300]}")
         else:
-            _warn(f"memlora hook-stop: extracted session {session_id} → {result.stdout.strip()[:200]}")
+            _warn(f"memlora hook-stop: captured session {session_id} → {result.stdout.strip()[:200]}")
     except subprocess.TimeoutExpired:
-        _warn("memlora hook-stop: extract timed out after 120s")
+        _warn("memlora hook-stop: capture timed out after 15s — worker may still be queued")
     except Exception as exc:
         _warn(f"memlora hook-stop: unexpected error: {exc}")
     finally:

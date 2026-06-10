@@ -101,6 +101,32 @@ def main() -> None:
         help="Optional path to a git-diff file to augment extraction",
     )
 
+    # ── capture ───────────────────────────────────────────────────────────────
+    p_capture = sub.add_parser(
+        "capture",
+        help="Store evidence + enqueue job, then spawn background worker (I4 fast path)",
+    )
+    p_capture.add_argument("project_path", help="Path to the project root")
+    p_capture.add_argument("transcript_file", help="Path to the JSONL session file")
+    p_capture.add_argument("--auto-session-id", action="store_true",
+                           help="Derive session ID from the JSONL filename stem")
+    p_capture.add_argument("--session-id", default=None, metavar="ID")
+    p_capture.add_argument("--jsonl", action="store_true",
+                           help="Transcript is a Claude Code JSONL file (default: yes for capture)")
+    p_capture.add_argument("--git-diff", metavar="FILE",
+                           help="Optional path to a git-diff file")
+    p_capture.add_argument("--no-spawn", action="store_true",
+                           help="Store evidence + enqueue only; do not spawn the worker subprocess")
+
+    # ── process-jobs ──────────────────────────────────────────────────────────
+    p_pjobs = sub.add_parser(
+        "process-jobs",
+        help="Claim and process queued extraction jobs (background worker for I4)",
+    )
+    p_pjobs.add_argument("project_path", help="Path to the project root")
+    p_pjobs.add_argument("--max-jobs", type=int, default=50, metavar="N",
+                         help="Max jobs to process in one run (default 50)")
+
     # ── show ──────────────────────────────────────────────────────────────────
     p_show = sub.add_parser("show", help="Display current project state")
     p_show.add_argument("project_path", help="Path to the project root")
@@ -232,6 +258,10 @@ def main() -> None:
         _cmd_init(args)
     elif args.command == "extract":
         _cmd_extract(args)
+    elif args.command == "capture":
+        _cmd_capture(args)
+    elif args.command == "process-jobs":
+        _cmd_process_jobs(args)
     elif args.command == "show":
         _cmd_show(args)
     elif args.command == "doctor":
@@ -714,6 +744,65 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         evidence_source_path="" if args.transcript_file == "-" else str(Path(args.transcript_file).resolve()),
     )
     print(json.dumps(stats, indent=2))
+
+
+def _spawn_worker(project_path: str) -> None:
+    """Spawn process-jobs as a detached background process (platform-aware)."""
+    import os
+    cmd = [sys.executable, "-m", "memlora", "process-jobs", project_path]
+    kwargs: dict = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if sys.platform == "win32":
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        subprocess.Popen(cmd, **kwargs)
+    except Exception as exc:
+        print(f"memlora capture: warning — failed to spawn worker: {exc}", file=sys.stderr)
+
+
+def _cmd_capture(args: argparse.Namespace) -> None:
+    """Store evidence + enqueue, then spawn detached worker (I4 fast path)."""
+    session_id: str | None = getattr(args, "session_id", None)
+    auto = getattr(args, "auto_session_id", False)
+    if auto:
+        session_id = Path(args.transcript_file).stem
+    if not session_id:
+        print("ERROR: provide --session-id or --auto-session-id.", file=sys.stderr)
+        sys.exit(1)
+
+    raw_jsonl = Path(args.transcript_file).read_text(encoding="utf-8")
+
+    git_diff: str | None = None
+    if getattr(args, "git_diff", None):
+        git_diff = Path(args.git_diff).read_text(encoding="utf-8")
+
+    from memlora.integration.session import session_capture
+    result = session_capture(
+        args.project_path,
+        session_id,
+        raw_jsonl,
+        git_diff=git_diff,
+        evidence_source_type="jsonl_transcript",
+        evidence_source_path=str(Path(args.transcript_file).resolve()),
+    )
+    print(json.dumps(result))
+
+    if not getattr(args, "no_spawn", False):
+        _spawn_worker(str(Path(args.project_path).resolve()))
+
+
+def _cmd_process_jobs(args: argparse.Namespace) -> None:
+    """Claim and process queued extraction jobs (detached worker entry point)."""
+    from memlora.integration.session import process_jobs
+    summary = process_jobs(args.project_path, max_jobs=args.max_jobs)
+    print(json.dumps(summary))
 
 
 def _cmd_show(args: argparse.Namespace) -> None:
