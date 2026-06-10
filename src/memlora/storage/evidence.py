@@ -23,6 +23,7 @@ class RawEvidence:
     original_size_bytes: int
     stored_size_bytes: int
     metadata: dict[str, Any]
+    prev_evidence_id: int | None = None
 
 
 def store_evidence(
@@ -34,8 +35,14 @@ def store_evidence(
     source_path: str = "",
     metadata: dict[str, Any] | None = None,
     captured_at: int | None = None,
+    prev_evidence_id: int | None = None,
 ) -> int:
-    """Store compressed source evidence and return its stable row id."""
+    """Store compressed source evidence and return its stable row id.
+
+    `prev_evidence_id` chains this chunk to the previous one for delta evidence
+    (I3). NULL = chain root (full content). Reconstruction: follow the chain
+    root→leaf, concatenate all content_blob bytes to recover the full transcript.
+    """
     content_bytes = content.encode("utf-8") if isinstance(content, str) else content
     captured = captured_at if captured_at is not None else int(time.time() * 1000)
     digest = hashlib.sha256(content_bytes).hexdigest()
@@ -47,8 +54,8 @@ def store_evidence(
         INSERT OR IGNORE INTO raw_evidence
             (project_id, session_id, source_type, source_path, captured_at,
              content_sha256, content_encoding, content_blob,
-             original_size_bytes, stored_size_bytes, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, 'zlib', ?, ?, ?, ?)
+             original_size_bytes, stored_size_bytes, metadata, prev_evidence_id)
+        VALUES (?, ?, ?, ?, ?, ?, 'zlib', ?, ?, ?, ?, ?)
         """,
         (
             project_id,
@@ -61,6 +68,7 @@ def store_evidence(
             len(content_bytes),
             len(compressed),
             metadata_json,
+            prev_evidence_id,
         ),
     )
     conn.commit()
@@ -69,6 +77,53 @@ def store_evidence(
         (project_id, digest),
     ).fetchone()
     return row["id"]
+
+
+def load_full_transcript(conn: sqlite3.Connection, evidence_id: int) -> bytes:
+    """Reconstruct the full transcript by following the prev_evidence_id chain.
+
+    For a chain root (prev_evidence_id IS NULL), returns the stored content
+    directly. For delta chunks, walks the chain root→leaf and concatenates
+    all content_blob bytes in order, producing a byte-exact reconstruction of
+    the original growing JSONL transcript.
+
+    Raises ValueError if any chunk in the chain is missing. This preserves the
+    audit invariant: same evidence_id + extractor version => same extracted
+    events regardless of whether the evidence was stored as a full blob or a
+    chain of deltas.
+    """
+    chunks: list[bytes] = []
+    visited: set[int] = set()
+    current_id: int | None = evidence_id
+
+    # Collect the chain in reverse (leaf → root), then reverse.
+    chain_ids: list[int] = []
+    while current_id is not None:
+        if current_id in visited:
+            raise ValueError(f"Cycle detected in evidence chain at id={current_id}")
+        visited.add(current_id)
+        row = conn.execute(
+            "SELECT id, content_blob, content_encoding, prev_evidence_id FROM raw_evidence WHERE id=?",
+            (current_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Evidence chain broken: id={current_id} not found")
+        chain_ids.append(current_id)
+        current_id = row["prev_evidence_id"]
+
+    chain_ids.reverse()  # root first
+
+    for cid in chain_ids:
+        row = conn.execute(
+            "SELECT content_blob, content_encoding FROM raw_evidence WHERE id=?",
+            (cid,),
+        ).fetchone()
+        blob = row["content_blob"]
+        if row["content_encoding"] == "zlib":
+            blob = zlib.decompress(blob)
+        chunks.append(blob)
+
+    return b"".join(chunks)
 
 
 def load_evidence(conn: sqlite3.Connection, evidence_id: int) -> RawEvidence | None:
@@ -162,4 +217,5 @@ def _row_to_evidence(row: sqlite3.Row) -> RawEvidence:
         original_size_bytes=row["original_size_bytes"],
         stored_size_bytes=row["stored_size_bytes"],
         metadata=json.loads(row["metadata"]),
+        prev_evidence_id=row["prev_evidence_id"] if "prev_evidence_id" in row.keys() else None,
     )

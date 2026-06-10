@@ -52,7 +52,10 @@ def session_end(
     """
     from memlora.extraction.pipeline import SessionMetadata, extract_session
     from memlora.delta.merge import execute_merge
-    from memlora.storage.cursors import get_cursor, save_cursor, slice_jsonl_for_extraction
+    from memlora.storage.cursors import (
+        get_cursor, save_cursor,
+        slice_jsonl_for_extraction, slice_storage_delta,
+    )
     from memlora.storage.evidence import store_evidence
     from memlora.storage.jobs import ack_stage, enqueue_extraction, fail_job, recover_stuck_running_jobs
 
@@ -60,10 +63,9 @@ def session_end(
     project_id = hash_project_path(project_path)
     db_path = get_db_path(config, project_id)
 
-    # Delta extraction: only process new JSONL lines since the last firing.
-    # The transcript argument carries the full JSONL (lossless for evidence storage).
-    # We slice it to the overlap window + new lines for extraction only.
-    # Fail-open: on cursor miss or compaction, falls back to full extraction.
+    # I2: delta extraction — process only new JSONL lines since last firing.
+    # I3: delta storage — store only new lines, chain-linked to previous chunk.
+    # Fail-open: cursor miss or compaction detected -> full extraction + full store.
     raw_jsonl = evidence_content if isinstance(evidence_content, str) else transcript
     with get_connection(db_path) as conn:
         run_migrations(conn)
@@ -73,7 +75,11 @@ def session_end(
     extraction_slice, new_line_count, new_anchor = slice_jsonl_for_extraction(
         raw_jsonl, cursor
     )
+    storage_bytes, is_delta_store = slice_storage_delta(raw_jsonl, cursor)
     delta_mode = cursor is not None and extraction_slice != raw_jsonl
+
+    # Use the chain's previous evidence id when storing a delta chunk.
+    prev_ev_id = cursor.last_evidence_id if (is_delta_store and cursor) else None
 
     with get_connection(db_path) as conn:
         evidence_id = store_evidence(
@@ -81,9 +87,12 @@ def session_end(
             project_id=project_id,
             session_id=session_id,
             source_type=evidence_source_type,
-            content=evidence_content if evidence_content is not None else transcript,
+            content=storage_bytes if is_delta_store else (
+                evidence_content if evidence_content is not None else transcript
+            ),
             source_path=evidence_source_path,
-            metadata={"git_diff": bool(git_diff), "delta_mode": delta_mode},
+            metadata={"git_diff": bool(git_diff), "delta_mode": delta_mode, "chain_delta": is_delta_store},
+            prev_evidence_id=prev_ev_id,
         )
         job_id = enqueue_extraction(
             conn,
@@ -124,7 +133,8 @@ def session_end(
                 output_ref=json_like_stats(stats),
             )
             # Advance cursor only after a successful merge — never on exception.
-            save_cursor(conn, project_id, session_id, new_line_count, new_anchor)
+            save_cursor(conn, project_id, session_id, new_line_count, new_anchor,
+                        last_evidence_id=evidence_id)
             _update_symbol_graph(conn, project_id, str(project_path), git_diff, session_id=session_id)
             ack_stage(conn, job_id, "PROJECTED", output_ref="projection:invalidated")
             ack_stage(conn, job_id, "COMPLETED", output_ref="session_end")
@@ -163,7 +173,7 @@ def replay_job(
     enqueue_extraction) so it advances queued -> completed in place, or
     back to dead_lettered if the underlying problem persists.
     """
-    from memlora.storage.evidence import load_evidence
+    from memlora.storage.evidence import load_evidence, load_full_transcript
     from memlora.storage.jobs import get_job, replay_dead_letter
 
     config = config or Config.load(project_path=project_path)
@@ -184,9 +194,13 @@ def replay_job(
                 f"evidence_id={job.evidence_id} referenced by job {job_id} "
                 f"is missing from raw_evidence — cannot replay"
             )
+        # I3: reconstruct the full transcript by following the evidence chain.
+        # A delta-stored chunk must be concatenated with its ancestors to
+        # produce the complete JSONL that session_end expects.
+        full_bytes = load_full_transcript(conn, job.evidence_id)
         replay_dead_letter(conn, job_id)
 
-    raw = evidence.content.decode("utf-8")
+    raw = full_bytes.decode("utf-8", errors="replace")
     transcript = raw
     if evidence.source_type == "jsonl_transcript":
         from memlora.extraction.jsonl_converter import jsonl_to_transcript

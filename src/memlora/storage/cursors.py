@@ -34,6 +34,7 @@ class IngestCursor:
     last_line_count: int
     anchor_sha256: str
     updated_at: int
+    last_evidence_id: int | None = None  # tail of the evidence chain (I3)
 
 
 def get_cursor(
@@ -47,12 +48,14 @@ def get_cursor(
     ).fetchone()
     if row is None:
         return None
+    keys = row.keys()
     return IngestCursor(
         project_id=row["project_id"],
         session_id=row["session_id"],
         last_line_count=row["last_line_count"],
         anchor_sha256=row["anchor_sha256"],
         updated_at=row["updated_at"],
+        last_evidence_id=row["last_evidence_id"] if "last_evidence_id" in keys else None,
     )
 
 
@@ -62,17 +65,20 @@ def save_cursor(
     session_id: str,
     last_line_count: int,
     anchor_sha256: str,
+    last_evidence_id: int | None = None,
 ) -> None:
     conn.execute(
         """
-        INSERT INTO ingest_cursors (project_id, session_id, last_line_count, anchor_sha256, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO ingest_cursors
+            (project_id, session_id, last_line_count, anchor_sha256, last_evidence_id, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(project_id, session_id) DO UPDATE SET
-            last_line_count = excluded.last_line_count,
-            anchor_sha256   = excluded.anchor_sha256,
-            updated_at      = excluded.updated_at
+            last_line_count  = excluded.last_line_count,
+            anchor_sha256    = excluded.anchor_sha256,
+            last_evidence_id = excluded.last_evidence_id,
+            updated_at       = excluded.updated_at
         """,
-        (project_id, session_id, last_line_count, anchor_sha256, _now_ms()),
+        (project_id, session_id, last_line_count, anchor_sha256, last_evidence_id, _now_ms()),
     )
 
 
@@ -81,6 +87,45 @@ def compute_anchor(lines: list[str], up_to_line: int) -> str:
     start = max(0, up_to_line - ANCHOR_LINES)
     anchor_text = "\n".join(lines[start:up_to_line])
     return hashlib.sha256(anchor_text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def slice_storage_delta(
+    jsonl_text: str,
+    cursor: IngestCursor | None,
+) -> tuple[bytes, bool]:
+    """Return the bytes to store in raw_evidence and whether this is a delta.
+
+    Returns (content_bytes, is_delta):
+    - is_delta=False: store the full JSONL (first run or compaction fallback).
+      Content = all non-empty lines joined with newlines + trailing newline.
+    - is_delta=True: store only the new lines since the cursor high-water mark.
+      Content = new lines only (no overlap window — that is extraction-only).
+      Concatenating root + all deltas byte-exactly reconstructs the full JSONL.
+
+    The anchor check logic mirrors slice_jsonl_for_extraction; they share the
+    same compaction detection so both consistently use delta or fall back together.
+    """
+    lines = [ln for ln in jsonl_text.splitlines() if ln.strip()]
+    full_bytes = ("\n".join(lines) + "\n").encode("utf-8")
+
+    if cursor is None or cursor.last_line_count == 0:
+        return full_bytes, False
+
+    if len(lines) < cursor.last_line_count:
+        return full_bytes, False  # compaction
+
+    expected_anchor = compute_anchor(lines, cursor.last_line_count)
+    if expected_anchor != cursor.anchor_sha256:
+        return full_bytes, False  # compaction
+
+    new_lines = lines[cursor.last_line_count:]
+    if not new_lines:
+        # No new content — store an empty delta so the chain is unbroken.
+        # (Dedup via content_sha256 will collapse identical empty deltas.)
+        return b"", False  # nothing to chain
+
+    delta_bytes = ("\n".join(new_lines) + "\n").encode("utf-8")
+    return delta_bytes, True
 
 
 def slice_jsonl_for_extraction(
