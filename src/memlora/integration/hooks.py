@@ -112,11 +112,22 @@ def user_prompt_submit_main() -> None:
 
 
 def subagent_stop_main() -> None:
-    """Extract decisions from a subagent transcript into the parent project DB (CK-4).
+    """Capture a subagent transcript into the parent project DB (CK-4, async since I4).
 
     SubagentStop stdin provides transcript_path (direct JSONL path) and cwd
     (parent project dir) — no search required. Subagent events land with a
     capped authority so they cannot override the main agent or the user.
+
+    Gamma post-mortem hardening:
+    - If transcript_path is the MAIN session's JSONL (stem == session_id), skip:
+      the Stop hook owns that transcript. Processing it here under the agent id
+      double-extracts the whole session under a wrong session id and (pre-I4)
+      held the write lock for the entire merge, starving every other writer.
+    - Use the async capture+queue path (session_capture + detached worker), never
+      the synchronous session_end — a hook must not run a multi-minute merge.
+    - source_type must be one of migration 005's CHECK values. The old value
+      'subagent_transcript' violated the CHECK and was silently dropped by
+      INSERT OR IGNORE, breaking CK-4 storage from day one.
     """
     try:
         payload = _read_payload()
@@ -133,28 +144,47 @@ def subagent_stop_main() -> None:
         if not config.capture_subagents:
             return
 
-        from pathlib import Path
         jsonl = Path(transcript_path)
         if not jsonl.exists():
             return
+        if session_id and jsonl.stem == session_id:
+            return  # main transcript — the Stop hook owns it
 
         raw_jsonl = jsonl.read_text(encoding="utf-8", errors="replace")
-        from memlora.extraction.jsonl_converter import jsonl_to_transcript
-        transcript = jsonl_to_transcript(raw_jsonl)
-
         sub_session_id = agent_id or f"subagent_{session_id}"
-        from memlora.integration.session import session_end
-        session_end(
+
+        from memlora.integration.session import session_capture
+        session_capture(
             cwd,
             sub_session_id,
-            transcript,
+            raw_jsonl,
             config=config,
-            evidence_source_type="subagent_transcript",
-            evidence_content=raw_jsonl,
+            evidence_source_type="jsonl_transcript",
             evidence_source_path=transcript_path,
         )
+        _spawn_process_jobs(cwd)
     except Exception:
         pass  # never block subagent teardown
+
+
+def _spawn_process_jobs(project_path: str) -> None:
+    """Spawn the queue worker as a detached background process (fail-open)."""
+    try:
+        kwargs: dict = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(
+            [sys.executable, "-m", "memlora", "process-jobs", str(project_path)],
+            **kwargs,
+        )
+    except Exception:
+        pass
 
 
 # ── PostToolUse:Grep — cache grep results (CK-3a) ─────────────────────────────

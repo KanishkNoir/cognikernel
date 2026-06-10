@@ -119,8 +119,8 @@ class TestCrashAndReplay:
         assert job.failure_class is None
         assert job.attempts == 0
 
-    def test_process_jobs_replays_and_processes(self, tmp_path):
-        """process_jobs promotes dead_lettered → queued → processed."""
+    def test_process_jobs_replays_timeout_dead_letters(self, tmp_path):
+        """process_jobs promotes TIMEOUT dead-letters (process-killed) → processed."""
         project_path = _make_project(tmp_path)
         from memlora.integration.session import session_capture, process_jobs
         from memlora.config import Config
@@ -132,18 +132,17 @@ class TestCrashAndReplay:
         result = session_capture(str(project_path), session_id, raw)
         job_id = result["job_id"]
 
-        # Manually fail the job to dead_lettered.
+        # Dead-letter via TIMEOUT (the process-killed class — auto-replayable).
         config = Config.load(project_path=str(project_path))
         pid = hash_project_path(str(project_path))
         db_path = get_db_path(config, pid)
         with get_connection(db_path) as conn:
             for _ in range(3):
-                fail_job(conn, job_id, "EXTRACTOR_BUG", "test crash")
+                fail_job(conn, job_id, "TIMEOUT", "simulated kill")
 
         with get_connection(db_path) as conn:
             assert get_job(conn, job_id).state == "dead_lettered"
 
-        # process_jobs replays dead_lettered → processes it.
         summary = process_jobs(str(project_path))
         assert summary["replayed"] >= 1
         assert summary["processed"] >= 1
@@ -151,6 +150,60 @@ class TestCrashAndReplay:
 
         with get_connection(db_path) as conn:
             assert get_job(conn, job_id).state == "completed"
+
+    def test_process_jobs_does_not_resurrect_poison(self, tmp_path):
+        """Gamma post-mortem F3: EXTRACTOR_BUG dead-letters must stay dead —
+        auto-replaying them forever masks real bugs and burns CPU."""
+        project_path = _make_project(tmp_path)
+        from memlora.integration.session import session_capture, process_jobs
+        from memlora.config import Config
+
+        raw = _jsonl(10)
+        result = session_capture(str(project_path), "test-poison", raw)
+        job_id = result["job_id"]
+
+        config = Config.load(project_path=str(project_path))
+        pid = hash_project_path(str(project_path))
+        db_path = get_db_path(config, pid)
+        with get_connection(db_path) as conn:
+            for _ in range(3):
+                fail_job(conn, job_id, "EXTRACTOR_BUG", "poison input")
+
+        summary = process_jobs(str(project_path))
+        assert summary["replayed"] == 0
+
+        with get_connection(db_path) as conn:
+            assert get_job(conn, job_id).state == "dead_lettered"  # stays dead
+
+    def test_single_flight_lock_blocks_second_worker(self, tmp_path):
+        """Gamma post-mortem F2: a second worker must exit immediately when the
+        project lock is held (worker storm prevention)."""
+        project_path = _make_project(tmp_path)
+        from memlora.integration.session import process_jobs, _acquire_worker_lock
+
+        pid = hash_project_path(str(project_path))
+        lock = _acquire_worker_lock(pid)
+        assert lock is not None
+        try:
+            summary = process_jobs(str(project_path))
+            assert summary["skipped"] is True
+            assert summary["processed"] == 0
+        finally:
+            lock.unlink(missing_ok=True)
+
+    def test_capture_skips_when_no_new_content(self, tmp_path):
+        """Gamma post-mortem F4: identical content after cursor advance must not
+        re-store the full transcript (sha collision, burned ids)."""
+        project_path = _make_project(tmp_path)
+        from memlora.integration.session import session_capture, process_jobs
+
+        raw = _jsonl(10)
+        r1 = session_capture(str(project_path), "test-nonew", raw)
+        assert r1["job_id"] is not None
+        process_jobs(str(project_path))  # advances cursor
+
+        r2 = session_capture(str(project_path), "test-nonew", raw)  # same content
+        assert r2["job_id"] is None  # skipped — nothing new
 
 
 # ── session_capture speed ─────────────────────────────────────────────────────

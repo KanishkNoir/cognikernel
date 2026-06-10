@@ -118,8 +118,9 @@ class TestChainReconstruction:
 class TestSliceStorageDelta:
     def test_no_cursor_returns_full_and_not_delta(self):
         jsonl = _make_jsonl(20)
-        content, is_delta = slice_storage_delta(jsonl, cursor=None)
+        content, is_delta, has_new = slice_storage_delta(jsonl, cursor=None)
         assert not is_delta
+        assert has_new
         assert content == jsonl.encode("utf-8")
 
     def test_delta_returns_only_new_lines(self):
@@ -128,8 +129,9 @@ class TestSliceStorageDelta:
         anchor = compute_anchor(lines, 20)
         cursor = IngestCursor("p", "s", last_line_count=20, anchor_sha256=anchor,
                                updated_at=0, last_evidence_id=1)
-        content, is_delta = slice_storage_delta(full, cursor)
+        content, is_delta, has_new = slice_storage_delta(full, cursor)
         assert is_delta
+        assert has_new
         delta_lines = [ln for ln in content.decode("utf-8").splitlines() if ln.strip()]
         assert len(delta_lines) == 20
         assert all(f'"seq":{i}' in delta_lines[i - 20] for i in range(20, 40))
@@ -138,8 +140,21 @@ class TestSliceStorageDelta:
         full = _make_jsonl(40)
         cursor = IngestCursor("p", "s", last_line_count=20, anchor_sha256="bad",
                                updated_at=0, last_evidence_id=1)
-        _, is_delta = slice_storage_delta(full, cursor)
+        _, is_delta, has_new = slice_storage_delta(full, cursor)
         assert not is_delta
+        assert has_new
+
+    def test_no_new_lines_signals_skip(self):
+        """Same content as the cursor high-water mark — caller must skip storage."""
+        full = _make_jsonl(30)
+        lines = [ln for ln in full.splitlines() if ln.strip()]
+        anchor = compute_anchor(lines, 30)
+        cursor = IngestCursor("p", "s", last_line_count=30, anchor_sha256=anchor,
+                               updated_at=0, last_evidence_id=1)
+        content, is_delta, has_new = slice_storage_delta(full, cursor)
+        assert not has_new
+        assert not is_delta
+        assert content == b""
 
     def test_delta_plus_root_concat_equals_full(self):
         """The storage invariant: root_bytes + delta_bytes = full transcript bytes."""
@@ -151,6 +166,26 @@ class TestSliceStorageDelta:
                                updated_at=0, last_evidence_id=None)
 
         root_bytes = ("\n".join(lines[:25]) + "\n").encode("utf-8")
-        delta_bytes, is_delta = slice_storage_delta(full, cursor)
-        assert is_delta
+        delta_bytes, is_delta, has_new = slice_storage_delta(full, cursor)
+        assert is_delta and has_new
         assert root_bytes + delta_bytes == full.encode("utf-8")
+
+    def test_raw_root_without_trailing_newline_joins_safely(self):
+        """Gamma post-mortem F6: a root stored raw (no trailing newline) must not
+        corrupt the boundary line when concatenated with a delta chunk."""
+        conn = _db()
+        full = _make_jsonl(20)
+        lines = [ln for ln in full.splitlines() if ln.strip()]
+
+        root_raw = "\n".join(lines[:10])          # NO trailing newline (raw on-disk form)
+        delta = ("\n".join(lines[10:]) + "\n")
+
+        e0 = store_evidence(conn, "p", "s", "transcript", root_raw.encode("utf-8"))
+        e1 = store_evidence(conn, "p", "s", "transcript", delta.encode("utf-8"),
+                            prev_evidence_id=e0)
+
+        reconstructed = load_full_transcript(conn, e1).decode("utf-8")
+        rec_lines = [ln for ln in reconstructed.splitlines() if ln.strip()]
+        assert len(rec_lines) == 20              # boundary line NOT merged into one
+        assert rec_lines[9] == lines[9]
+        assert rec_lines[10] == lines[10]

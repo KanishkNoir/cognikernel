@@ -92,15 +92,18 @@ def compute_anchor(lines: list[str], up_to_line: int) -> str:
 def slice_storage_delta(
     jsonl_text: str,
     cursor: IngestCursor | None,
-) -> tuple[bytes, bool]:
-    """Return the bytes to store in raw_evidence and whether this is a delta.
+) -> tuple[bytes, bool, bool]:
+    """Return the bytes to store in raw_evidence, delta flag, and new-content flag.
 
-    Returns (content_bytes, is_delta):
-    - is_delta=False: store the full JSONL (first run or compaction fallback).
-      Content = all non-empty lines joined with newlines + trailing newline.
-    - is_delta=True: store only the new lines since the cursor high-water mark.
+    Returns (content_bytes, is_delta, has_new_content):
+    - (full, False, True): first run or compaction fallback — store everything.
+    - (delta, True, True): only the new lines since the cursor high-water mark.
       Content = new lines only (no overlap window — that is extraction-only).
-      Concatenating root + all deltas byte-exactly reconstructs the full JSONL.
+      Concatenating root + all deltas reconstructs the full JSONL.
+    - (b"", False, False): NO new lines since the cursor. Callers must skip
+      store+enqueue entirely — re-storing the full content here would collide
+      with the previous store's content_sha256 (INSERT OR IGNORE burns an
+      autoincrement id and returns a job that may already be terminal).
 
     The anchor check logic mirrors slice_jsonl_for_extraction; they share the
     same compaction detection so both consistently use delta or fall back together.
@@ -109,23 +112,21 @@ def slice_storage_delta(
     full_bytes = ("\n".join(lines) + "\n").encode("utf-8")
 
     if cursor is None or cursor.last_line_count == 0:
-        return full_bytes, False
+        return full_bytes, False, True
 
     if len(lines) < cursor.last_line_count:
-        return full_bytes, False  # compaction
+        return full_bytes, False, True  # compaction
 
     expected_anchor = compute_anchor(lines, cursor.last_line_count)
     if expected_anchor != cursor.anchor_sha256:
-        return full_bytes, False  # compaction
+        return full_bytes, False, True  # compaction
 
     new_lines = lines[cursor.last_line_count:]
     if not new_lines:
-        # No new content — store an empty delta so the chain is unbroken.
-        # (Dedup via content_sha256 will collapse identical empty deltas.)
-        return b"", False  # nothing to chain
+        return b"", False, False  # nothing new — skip store entirely
 
     delta_bytes = ("\n".join(new_lines) + "\n").encode("utf-8")
-    return delta_bytes, True
+    return delta_bytes, True, True
 
 
 def slice_jsonl_for_extraction(

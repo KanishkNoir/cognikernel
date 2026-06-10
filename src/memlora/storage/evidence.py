@@ -121,6 +121,13 @@ def load_full_transcript(conn: sqlite3.Connection, evidence_id: int) -> bytes:
         blob = row["content_blob"]
         if row["content_encoding"] == "zlib":
             blob = zlib.decompress(blob)
+        # Join guard: a chain root may have been stored raw (no trailing newline,
+        # e.g. the original on-disk JSONL). Delta chunks are line-complete, so a
+        # missing newline at a chunk boundary would corrupt the boundary line on
+        # concatenation. Insert one only when needed — chunks that already end
+        # with a newline are unaffected, keeping reconstruction deterministic.
+        if chunks and not chunks[-1].endswith(b"\n") and blob:
+            chunks.append(b"\n")
         chunks.append(blob)
 
     return b"".join(chunks)

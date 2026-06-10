@@ -794,6 +794,9 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     )
     print(json.dumps(result))
 
+    # Spawn even when nothing new was captured — a backlog of queued jobs from
+    # earlier firings may still need draining; the worker's single-flight lock
+    # makes redundant spawns exit immediately.
     if not getattr(args, "no_spawn", False):
         _spawn_worker(str(Path(args.project_path).resolve()))
 
