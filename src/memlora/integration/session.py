@@ -52,6 +52,7 @@ def session_end(
     """
     from memlora.extraction.pipeline import SessionMetadata, extract_session
     from memlora.delta.merge import execute_merge
+    from memlora.storage.cursors import get_cursor, save_cursor, slice_jsonl_for_extraction
     from memlora.storage.evidence import store_evidence
     from memlora.storage.jobs import ack_stage, enqueue_extraction, fail_job, recover_stuck_running_jobs
 
@@ -59,10 +60,22 @@ def session_end(
     project_id = hash_project_path(project_path)
     db_path = get_db_path(config, project_id)
 
+    # Delta extraction: only process new JSONL lines since the last firing.
+    # The transcript argument carries the full JSONL (lossless for evidence storage).
+    # We slice it to the overlap window + new lines for extraction only.
+    # Fail-open: on cursor miss or compaction, falls back to full extraction.
+    raw_jsonl = evidence_content if isinstance(evidence_content, str) else transcript
     with get_connection(db_path) as conn:
         run_migrations(conn)
-        # Surface any jobs killed mid-execution in prior runs so replay can recover them.
         recover_stuck_running_jobs(conn)
+        cursor = get_cursor(conn, project_id, session_id)
+
+    extraction_slice, new_line_count, new_anchor = slice_jsonl_for_extraction(
+        raw_jsonl, cursor
+    )
+    delta_mode = cursor is not None and extraction_slice != raw_jsonl
+
+    with get_connection(db_path) as conn:
         evidence_id = store_evidence(
             conn,
             project_id=project_id,
@@ -70,7 +83,7 @@ def session_end(
             source_type=evidence_source_type,
             content=evidence_content if evidence_content is not None else transcript,
             source_path=evidence_source_path,
-            metadata={"git_diff": bool(git_diff)},
+            metadata={"git_diff": bool(git_diff), "delta_mode": delta_mode},
         )
         job_id = enqueue_extraction(
             conn,
@@ -89,8 +102,9 @@ def session_end(
         ended_at=now,
     )
     try:
+        # Extract from the delta slice (or full transcript on first/fallback run).
         candidates = extract_session(
-            transcript, session_meta, git_diff=git_diff, extractor=config.extractor
+            extraction_slice, session_meta, git_diff=git_diff, extractor=config.extractor
         )
         for event in candidates:
             event.evidence_id = evidence_id
@@ -109,6 +123,8 @@ def session_end(
                 "MERGED",
                 output_ref=json_like_stats(stats),
             )
+            # Advance cursor only after a successful merge — never on exception.
+            save_cursor(conn, project_id, session_id, new_line_count, new_anchor)
             _update_symbol_graph(conn, project_id, str(project_path), git_diff, session_id=session_id)
             ack_stage(conn, job_id, "PROJECTED", output_ref="projection:invalidated")
             ack_stage(conn, job_id, "COMPLETED", output_ref="session_end")
@@ -123,6 +139,7 @@ def session_end(
     stats["extracted"] = len(candidates)
     stats["evidence_id"] = evidence_id
     stats["job_id"] = job_id
+    stats["delta_mode"] = delta_mode
     _log.info("session_end.done", extra={"session_id": session_id, **stats})
     return stats
 
