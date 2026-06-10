@@ -229,6 +229,39 @@ def reclaim_stale_jobs(
     return result.rowcount
 
 
+def recover_stuck_running_jobs(
+    conn: sqlite3.Connection,
+    stale_after_ms: int = 5 * 60 * 1000,
+    now_ms: int | None = None,
+) -> int:
+    """Transition stuck `running` jobs to `dead_lettered` so replay can recover them.
+
+    A `running` job that hasn't been updated in `stale_after_ms` milliseconds was
+    almost certainly killed mid-execution (Stop hook subprocess torn down when the
+    session ended). Its raw_evidence is intact; it just needs a merge replay.
+    Moving it to `dead_lettered` makes it eligible for `replay_dead_letter`.
+
+    Default grace period: 5 minutes. Call at session_end / SessionStart to surface
+    stuck jobs from prior runs before the next extraction starts.
+    """
+    now = now_ms if now_ms is not None else _now_ms()
+    cutoff = now - stale_after_ms
+    result = conn.execute(
+        """
+        UPDATE extraction_jobs
+        SET state='dead_lettered',
+            failure_class='TIMEOUT',
+            last_error='subprocess killed mid-execution; recovered by recover_stuck_running_jobs',
+            updated_at=?
+        WHERE state='running'
+          AND updated_at < ?
+        """,
+        (now, cutoff),
+    )
+    conn.commit()
+    return result.rowcount
+
+
 def replay_dead_letter(conn: sqlite3.Connection, job_id: int) -> int:
     conn.execute(
         """

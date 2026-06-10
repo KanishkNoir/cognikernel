@@ -53,7 +53,7 @@ def session_end(
     from memlora.extraction.pipeline import SessionMetadata, extract_session
     from memlora.delta.merge import execute_merge
     from memlora.storage.evidence import store_evidence
-    from memlora.storage.jobs import ack_stage, enqueue_extraction, fail_job
+    from memlora.storage.jobs import ack_stage, enqueue_extraction, fail_job, recover_stuck_running_jobs
 
     config = config or Config.load(project_path=project_path)
     project_id = hash_project_path(project_path)
@@ -61,6 +61,8 @@ def session_end(
 
     with get_connection(db_path) as conn:
         run_migrations(conn)
+        # Surface any jobs killed mid-execution in prior runs so replay can recover them.
+        recover_stuck_running_jobs(conn)
         evidence_id = store_evidence(
             conn,
             project_id=project_id,
