@@ -268,13 +268,46 @@ def _worker_log(project_id: str, msg: str) -> None:
         pass
 
 
+def _pid_alive(pid: int) -> bool:
+    """Best-effort liveness check for a pid. Unknown -> assume alive (conservative)."""
+    try:
+        if sys_platform_win32():
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+            )
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        else:
+            import os
+            os.kill(pid, 0)
+            return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True  # can't tell — don't steal a possibly-live worker's lock
+
+
+def sys_platform_win32() -> bool:
+    import sys as _sys
+    return _sys.platform == "win32"
+
+
 def _acquire_worker_lock(project_id: str, stale_after_s: int = 15 * 60) -> Path | None:
     """Single-flight guard: one worker per project (gamma post-mortem F2).
 
-    Every Stop firing spawns a worker; without this, N workers pile onto the
-    same SQLite file and starve each other. Returns the lock path on success,
-    None if another live worker holds it. A lock older than `stale_after_s`
-    is treated as crashed and taken over.
+    Without this, N drains pile onto the same SQLite file and starve each
+    other. Returns the lock path on success, None if another live worker
+    holds it.
+
+    Takeover rules (I7c): the lock file stores the holder's pid. If that
+    process is dead — e.g. a hook-spawned worker killed by the Job Object at
+    hook exit — the lock is orphaned and taken over IMMEDIATELY (waiting the
+    15-min age-out would block every per-turn drain in the meantime). The
+    age-out remains as the fallback when pid liveness can't be determined.
     """
     import os
     lock_dir = Path.home() / ".memlora" / "locks"
@@ -286,8 +319,14 @@ def _acquire_worker_lock(project_id: str, stale_after_s: int = 15 * 60) -> Path 
         return lock_path
     except FileExistsError:
         try:
-            age = time.time() - lock_path.stat().st_mtime
-            if age > stale_after_s:
+            holder_pid: int | None = None
+            try:
+                holder_pid = int(lock_path.read_text(encoding="utf-8").strip())
+            except Exception:
+                pass
+            orphaned = holder_pid is not None and not _pid_alive(holder_pid)
+            aged_out = (time.time() - lock_path.stat().st_mtime) > stale_after_s
+            if orphaned or aged_out:
                 lock_path.write_text(str(os.getpid()), encoding="utf-8")  # takeover
                 return lock_path
         except Exception:

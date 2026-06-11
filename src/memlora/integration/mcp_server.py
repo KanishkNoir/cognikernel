@@ -201,13 +201,14 @@ def _start_queue_drainer() -> None:
 
     def _loop() -> None:
         from memlora.config import Config
-        from memlora.integration.session import process_jobs
+        from memlora.integration.session import _worker_log, process_jobs
         from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+        project_id = hash_project_path(project_path)
+        _worker_log(project_id, f"mcp-drainer started (cwd={project_path})")
         _time.sleep(10.0)  # let session start settle before first drain
         while True:
             try:
                 config = Config.load(project_path=project_path)
-                project_id = hash_project_path(project_path)
                 db_path = get_db_path(config, project_id)
                 if db_path.exists():
                     with get_connection(db_path) as conn:
@@ -216,9 +217,10 @@ def _start_queue_drainer() -> None:
                             "WHERE state IN ('queued','retryable_failure')"
                         ).fetchone()[0]
                     if n > 0:
+                        _worker_log(project_id, f"mcp-drainer: {n} queued — draining")
                         process_jobs(project_path, config=config)
-            except Exception:
-                pass  # never kill the drainer; retry next tick
+            except Exception as exc:
+                _worker_log(project_id, f"mcp-drainer error: {exc}")
             _time.sleep(15.0)
 
     threading.Thread(target=_loop, daemon=True, name="memlora-queue-drainer").start()

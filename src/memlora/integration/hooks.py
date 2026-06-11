@@ -162,40 +162,11 @@ def subagent_stop_main() -> None:
             evidence_source_type="jsonl_transcript",
             evidence_source_path=transcript_path,
         )
-        _spawn_process_jobs(cwd)
+        # No spawn: detached workers die with the hook's Job Object (I7c).
+        # The job drains at the next Stop firing's sync drain or via the MCP
+        # server's background drainer.
     except Exception:
         pass  # never block subagent teardown
-
-
-def _spawn_process_jobs(project_path: str) -> None:
-    """Spawn the queue worker as a detached background process (fail-open).
-
-    Tries CREATE_BREAKAWAY_FROM_JOB first on Windows — Claude Code's hook Job
-    Object kills the whole process tree on hook exit, and DETACHED_PROCESS does
-    not escape it. No inline fallback here (this is called from subagent
-    teardown which must stay fast); queued jobs are drained by the next Stop
-    firing's capture fallback or the MCP server's background drainer.
-    """
-    try:
-        kwargs: dict = {
-            "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-        }
-        cmd = [sys.executable, "-m", "memlora", "process-jobs", str(project_path)]
-        if sys.platform == "win32":
-            base = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
-            for flags in (base | 0x01000000, base):  # try BREAKAWAY_FROM_JOB first
-                try:
-                    subprocess.Popen(cmd, creationflags=flags, **kwargs)
-                    return
-                except OSError:
-                    continue
-        else:
-            kwargs["start_new_session"] = True
-            subprocess.Popen(cmd, **kwargs)
-    except Exception:
-        pass
 
 
 # ── PostToolUse:Grep — cache grep results (CK-3a) ─────────────────────────────
@@ -544,13 +515,17 @@ def stop_main() -> None:
     except Exception:
         pass
 
-    # I4: fast capture path — store evidence + enqueue, spawn detached worker.
-    # The worker (process-jobs) runs asynchronously, so the hook returns in <500ms
-    # instead of blocking for up to 120s. Fall back to synchronous extract if the
-    # capture command fails (e.g., older installation without the capture command).
+    # I4/I7c: capture (fast, evidence+enqueue) then a SYNCHRONOUS time-budgeted
+    # drain. Detached workers are useless under Claude Code on Windows — the
+    # hook's Job Object kills the whole tree at hook exit (after any liveness
+    # probe passes), so the only drain that reliably happens during a session
+    # is the one this hook runs itself. The worker single-flight lock makes the
+    # sync drain a no-op when the MCP server's background drainer is already
+    # working the queue. Per-turn cost with a warm cursor: one delta job,
+    # ~2-15s; budget-capped so the hook always fits its 60s ceiling.
     cmd = [
         sys.executable, "-m", "memlora", "capture",
-        str(project_path), str(jsonl_path), "--auto-session-id",
+        str(project_path), str(jsonl_path), "--auto-session-id", "--no-spawn",
     ]
     git_diff_file = None
     if git_diff_content:
@@ -564,15 +539,13 @@ def stop_main() -> None:
         except Exception:
             git_diff_file = None
     try:
-        # 55s: covers capture (<1s) + the inline-drain fallback (40s budget)
-        # that fires when the detached worker is killed by the hook Job Object.
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=55)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.returncode != 0:
             _warn(f"memlora hook-stop: capture failed (rc={result.returncode}): {result.stderr[:300]}")
         else:
             _warn(f"memlora hook-stop: captured session {session_id} → {result.stdout.strip()[:200]}")
     except subprocess.TimeoutExpired:
-        _warn("memlora hook-stop: capture timed out after 55s — jobs stay queued for the next drain")
+        _warn("memlora hook-stop: capture timed out after 15s — jobs stay queued for the next drain")
     except Exception as exc:
         _warn(f"memlora hook-stop: unexpected error: {exc}")
     finally:
@@ -581,3 +554,16 @@ def stop_main() -> None:
                 Path(git_diff_file.name).unlink(missing_ok=True)
             except Exception:
                 pass
+
+    # Drain the queue inside the hook's own lifetime (survives the Job Object).
+    try:
+        drain = subprocess.run(
+            [sys.executable, "-m", "memlora", "process-jobs", str(project_path),
+             "--time-budget", "30"],
+            capture_output=True, text=True, timeout=40,
+        )
+        _warn(f"memlora hook-stop: drain → {drain.stdout.strip()[:160]}")
+    except subprocess.TimeoutExpired:
+        _warn("memlora hook-stop: drain hit the 40s ceiling — remaining jobs stay queued")
+    except Exception as exc:
+        _warn(f"memlora hook-stop: drain error: {exc}")
