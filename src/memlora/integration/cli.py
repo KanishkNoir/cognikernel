@@ -956,17 +956,36 @@ def _cmd_reset(args: argparse.Namespace) -> None:
 
     with get_connection(db_path) as conn:
         run_migrations(conn)
+        # Memory + ingest state.
         conn.execute("DELETE FROM extraction_job_acks")
         conn.execute("DELETE FROM extraction_jobs")
+        conn.execute("DELETE FROM enrichment_jobs")
         conn.execute("DELETE FROM event_provenance")
+        conn.execute("DELETE FROM event_embeddings")
         conn.execute("DELETE FROM events")
         conn.execute("DELETE FROM state_projections")
         conn.execute("DELETE FROM extraction_failures")
         conn.execute("DELETE FROM raw_evidence")
-        conn.execute("DELETE FROM meta WHERE key != 'schema_version' AND key != 'projection_version'")
+        conn.execute("DELETE FROM ingest_cursors")
+        # Symbol graph — `memlora show` renders skeleton/component-map from these;
+        # a reset that leaves them makes show look "not reset" (user-reported).
+        conn.execute("DELETE FROM symbol_nodes")
+        conn.execute("DELETE FROM symbol_edges")
+        conn.execute("DELETE FROM symbol_files")
+        # Session-scoped caches + telemetry.
+        conn.execute("DELETE FROM grep_cache")
+        conn.execute("DELETE FROM read_session_cache")
+        conn.execute("DELETE FROM denied_reads")
+        conn.execute("DELETE FROM api_telemetry")
+        # Keep schema/projection versions AND project_path (resources need it;
+        # deleting it broke render_state-by-project-id until the next init).
+        conn.execute(
+            "DELETE FROM meta WHERE key NOT IN "
+            "('schema_version', 'projection_version', 'project_path')"
+        )
         conn.commit()
 
-    print(f"Reset complete for project {project_id}.")
+    print(f"Reset complete for project {project_id} (all 16 data tables cleared).")
 
 
 def _cmd_failures(args: argparse.Namespace) -> None:
