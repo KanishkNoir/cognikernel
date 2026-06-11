@@ -56,25 +56,34 @@ class TestMergeEvent:
         assert row is not None
         assert row["event_type"] == "DECISION"
 
-    def test_dedup_increments_mention_count(self, conn: sqlite3.Connection) -> None:
-        e = make_event()
-        merge_event(conn, e)
-        merge_event(conn, e)
+    def test_dedup_cross_session_increments_mention_count(self, conn: sqlite3.Connection) -> None:
+        """F9: only cross-session restatements bump — a genuine recurrence signal."""
+        merge_event(conn, make_event(session_id="sess1"))
+        merge_event(conn, make_event(session_id="sess2"))
         row = get_row(conn, "hash_a")
         assert row["mention_count"] == 2
 
-    def test_dedup_increments_weight(self, conn: sqlite3.Connection) -> None:
-        e = make_event(weight=1.0)
+    def test_dedup_same_session_does_not_bump(self, conn: sqlite3.Connection) -> None:
+        """F9: in-session duplicates are overlap-window re-extractions under delta
+        ingest (I2) — bumping them inflated boundary events over real decisions."""
+        e = make_event(session_id="sess1", weight=1.0)
         merge_event(conn, e)
         merge_event(conn, e)
+        merge_event(conn, e)
+        row = get_row(conn, "hash_a")
+        assert row["mention_count"] == 1          # no in-session inflation
+        assert row["weight"] == pytest.approx(1.0)
+
+    def test_dedup_cross_session_increments_weight(self, conn: sqlite3.Connection) -> None:
+        merge_event(conn, make_event(session_id="sess1", weight=1.0))
+        merge_event(conn, make_event(session_id="sess2", weight=1.0))
         row = get_row(conn, "hash_a")
         assert row["weight"] == pytest.approx(1.0 + WEIGHT_INCREMENT_ON_DEDUP)
 
     def test_dedup_weight_capped_at_max(self, conn: sqlite3.Connection) -> None:
-        e = make_event(weight=MAX_EVENT_WEIGHT)
-        merge_event(conn, e)
-        for _ in range(10):
-            merge_event(conn, e)
+        merge_event(conn, make_event(session_id="s0", weight=MAX_EVENT_WEIGHT))
+        for i in range(10):
+            merge_event(conn, make_event(session_id=f"s{i+1}", weight=MAX_EVENT_WEIGHT))
         row = get_row(conn, "hash_a")
         assert row["weight"] <= MAX_EVENT_WEIGHT
 
@@ -96,11 +105,20 @@ class TestMergeEvent:
         conn.execute("UPDATE events SET archived = 1 WHERE content_hash = 'hash_a'")
         conn.commit()
 
-        outcome, _ = merge_event(conn, e)  # re-mention
+        outcome, _ = merge_event(conn, e)  # re-mention (same session)
         assert outcome == "updated"
         row = get_row(conn, "hash_a")
-        assert row["archived"] == 0  # resurrected
-        assert row["mention_count"] == 2
+        assert row["archived"] == 0   # resurrected even in-session (F9 keeps this)
+        assert row["mention_count"] == 1  # but no in-session weight/mention bump
+
+    def test_dedup_resurrects_archived_event_cross_session(self, conn: sqlite3.Connection) -> None:
+        merge_event(conn, make_event(session_id="sess1"))
+        conn.execute("UPDATE events SET archived = 1 WHERE content_hash = 'hash_a'")
+        conn.commit()
+        merge_event(conn, make_event(session_id="sess2"))
+        row = get_row(conn, "hash_a")
+        assert row["archived"] == 0
+        assert row["mention_count"] == 2  # cross-session restatement credits
 
 
 # ── execute_merge — empty ─────────────────────────────────────────────────────

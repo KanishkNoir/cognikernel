@@ -248,7 +248,13 @@ _CONTENT_WORD_RE = re.compile(r"[a-z0-9]{3,}")
 _MEMORY_META_RE = re.compile(
     r"\b(session[- ]context|injection block|injected (?:session )?context|cognikernel|"
     r"stop hook|graveyard|pending confirmation|memory confirms|recorded in memory|"
-    r"from memory|the recall (?:surfaces|surfaced|returns|returned|results|mentions|shows|tool))\b",
+    r"from memory|the recall (?:surfaces|surfaced|returns|returned|results|mentions|shows|tool)|"
+    # Claude Code compaction-summary instructions leak into transcripts when a
+    # session compacts mid-run; they are harness meta, not project facts
+    # (GAMMA_CK_TEST: "Resume directly — do not acknowledge the summary"
+    # landed in Hard constraints).
+    r"resume directly|do not acknowledge the summary|do not recap what was happening|"
+    r"continue the conversation from where it left off)\b",
     re.IGNORECASE,
 )
 _META_DEMOTE = 0.15  # weight multiplier for memory-meta sentences

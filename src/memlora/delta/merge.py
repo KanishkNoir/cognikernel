@@ -212,32 +212,40 @@ def _insert_or_update(
         )
         row_id = cursor.lastrowid  # type: ignore[assignment]
     except sqlite3.IntegrityError:
-        # archived=0: a fresh mention RESURRECTS an archived event. Decay (or a
-        # manual archive) marks staleness; re-statement is direct evidence of
-        # renewed relevance. Without this, a re-stated fact lands invisibly on
-        # an archived row and never reaches the block or recall.
-        conn.execute(
-            """
-            UPDATE events
-            SET mention_count = mention_count + 1,
-                weight        = MIN(weight + ?, ?),
-                archived      = 0,
-                evidence_id   = COALESCE(evidence_id, ?)
-            WHERE project_id = ? AND content_hash = ?
-            """,
-            (
-                WEIGHT_INCREMENT_ON_DEDUP,
-                MAX_EVENT_WEIGHT,
-                event.evidence_id,
-                event.project_id,
-                event.content_hash,
-            ),
-        )
         row = conn.execute(
-            "SELECT id FROM events WHERE project_id = ? AND content_hash = ?",
+            "SELECT id, session_id FROM events WHERE project_id = ? AND content_hash = ?",
             (event.project_id, event.content_hash),
         ).fetchone()
         row_id = row["id"]
+        # F9: mention/weight bumps credit CROSS-SESSION restatements only.
+        # Under delta ingest (I2), an in-session duplicate is overwhelmingly the
+        # overlap window re-extracting the same lines on the next firing — not a
+        # genuine restatement. Bumping those systematically inflated events that
+        # straddle firing boundaries, letting boundary junk outrank real
+        # decisions inside the block's section budgets (GAMMA_CK_TEST S2: two
+        # mc=4 question-fragments displaced the default-alias decision).
+        cross_session = row["session_id"] != event.session_id
+        bump = WEIGHT_INCREMENT_ON_DEDUP if cross_session else 0.0
+        mention = 1 if cross_session else 0
+        # archived=0 always: a fresh mention RESURRECTS an archived event even
+        # in-session — re-statement is direct evidence of renewed relevance.
+        conn.execute(
+            """
+            UPDATE events
+            SET mention_count = mention_count + ?,
+                weight        = MIN(weight + ?, ?),
+                archived      = 0,
+                evidence_id   = COALESCE(evidence_id, ?)
+            WHERE id = ?
+            """,
+            (
+                mention,
+                bump,
+                MAX_EVENT_WEIGHT,
+                event.evidence_id,
+                row_id,
+            ),
+        )
         outcome = "updated"
     else:
         outcome = "inserted"
@@ -287,16 +295,26 @@ def _bump_event(conn: sqlite3.Connection, event_id: int, event: Event) -> None:
     """Fold an echo into its canonical: bump mention_count + weight, link provenance.
 
     Mirrors the exact-hash dedup path in _insert_or_update — the recitation strengthens
-    the canonical instead of creating a near-duplicate row."""
+    the canonical instead of creating a near-duplicate row. F9: the bump credits
+    cross-session echoes only; an in-session near-duplicate under delta ingest is
+    overwhelmingly the overlap window re-extracting boundary lines."""
+    row = conn.execute("SELECT session_id FROM events WHERE id = ?", (event_id,)).fetchone()
+    cross_session = row is not None and row["session_id"] != event.session_id
     conn.execute(
         """
         UPDATE events
-        SET mention_count = mention_count + 1,
+        SET mention_count = mention_count + ?,
             weight        = MIN(weight + ?, ?),
             evidence_id   = COALESCE(evidence_id, ?)
         WHERE id = ?
         """,
-        (WEIGHT_INCREMENT_ON_DEDUP, MAX_EVENT_WEIGHT, event.evidence_id, event_id),
+        (
+            1 if cross_session else 0,
+            WEIGHT_INCREMENT_ON_DEDUP if cross_session else 0.0,
+            MAX_EVENT_WEIGHT,
+            event.evidence_id,
+            event_id,
+        ),
     )
     if event.evidence_id is not None:
         from memlora.storage.evidence import link_event_provenance
