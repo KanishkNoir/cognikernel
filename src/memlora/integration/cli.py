@@ -577,9 +577,20 @@ def _cmd_init(args: argparse.Namespace) -> None:
                 ]
             }
         ],
-        # UserPromptSubmit (CK-1) is intentionally NOT registered by default —
-        # it fires on every prompt and ships behind the query_time_injection flag.
-        # Users opt in by adding it to settings.json after measuring injection rate.
+        # CK-1: per-prompt query-time injection. Benchmark evidence (two gamma
+        # runs): imperative-update prompts ("switch the default alias ...") do
+        # not reliably trigger the agent's pull path, and the block's section
+        # budgets can't carry the full decision surface by design — push the
+        # prompt-relevant slice instead. Fail-open, 3s budget, silent when
+        # nothing clears the relevance gate; still gated by the
+        # query_time_injection config flag.
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-user-prompt")}
+                ]
+            }
+        ],
     }
     settings_path.write_text(
         json.dumps(settings, indent=2), encoding="utf-8"
@@ -612,7 +623,13 @@ def _cmd_init(args: argparse.Namespace) -> None:
             '# temporal/authority/provenance gates; fail-open to lexical if the\n'
             '# cross-encoder body is not installed). Needs `install-heads` + warm\n'
             '# (embeddings) and adds some Stop-hook cost. Set false to use lexical only.\n'
-            'cross_encoder_supersession = true\n',
+            'cross_encoder_supersession = true\n'
+            '\n'
+            '# CK-1: per-prompt memory injection (UserPromptSubmit hook). Pushes the\n'
+            '# prompt-relevant memory slice alongside each prompt — the block carries\n'
+            '# the top-ranked facts; this carries what THIS prompt needs. Fail-open,\n'
+            '# 3s budget, silent when nothing clears the relevance gate.\n'
+            'query_time_injection = true\n',
             encoding="utf-8",
         )
 

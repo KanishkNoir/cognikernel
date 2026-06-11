@@ -74,15 +74,22 @@ class TestUserPromptSubmitSilenceContract:
         )
         assert r.returncode == 0
 
-    def test_init_does_not_register_user_prompt_hook(self, tmp_path: Path, monkeypatch) -> None:
-        """UserPromptSubmit is opt-in — init must NOT wire it automatically."""
+    def test_init_registers_user_prompt_hook(self, tmp_path: Path, monkeypatch) -> None:
+        """CK-1 is default-on since the gamma evidence: imperative-update prompts
+        don't reliably trigger the agent's pull path, and the block's section
+        budgets can't carry the full decision surface by design. The hook is
+        fail-open and silent when nothing clears the relevance gate; the
+        query_time_injection flag (also default-on in the project template)
+        still gates the work."""
         import argparse
         monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
         proj = tmp_path / "proj"
         proj.mkdir()
         cli._cmd_init(argparse.Namespace(project_path=str(proj)))
         settings = json.loads((proj / ".claude" / "settings.json").read_text())
-        assert "UserPromptSubmit" not in settings.get("hooks", {})
+        assert "UserPromptSubmit" in settings.get("hooks", {})
+        cfg = (proj / ".memlora" / "config.toml").read_text()
+        assert "query_time_injection = true" in cfg
 
     def test_init_registers_subagent_stop(self, tmp_path: Path, monkeypatch) -> None:
         """SubagentStop IS registered by init (capture_subagents default True)."""
