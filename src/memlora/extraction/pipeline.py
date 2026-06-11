@@ -253,6 +253,16 @@ _MEMORY_META_RE = re.compile(
 )
 _META_DEMOTE = 0.15  # weight multiplier for memory-meta sentences
 
+# Deterministic backstop for label-value facts ("Max attempts: 2 (...)",
+# "Recovery window: 30 s", "Open threshold: 3 ..."). The salience head was not
+# trained on this register and argmaxes it to NOISE, yet these lines carry the
+# numerically-precise decisions recall probes target (GAMMA_CK_TEST S2-T3: the
+# agent answered "no attempt count decided" because all three such lines were
+# dropped). Uses tokenize.is_label_value_line (shared predicate) + a value-ish
+# token requirement so bare prose with a leading clause-colon doesn't qualify.
+_VALUEISH_RE = re.compile(r"\d|\btrue\b|\bfalse\b|\benabled\b|\bdisabled\b|\bnone\b|\balways\b|\bnever\b", re.I)
+_LABEL_FACT_CONF = 0.45  # modest: deterministic floor, below head-confident events
+
 
 def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None) -> list[Event] | None:
     """Broad mode: classify every prose sentence; keep non-NOISE as typed events.
@@ -287,7 +297,12 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
             return None
         label, conf = scored
         if label == "NOISE":
-            continue
+            # Deterministic label-value backstop (see _VALUEISH_RE above).
+            from memlora.extraction.tokenize import is_label_value_line
+            if is_label_value_line(desc) and _VALUEISH_RE.search(desc):
+                label, conf = "DECISION", _LABEL_FACT_CONF
+            else:
+                continue
         if label == "THREAD":
             label = "THREAD_CLOSE" if _THREAD_CLOSE_VERB.search(desc) else "THREAD_OPEN"
         desc_norm = normalize_description(desc)

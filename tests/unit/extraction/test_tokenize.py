@@ -145,3 +145,42 @@ class TestSentenceSplitting:
         prose = [s for s in sentences if not s.is_code_block and s.text.strip()]
         # Should be one sentence, not split at "e.g."
         assert len(prose) == 1
+
+
+class TestLabelValueLines:
+    """I7e: 'Label: value' lines are self-contained facts — never merged into
+    the prose accumulator (GAMMA_CK_TEST: max-attempts/recovery-window/open-
+    threshold all merged into one blob and died in the salience head)."""
+
+    def test_consecutive_label_lines_stay_separate(self):
+        from memlora.extraction.tokenize import tokenize
+        text = ("Assistant:\n"
+                "Open threshold: 3 consecutive connection errors\n"
+                "Recovery window: 30 s (configurable per provider)\n"
+                "Max attempts: 2 (original + 1 failover).\n")
+        sents = [s.text for s in tokenize(text)]
+        assert any(s.startswith("Open threshold: 3") for s in sents)
+        assert any(s.startswith("Recovery window: 30") for s in sents)
+        assert any(s.startswith("Max attempts: 2") for s in sents)
+        # No merged mega-sentence.
+        assert not any("Open threshold" in s and "Recovery window" in s for s in sents)
+
+    def test_label_line_with_trailing_sentence_splits(self):
+        from memlora.extraction.tokenize import tokenize
+        text = ("Assistant:\n"
+                "Max attempts: 2 (one failover). Do not retry the same deployment.\n")
+        sents = [s.text for s in tokenize(text)]
+        assert any(s.startswith("Max attempts: 2") for s in sents)
+        assert any(s.startswith("Do not retry") for s in sents)
+
+    def test_normal_prose_with_midline_colon_not_split(self):
+        from memlora.extraction.tokenize import tokenize
+        text = ("Assistant:\n"
+                "We considered the following options: rotate keys or shard the pool,\n"
+                "and decided the latter is simpler to operate.\n")
+        sents = [s.text for s in tokenize(text)]
+        # "We considered the following options: rotate..." starts capitalized with
+        # a colon beyond 48 chars? No — label must be <=48 chars and line is a
+        # label-line only if it matches the tight pattern. This wraps two lines
+        # of one sentence; it must remain joined.
+        assert any("rotate keys" in s and "simpler to operate" in s for s in sents)
