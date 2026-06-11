@@ -195,8 +195,19 @@ def render_threads(project_id: str, config: Config | None = None) -> str:
         return f"Error reading threads: {exc}"
 
 
-def render_skeleton(project_id: str, config: Config | None = None) -> str:
-    """AST symbol graph — classes, functions, imports per file."""
+def render_skeleton(
+    project_id: str,
+    config: Config | None = None,
+    path_filter: str = "",
+) -> str:
+    """AST symbol graph — classes, functions, imports per file.
+
+    `path_filter` (optional): case-insensitive substring matched against file
+    paths. When given, only matching files render and the token budget is
+    lifted — the injection block's skeleton section is the budget-capped VIEW;
+    this is the full-fidelity pull path for a specific file (down-sample at
+    read, never at store). Used by the `skeleton` MCP tool / /ck-skeleton.
+    """
     config = config or Config.load()
     db_path = config.projects_dir / f"{project_id}.db"
     if not db_path.exists():
@@ -209,12 +220,22 @@ def render_skeleton(project_id: str, config: Config | None = None) -> str:
             edges = load_symbol_edges(conn, project_id)
         if not nodes:
             return "No codebase skeleton yet. Skeleton is built by the PostToolUse hook after each Write/Edit."
+
+        budget = config.skeleton_budget
+        if path_filter:
+            needle = path_filter.lower().replace("\\", "/")
+            keep = {n.path for n in nodes if needle in n.path.lower().replace("\\", "/")}
+            if not keep:
+                sample = ", ".join(sorted({n.path for n in nodes})[:15])
+                return (f"No skeleton entry matches '{path_filter}'. "
+                        f"Known files include: {sample}")
+            nodes = [n for n in nodes if n.path in keep]
+            edges = [e for e in edges if e.from_path in keep or e.to_path in keep]
+            budget = 1_000_000  # full fidelity for an explicit file query
+
         from memlora.symbols.projection import compress_to_skeleton
         from memlora.symbols.render import render_skeleton_section
-        entries = compress_to_skeleton(
-            nodes, edges,
-            budget_tokens=config.skeleton_budget,
-        )
+        entries = compress_to_skeleton(nodes, edges, budget_tokens=budget)
         return render_skeleton_section(entries) or "Skeleton is empty."
     except Exception as exc:
         return f"Error reading skeleton: {exc}"

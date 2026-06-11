@@ -352,6 +352,8 @@ _AGENT_COMMANDS: list[tuple[str, str, str, bool, str]] = [
      "Recall prior CogniKernel decisions/constraints relevant to a query."),
     ("ck-related", "mcp", "find_related", True,
      "Find decisions and code areas related to a query via semantics and the import graph."),
+    ("ck-skeleton", "mcp", "skeleton", True,
+     "Full AST signatures for a file from the CogniKernel skeleton — no file read needed."),
 ]
 
 
@@ -361,7 +363,8 @@ def _write_claude_command(
     """Write one `.claude/commands/<name>.md` slash command."""
     front = ["---", f"description: {blurb}"]
     if takes_arg:
-        front.append(f"argument-hint: {'<file-path>' if target == 'lookup' else '<query>'}")
+        hint = "<file-path>" if target in ("lookup", "skeleton") else "<query>"
+        front.append(f"argument-hint: {hint}")
     if kind == "cli":
         # Prefix-scoped permission so the `!` execution doesn't prompt every time.
         front.append(f"allowed-tools: Bash(python -m memlora {target}:*)")

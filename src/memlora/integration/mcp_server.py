@@ -52,7 +52,9 @@ _mcp = FastMCP(
         "re-reading files, Globbing, or asking the user to rediscover it — the memory "
         "likely has it. Use find_related before changing a subsystem to surface related "
         "decisions and import-graph-adjacent code (the skeleton is an AST symbol "
-        "graph ranked by PageRank centrality). "
+        "graph ranked by PageRank centrality). Use the skeleton tool with a file path "
+        "for the full public signatures of a specific file WITHOUT reading it — the "
+        "block's skeleton section is budget-capped and may omit files; the tool is not. "
         "IMPORTANT: Do not write decisions, constraints, or architecture notes to CLAUDE.md "
         "or any other file. The Stop hook automatically extracts and persists all decisions."
     ),
@@ -92,6 +94,22 @@ def recall(project_path: str, query: str, limit: int = 8) -> str:
 )
 def find_related(project_path: str, query: str, limit: int = 8) -> str:
     return find_related_memory(project_path, query, limit)
+
+
+@_mcp.tool(
+    description=(
+        "Full AST skeleton (public classes/functions/imports) for files matching "
+        "file_path — WITHOUT reading the file. The session-context skeleton section is "
+        "budget-capped and may omit or compress files; this serves the complete "
+        "signatures for a specific file. Use when the Read gate denies a file or the "
+        "block's skeleton lacks the detail you need. Empty file_path = whole skeleton "
+        "(budget-capped)."
+    )
+)
+def skeleton(project_path: str, file_path: str = "") -> str:
+    from memlora.integration.resources import render_skeleton
+    from memlora.storage.connection import hash_project_path
+    return render_skeleton(hash_project_path(project_path), path_filter=file_path)
 
 
 # ── Resources (CK-5) ──────────────────────────────────────────────────────────

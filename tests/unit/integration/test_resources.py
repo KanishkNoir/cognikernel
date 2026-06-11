@@ -177,3 +177,45 @@ def test_mcp_server_has_seven_resources() -> None:
     template_uris = [str(t.uriTemplate) for t in templates]
     for section in ("state", "constraints", "decisions", "graveyard", "skeleton", "threads"):
         assert any(section in u for u in template_uris), f"Missing template for {section}"
+
+
+# ── skeleton path filter (ck-skeleton / skeleton MCP tool) ────────────────────
+
+def _seed_skeleton(db, pid):
+    from memlora.storage.connection import get_connection
+    from memlora.symbols.extractor import SymbolNode, SymbolUpdate
+    nodes = [
+        SymbolNode(path="src/router.py", node_type="function", name="route",
+                   parent_name="", signature="route(request) -> Response",
+                   return_type="Response", fields="", project_id=pid, updated_at=0),
+        SymbolNode(path="src/cache.py", node_type="class", name="CompletionCache",
+                   parent_name="", signature="", return_type="", fields="ttl_s",
+                   project_id=pid, updated_at=0),
+    ]
+    update = SymbolUpdate(project_id=pid, upsert_nodes=nodes, upsert_edges=[], delete_paths=[])
+    from memlora.symbols.store import apply_symbol_update
+    with get_connection(db) as conn:
+        apply_symbol_update(conn, update)
+
+
+def test_render_skeleton_filter_matches_single_file(project) -> None:
+    proj, pid, db, cfg = project
+    _seed_skeleton(db, pid)
+    result = render_skeleton(pid, cfg, path_filter="router")
+    assert "router.py" in result
+    assert "cache.py" not in result          # only the matched file renders
+
+
+def test_render_skeleton_filter_no_match_lists_known_files(project) -> None:
+    proj, pid, db, cfg = project
+    _seed_skeleton(db, pid)
+    result = render_skeleton(pid, cfg, path_filter="does_not_exist.py")
+    assert "No skeleton entry matches" in result
+    assert "router.py" in result             # suggests known files
+
+
+def test_render_skeleton_no_filter_renders_all(project) -> None:
+    proj, pid, db, cfg = project
+    _seed_skeleton(db, pid)
+    result = render_skeleton(pid, cfg)
+    assert "router.py" in result and "cache.py" in result

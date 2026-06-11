@@ -176,9 +176,11 @@ def decide_pretool_read(
         action="deny",
         message=(
             f"[CogniKernel] {canonical} signatures are listed in the §Codebase skeleton "
-            f"section of your session context. Use them. If you genuinely need the function "
-            f"body (e.g., to replace an implementation), retry this Read once within 60 seconds "
-            f"and it will be allowed."
+            f"section of your session context. Use them. If the block's skeleton omits "
+            f"this file or lacks detail, call the `skeleton` MCP tool with this path for "
+            f"the full signatures. If you genuinely need the function body (e.g., to "
+            f"replace an implementation), retry this Read once within 60 seconds and it "
+            f"will be allowed."
         ),
         reason="skeleton_fresh_first_denial",
     )
