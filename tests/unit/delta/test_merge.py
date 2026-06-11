@@ -84,6 +84,24 @@ class TestMergeEvent:
         row = get_row(conn, "hash_a")
         assert row is not None
 
+    def test_dedup_resurrects_archived_event(self, conn: sqlite3.Connection) -> None:
+        """A fresh mention of an archived event must clear archived (I7c).
+
+        Decay (or a manual archive) marks staleness; re-statement is direct
+        evidence of renewed relevance. Without resurrection, the re-stated fact
+        lands invisibly on the archived row and never reaches block or recall.
+        """
+        e = make_event()
+        merge_event(conn, e)
+        conn.execute("UPDATE events SET archived = 1 WHERE content_hash = 'hash_a'")
+        conn.commit()
+
+        outcome, _ = merge_event(conn, e)  # re-mention
+        assert outcome == "updated"
+        row = get_row(conn, "hash_a")
+        assert row["archived"] == 0  # resurrected
+        assert row["mention_count"] == 2
+
 
 # ── execute_merge — empty ─────────────────────────────────────────────────────
 

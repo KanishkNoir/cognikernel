@@ -212,11 +212,16 @@ def _insert_or_update(
         )
         row_id = cursor.lastrowid  # type: ignore[assignment]
     except sqlite3.IntegrityError:
+        # archived=0: a fresh mention RESURRECTS an archived event. Decay (or a
+        # manual archive) marks staleness; re-statement is direct evidence of
+        # renewed relevance. Without this, a re-stated fact lands invisibly on
+        # an archived row and never reaches the block or recall.
         conn.execute(
             """
             UPDATE events
             SET mention_count = mention_count + 1,
                 weight        = MIN(weight + ?, ?),
+                archived      = 0,
                 evidence_id   = COALESCE(evidence_id, ?)
             WHERE project_id = ? AND content_hash = ?
             """,
