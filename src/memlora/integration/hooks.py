@@ -556,14 +556,18 @@ def stop_main() -> None:
                 pass
 
     # Drain the queue inside the hook's own lifetime (survives the Job Object).
+    # 150s budget / 180s kill: each drain subprocess pays a cold model load
+    # (~20s) before its first job; the old 40s ceiling killed nearly every
+    # drain mid-job (GAMMA_CK_TEST: 30+ min queue lag). Requires the Stop hook
+    # timeout in settings.json to be >= 200s (init now writes 300).
     try:
         drain = subprocess.run(
             [sys.executable, "-m", "memlora", "process-jobs", str(project_path),
-             "--time-budget", "30"],
-            capture_output=True, text=True, timeout=40,
+             "--time-budget", "150"],
+            capture_output=True, text=True, timeout=180,
         )
         _warn(f"memlora hook-stop: drain → {drain.stdout.strip()[:160]}")
     except subprocess.TimeoutExpired:
-        _warn("memlora hook-stop: drain hit the 40s ceiling — remaining jobs stay queued")
+        _warn("memlora hook-stop: drain hit the 180s ceiling — remaining jobs stay queued")
     except Exception as exc:
         _warn(f"memlora hook-stop: drain error: {exc}")

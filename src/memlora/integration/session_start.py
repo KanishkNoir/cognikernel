@@ -28,13 +28,18 @@ block means no prior decisions exist.\
 
 
 def _pending_jobs_count(db_path) -> int:
-    """Queued/retryable extraction jobs — best-effort, never raises."""
+    """ALL non-terminal extraction jobs — best-effort, never raises.
+
+    Includes claimed/running: a job stuck mid-flight (e.g. its hook-drain
+    worker was killed) is still pending memory the block doesn't contain yet —
+    counting only queued under-reported exactly when it mattered most.
+    """
     try:
         from memlora.storage.connection import get_connection
         with get_connection(db_path) as conn:
             return conn.execute(
                 "SELECT COUNT(*) FROM extraction_jobs "
-                "WHERE state IN ('queued','retryable_failure')"
+                "WHERE state IN ('queued','retryable_failure','claimed','running')"
             ).fetchone()[0]
     except Exception:
         return 0

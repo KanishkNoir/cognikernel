@@ -265,3 +265,36 @@ class TestCursorAdvance:
 
         assert cursor is not None
         assert cursor.last_line_count == line_count
+
+
+class TestOrphanRecovery:
+    def test_dead_claimant_job_requeued_immediately(self, tmp_path):
+        """I7d: a claimed/running job whose claimant pid is dead must requeue
+        with NO grace period — time-graced recovery left the queue invisible
+        to the MCP drainer for 10 minutes per killed hook-drain."""
+        db = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db)); conn.row_factory = sqlite3.Row
+        run_migrations(conn)
+        from memlora.storage.jobs import recover_orphaned_jobs, claim_next_job
+
+        ev_id = store_evidence(conn, "p", "s", "transcript", b"data")
+        enqueue_extraction(conn, "p", "s", ev_id, "extract.transcript")
+        job = claim_next_job(conn, "extract.transcript", "worker-999999")  # dead pid
+        assert job is not None and job.state == "claimed"
+
+        n = recover_orphaned_jobs(conn, pid_alive=lambda pid: False)
+        assert n == 1
+        assert get_job(conn, job.id).state == "queued"
+
+    def test_live_claimant_job_untouched(self, tmp_path):
+        db = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db)); conn.row_factory = sqlite3.Row
+        run_migrations(conn)
+        from memlora.storage.jobs import recover_orphaned_jobs, claim_next_job
+
+        ev_id = store_evidence(conn, "p", "s", "transcript", b"data")
+        enqueue_extraction(conn, "p", "s", ev_id, "extract.transcript")
+        job = claim_next_job(conn, "extract.transcript", "worker-12345")
+        n = recover_orphaned_jobs(conn, pid_alive=lambda pid: True)
+        assert n == 0
+        assert get_job(conn, job.id).state == "claimed"

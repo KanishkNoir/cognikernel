@@ -365,8 +365,9 @@ def process_jobs(
     from memlora.storage.cursors import get_cursor, save_cursor, slice_jsonl_for_extraction
     from memlora.storage.evidence import load_evidence, load_full_transcript
     from memlora.storage.jobs import (
-        ack_stage, claim_next_job, fail_job,
-        list_jobs, reclaim_stale_jobs, recover_stuck_running_jobs, replay_dead_letter,
+        ack_stage, claim_next_job, fail_job, list_jobs,
+        reclaim_stale_jobs, recover_orphaned_jobs, recover_stuck_running_jobs,
+        replay_dead_letter,
     )
 
     config = config or Config.load(project_path=project_path)
@@ -388,6 +389,8 @@ def process_jobs(
             try:
                 with get_connection(db_path) as conn:
                     run_migrations(conn)
+                    # Grace-free: claimant pid dead => job orphaned, requeue now.
+                    recover_orphaned_jobs(conn, _pid_alive)
                     reclaim_stale_jobs(conn, stale_after_ms=10 * 60 * 1000)
                     recover_stuck_running_jobs(conn, stale_after_ms=10 * 60 * 1000)
                     # Auto-replay ONLY process-killed jobs (failure_class TIMEOUT).

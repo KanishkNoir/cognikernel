@@ -526,7 +526,10 @@ def _cmd_init(args: argparse.Namespace) -> None:
         "Stop": [
             {
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("hook-stop")}
+                    # timeout 300s: covers capture (15s) + the sync drain
+                    # (180s kill ceiling) with margin. Claude Code's default
+                    # hook timeout (60s) killed drains mid-job (I7d).
+                    {"type": "command", "command": _hook_cmd("hook-stop"), "timeout": 300}
                 ]
             }
         ],

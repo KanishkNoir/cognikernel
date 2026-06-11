@@ -230,6 +230,13 @@ def _start_queue_drainer() -> None:
                 db_path = get_db_path(config, project_id)
                 if db_path.exists():
                     with get_connection(db_path) as conn:
+                        # Requeue jobs whose claimant died (hook drains are
+                        # killed at the hook ceiling); otherwise they'd be
+                        # invisible to the queued-count below for the whole
+                        # 10-min stuck-grace window (GAMMA_CK_TEST lag bug).
+                        from memlora.integration.session import _pid_alive
+                        from memlora.storage.jobs import recover_orphaned_jobs
+                        recover_orphaned_jobs(conn, _pid_alive)
                         n = conn.execute(
                             "SELECT COUNT(*) FROM extraction_jobs "
                             "WHERE state IN ('queued','retryable_failure')"

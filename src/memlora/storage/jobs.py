@@ -238,6 +238,54 @@ def reclaim_stale_jobs(
     return result.rowcount
 
 
+def recover_orphaned_jobs(
+    conn: sqlite3.Connection,
+    pid_alive,
+) -> int:
+    """Immediately recover claimed/running jobs whose claimant process is dead.
+
+    Hook-spawned drains are killed at the hook ceiling (subprocess timeout or
+    Claude Code's hook timeout), leaving their job claimed/running with a dead
+    claimant pid. Time-graced recovery (recover_stuck_running_jobs, 10 min)
+    makes the queue invisible to the MCP drainer for that whole window — the
+    GAMMA_CK_TEST run showed 30+ minute per-job lag from exactly this. The
+    claimant string is "worker-{pid}", so pid liveness gives definitive,
+    grace-free orphan detection. Jobs with no parseable claimant fall back to
+    the time-graced paths.
+
+    `pid_alive` is injected (callable pid->bool) to keep this module free of
+    platform-specific process probing. Returns number of jobs recovered.
+    """
+    recovered = 0
+    rows = conn.execute(
+        "SELECT id, state, claimed_by FROM extraction_jobs "
+        "WHERE state IN ('claimed','running') AND claimed_by IS NOT NULL"
+    ).fetchall()
+    now = _now_ms()
+    for row in rows:
+        claimant = row["claimed_by"] or ""
+        if not claimant.startswith("worker-"):
+            continue
+        try:
+            pid = int(claimant.split("-", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        if pid_alive(pid):
+            continue
+        conn.execute(
+            """
+            UPDATE extraction_jobs
+            SET state='queued', claimed_by=NULL, claimed_at=NULL, updated_at=?
+            WHERE id=? AND state IN ('claimed','running')
+            """,
+            (now, row["id"]),
+        )
+        recovered += 1
+    if recovered:
+        conn.commit()
+    return recovered
+
+
 def recover_stuck_running_jobs(
     conn: sqlite3.Connection,
     stale_after_ms: int = 5 * 60 * 1000,
