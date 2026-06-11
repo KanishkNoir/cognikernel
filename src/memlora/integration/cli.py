@@ -746,9 +746,19 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     print(json.dumps(stats, indent=2))
 
 
-def _spawn_worker(project_path: str) -> None:
-    """Spawn process-jobs as a detached background process (platform-aware)."""
-    import os
+def _spawn_worker(project_path: str) -> "subprocess.Popen | None":
+    """Spawn process-jobs as a detached background process (platform-aware).
+
+    Windows: Claude Code wraps hook processes in a Job Object that kills the
+    whole process tree when the hook exits — DETACHED_PROCESS does NOT escape
+    a Job Object (gamma-2 post-mortem: workers were killed at birth, before
+    Python even started; zero log lines). CREATE_BREAKAWAY_FROM_JOB escapes it
+    when the job permits breakaway; when it doesn't, CreateProcess fails and we
+    retry without the flag (the caller then verifies liveness and falls back
+    to inline processing).
+
+    Returns the Popen handle (so callers can verify liveness) or None.
+    """
     cmd = [sys.executable, "-m", "memlora", "process-jobs", project_path]
     kwargs: dict = {
         "stdin": subprocess.DEVNULL,
@@ -758,13 +768,54 @@ def _spawn_worker(project_path: str) -> None:
     if sys.platform == "win32":
         DETACHED_PROCESS = 0x00000008
         CREATE_NEW_PROCESS_GROUP = 0x00000200
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+        base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        for flags in (base | CREATE_BREAKAWAY_FROM_JOB, base):
+            try:
+                return subprocess.Popen(cmd, creationflags=flags, **kwargs)
+            except OSError:
+                continue  # breakaway denied by the job — retry without
+            except Exception as exc:
+                print(f"memlora capture: warning — failed to spawn worker: {exc}", file=sys.stderr)
+                return None
+        return None
     else:
         kwargs["start_new_session"] = True
+        try:
+            return subprocess.Popen(cmd, **kwargs)
+        except Exception as exc:
+            print(f"memlora capture: warning — failed to spawn worker: {exc}", file=sys.stderr)
+            return None
+
+
+# Inline-fallback drain budget. Must fit inside Claude Code's hook timeout
+# (default 60s) minus capture's own work; stop_main allows 55s total.
+_INLINE_DRAIN_BUDGET_S = 40.0
+
+
+def _spawn_or_drain(project_path: str) -> None:
+    """Spawn the worker; if it dies at birth (hook Job Object kill), drain inline.
+
+    The liveness probe waits briefly, then checks the child. A killed-at-birth
+    child shows exit within ~1s; a healthy worker is still running (its first
+    job takes seconds). On confirmed death — or no handle at all — we process
+    the queue inline with a time budget so memory ALWAYS makes forward progress,
+    at worst costing bounded hook latency in environments where detach fails.
+    """
+    import time as _time
+    proc = _spawn_worker(project_path)
+    if proc is not None:
+        _time.sleep(0.8)
+        if proc.poll() is None:
+            return  # worker is alive — detach succeeded
+    # Worker dead or unspawnable: guaranteed-progress fallback.
     try:
-        subprocess.Popen(cmd, **kwargs)
+        from memlora.integration.session import process_jobs
+        summary = process_jobs(project_path, time_budget_s=_INLINE_DRAIN_BUDGET_S)
+        print(f"memlora capture: inline drain (worker did not survive detach): "
+              f"{json.dumps(summary)}", file=sys.stderr)
     except Exception as exc:
-        print(f"memlora capture: warning — failed to spawn worker: {exc}", file=sys.stderr)
+        print(f"memlora capture: inline drain failed: {exc}", file=sys.stderr)
 
 
 def _cmd_capture(args: argparse.Namespace) -> None:
@@ -796,9 +847,10 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
     # Spawn even when nothing new was captured — a backlog of queued jobs from
     # earlier firings may still need draining; the worker's single-flight lock
-    # makes redundant spawns exit immediately.
+    # makes redundant spawns exit immediately. Falls back to a time-budgeted
+    # inline drain when the detached worker is killed by the hook's Job Object.
     if not getattr(args, "no_spawn", False):
-        _spawn_worker(str(Path(args.project_path).resolve()))
+        _spawn_or_drain(str(Path(args.project_path).resolve()))
 
 
 def _cmd_process_jobs(args: argparse.Namespace) -> None:

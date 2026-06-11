@@ -183,6 +183,47 @@ def threads_resource(project_id: str) -> str:
     return render_section(project_id, "threads")
 
 
+def _start_queue_drainer() -> None:
+    """Background thread: drain queued extraction jobs for this project (I4/I7).
+
+    The MCP server is the only long-lived CogniKernel process in a Claude Code
+    session, which makes it the one reliable host for queue processing: hook
+    subprocesses are killed with their Job Object on hook exit (Windows), so a
+    worker detached from a hook may die at birth. This thread polls the
+    project's queue and runs process_jobs in-process; the worker single-flight
+    lock makes it safe alongside any CLI/hook-spawned workers.
+    """
+    import os
+    import threading
+    import time as _time
+
+    project_path = os.environ.get("MEMLORA_PROJECT_PATH") or os.getcwd()
+
+    def _loop() -> None:
+        from memlora.config import Config
+        from memlora.integration.session import process_jobs
+        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+        _time.sleep(10.0)  # let session start settle before first drain
+        while True:
+            try:
+                config = Config.load(project_path=project_path)
+                project_id = hash_project_path(project_path)
+                db_path = get_db_path(config, project_id)
+                if db_path.exists():
+                    with get_connection(db_path) as conn:
+                        n = conn.execute(
+                            "SELECT COUNT(*) FROM extraction_jobs "
+                            "WHERE state IN ('queued','retryable_failure')"
+                        ).fetchone()[0]
+                    if n > 0:
+                        process_jobs(project_path, config=config)
+            except Exception:
+                pass  # never kill the drainer; retry next tick
+            _time.sleep(15.0)
+
+    threading.Thread(target=_loop, daemon=True, name="memlora-queue-drainer").start()
+
+
 def run() -> None:
     """Start the MCP server over stdio."""
     # Kick the embedding model load in the background as soon as the (long-lived)
@@ -192,6 +233,10 @@ def run() -> None:
     try:
         from memlora.embedding.model import warm
         warm()
+    except Exception:
+        pass
+    try:
+        _start_queue_drainer()
     except Exception:
         pass
     _mcp.run(transport="stdio")

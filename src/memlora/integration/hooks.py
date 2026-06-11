@@ -168,21 +168,32 @@ def subagent_stop_main() -> None:
 
 
 def _spawn_process_jobs(project_path: str) -> None:
-    """Spawn the queue worker as a detached background process (fail-open)."""
+    """Spawn the queue worker as a detached background process (fail-open).
+
+    Tries CREATE_BREAKAWAY_FROM_JOB first on Windows — Claude Code's hook Job
+    Object kills the whole process tree on hook exit, and DETACHED_PROCESS does
+    not escape it. No inline fallback here (this is called from subagent
+    teardown which must stay fast); queued jobs are drained by the next Stop
+    firing's capture fallback or the MCP server's background drainer.
+    """
     try:
         kwargs: dict = {
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
         }
+        cmd = [sys.executable, "-m", "memlora", "process-jobs", str(project_path)]
         if sys.platform == "win32":
-            kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
+            base = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
+            for flags in (base | 0x01000000, base):  # try BREAKAWAY_FROM_JOB first
+                try:
+                    subprocess.Popen(cmd, creationflags=flags, **kwargs)
+                    return
+                except OSError:
+                    continue
         else:
             kwargs["start_new_session"] = True
-        subprocess.Popen(
-            [sys.executable, "-m", "memlora", "process-jobs", str(project_path)],
-            **kwargs,
-        )
+            subprocess.Popen(cmd, **kwargs)
     except Exception:
         pass
 
@@ -553,13 +564,15 @@ def stop_main() -> None:
         except Exception:
             git_diff_file = None
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        # 55s: covers capture (<1s) + the inline-drain fallback (40s budget)
+        # that fires when the detached worker is killed by the hook Job Object.
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=55)
         if result.returncode != 0:
             _warn(f"memlora hook-stop: capture failed (rc={result.returncode}): {result.stderr[:300]}")
         else:
             _warn(f"memlora hook-stop: captured session {session_id} → {result.stdout.strip()[:200]}")
     except subprocess.TimeoutExpired:
-        _warn("memlora hook-stop: capture timed out after 15s — worker may still be queued")
+        _warn("memlora hook-stop: capture timed out after 55s — jobs stay queued for the next drain")
     except Exception as exc:
         _warn(f"memlora hook-stop: unexpected error: {exc}")
     finally:

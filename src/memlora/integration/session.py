@@ -299,6 +299,7 @@ def process_jobs(
     project_path: str | Path,
     config: Config | None = None,
     max_jobs: int = 50,
+    time_budget_s: float | None = None,
 ) -> dict[str, Any]:
     """Claim and process all queued extraction jobs for a project.
 
@@ -374,9 +375,14 @@ def process_jobs(
 
         _worker_log(project_id, f"{claimant} started (replayed {replayed} TIMEOUT dead-letters)")
 
+        started_at = time.monotonic()
         budget = max_jobs
         while budget > 0:
             budget -= 1
+            if time_budget_s is not None and (time.monotonic() - started_at) >= time_budget_s:
+                _worker_log(project_id, f"{claimant} time budget {time_budget_s}s exhausted — exiting "
+                                        f"(remaining jobs stay queued for the next drain)")
+                break
             try:
                 with get_connection(db_path) as conn:
                     job = claim_next_job(conn, "extract.transcript", claimant)
