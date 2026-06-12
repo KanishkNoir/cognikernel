@@ -19,12 +19,17 @@ VALID_HOOK_POLICIES = frozenset({"advisory", "strict"})
 # an encoder mode never breaks extraction.
 VALID_EXTRACTORS = frozenset({"legacy", "v1", "v1-broad", "v2", "v2-broad"})
 
-# Single authoritative ceiling for the rendered injection block, set from the
-# Unit 7a baseline measurement (see research/beta/promotion_criteria.md). This
-# is the one number the render path enforces: greedy selection, the section
-# budgets, and the global backstop all derive from config.token_budget, which
-# defaults to this.
-DEFAULT_TOKEN_BUDGET: int = 1500
+# Single authoritative ceiling for the rendered injection block. This is the
+# one number the render path enforces: greedy selection, the (proportionally
+# scaled) section budgets, and the global backstop all derive from
+# config.token_budget, which defaults to this.
+#
+# 1500 → 3500 (J7, measured on the gamma DB — research/benchmarking/
+# budget_elasticity.md): distinct gold facts in the block 4/17 → 8/17 with the
+# knee at 3500 (5000 adds only +1), at +4% cache-READ tokens across a full run
+# (≈0.4% input-equivalent spend — linear, paid at the 0.1× cache rate), versus
+# ~60 full-price recall round-trips the richer block exists to pre-empt.
+DEFAULT_TOKEN_BUDGET: int = 3500
 
 
 @dataclass
@@ -50,6 +55,26 @@ class SectionBudgets:
     decisions: int = 150
     skeleton: int = 800
     summary: int = 40
+
+    def scaled(self, token_budget: int) -> "SectionBudgets":
+        """Section caps scaled proportionally from the 1500-token baseline (J7.2).
+
+        A budget bump must grow every section by the same ratio — leaving the
+        caps fixed would silently distort the section mix (mandatory zones
+        pinned small while the skeleton balloons, or vice versa). scaled(1500)
+        is the identity. The skeleton cap is governed separately by
+        config.skeleton_budget, but the section-level cap scales too so the
+        render-time ceiling tracks the budget.
+        """
+        f = max(token_budget, 1) / 1500.0
+        if abs(f - 1.0) < 1e-9:
+            return self
+        return SectionBudgets(
+            **{
+                name: max(1, int(getattr(self, name) * f))
+                for name in self.__dataclass_fields__
+            }
+        )
 
 
 @dataclass

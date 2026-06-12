@@ -50,6 +50,13 @@ def greedy_fill(events: list["Event"], budget_tokens: int) -> list["Event"]:
     """
     non_archived = [e for e in events if not e.archived]
 
+    # J7.2: internal zone caps scale with the configured budget so a larger
+    # block grows every zone proportionally — at 5000 tokens the mandatory
+    # zone must not stay pinned at the 1500-budget's 500.
+    scale = max(budget_tokens, 1) / 1500.0
+    mandatory_limit = int(_MANDATORY_TOKEN_LIMIT * scale)
+    component_limit = int(_COMPONENT_TOKEN_LIMIT * scale)
+
     # Phase 1 — mandatory (budget-exempt guardrail). Protect both the mandatory
     # event types and any user-stated event (authority gate) so the user's own
     # statements — notably the active thread — survive budget pressure.
@@ -63,8 +70,8 @@ def greedy_fill(events: list["Event"], budget_tokens: int) -> list["Event"]:
     mandatory_ids = {id(e) for e in mandatory}
     mandatory_tokens = sum(estimate_tokens(e) for e in mandatory)
 
-    if mandatory_tokens > _MANDATORY_TOKEN_LIMIT:
-        mandatory = _compress_mandatory(mandatory, _MANDATORY_TOKEN_LIMIT)
+    if mandatory_tokens > mandatory_limit:
+        mandatory = _compress_mandatory(mandatory, mandatory_limit)
         mandatory_tokens = sum(estimate_tokens(e) for e in mandatory)
 
     # Deduplicate by path — keep highest-weight event per unique path so a file
@@ -85,7 +92,7 @@ def greedy_fill(events: list["Event"], budget_tokens: int) -> list["Event"]:
     comp_tokens = 0
     for e in component_candidates[:_COMPONENT_MAX_COUNT]:
         cost = estimate_tokens(e)
-        if comp_tokens + cost <= _COMPONENT_TOKEN_LIMIT:
+        if comp_tokens + cost <= component_limit:
             guaranteed_components.append(e)
             comp_tokens += cost
 

@@ -671,7 +671,9 @@ def render_state(
     ctx.skeleton = skeleton
     ctx.ckl_mode = config.ckl_mode
     ctx.ckl_v2 = config.ckl_v2
-    ctx.section_budgets = config.section_budgets
+    # J7.2: section caps track the configured budget proportionally so a
+    # larger block grows every section, not just the greedy tail.
+    ctx.section_budgets = config.section_budgets.scaled(config.token_budget)
     # Phase B trust signals — only carried through to the renderer.
     ctx.hook_policy = config.hook_policy
     ctx.retry_window_seconds = config.deny_retry_window_seconds
