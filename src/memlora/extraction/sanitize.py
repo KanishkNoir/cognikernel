@@ -23,6 +23,9 @@ _TABLE_SEP  = re.compile(r"^\s*\|[-| :]+\|\s*$")
 _CODE_FENCE = re.compile(r"^```.*$")
 _HEADING    = re.compile(r"^#{1,6}\s+")
 _BULLET     = re.compile(r"^[-*•]\s+")
+# J5.1: blockquote markers were previously untouched and leaked into stored
+# descriptions ("> …impossible.").
+_BLOCKQUOTE = re.compile(r"^\s*(?:>\s?)+")
 
 # Inline markdown patterns — applied per kept line, keep text drop markers.
 # Order in `_strip_inline_markdown` matters: links → bold → italic → code → strike.
@@ -76,6 +79,43 @@ def sanitize_rationale(text: str) -> str:
     return smart_truncate(cleaned, _MAX_RATIONALE).rstrip()
 
 
+# J5.2 — context-dependent fragments. A sentence that only means something
+# relative to its surrounding conversation ("The 2× multiplier only matters if
+# _MAX_ATTEMPTS were raised above 2") is not a standalone fact; minted at full
+# authority it pollutes the mandatory hard-constraints zone. The patterns
+# require the anaphoric/conditional OPENER shape so genuine constraints with
+# "only" semantics ("Only cache when temperature is 0", "Backoff applies only
+# to 5xx") never match — the boundary is documented in the test table.
+_FRAG_ANAPHORIC = re.compile(
+    r"^(?:The|This|That|It|These|Those)\s+\S+(?:\s+\S+)?\s+"
+    r"(?:only|just)\s+(?:matters|applies|works|exists|happens|fires|holds)\b",
+    re.IGNORECASE,
+)
+_FRAG_CONDITIONAL = re.compile(
+    r"\bonly\s+(?:matters|applies|fires|holds|happens|kicks\s+in)\s+(?:if|when)\b",
+    re.IGNORECASE,
+)
+_FRAG_COUNTERFACTUAL = re.compile(
+    r"\bwould\s+only\b|\bif\s+\S+(?:\s+\S+){0,4}\s+were\s+\w+",
+    re.IGNORECASE,
+)
+
+
+def is_context_dependent_fragment(desc: str) -> bool:
+    """True when a description is an aside that depends on unstated context.
+
+    Used by the pipeline to demote weight and retype CONSTRAINT_HARD →
+    CONSTRAINT_SOFT — a context-dependent sentence must never be budget-exempt
+    mandatory. Mint-time only; raw evidence is untouched (lossless).
+    """
+    stripped = desc.strip()
+    return bool(
+        _FRAG_ANAPHORIC.search(stripped)
+        or _FRAG_CONDITIONAL.search(stripped)
+        or _FRAG_COUNTERFACTUAL.search(stripped)
+    )
+
+
 def is_question_description(desc: str) -> bool:
     """Return True if the description looks like a user question, not a statement.
 
@@ -115,6 +155,7 @@ def _clean(text: str) -> str:
             continue
         if _TABLE_ROW.match(line) or _TABLE_SEP.match(line):
             continue
+        line = _BLOCKQUOTE.sub("", line)
         line = _HEADING.sub("", line)
         line = _BULLET.sub("", line)
         line = _strip_inline_markdown(line)
@@ -141,4 +182,10 @@ def _strip_inline_markdown(line: str) -> str:
     line = _INLINE_UND_I.sub(r"\1", line)
     line = _INLINE_CODE.sub(r"\1", line)
     line = _INLINE_STRIKE.sub(r"\1", line)
+    # J5.1 residue pass: extraction windows can split a bold span so only one
+    # side of the `**` pair lands in this line; the paired patterns above can't
+    # see it and stored descriptions ended with artifacts like `impossible.**.`.
+    # Trade-off: a literal `**kwargs` outside backticks loses its stars too —
+    # acceptable, since the paired passes already mangle that case today.
+    line = re.sub(r"\*{2,}", "", line)
     return line

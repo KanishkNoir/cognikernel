@@ -13,6 +13,20 @@ from memlora.storage.connection import get_connection
 from memlora.storage.migrations import run_migrations
 
 
+@pytest.fixture(autouse=True)
+def _isolate_memlora_home(tmp_path: Path, monkeypatch) -> None:
+    """Tests must never touch the user's real ~/.memlora.
+
+    Without this, any test that exercises session_capture/process_jobs against
+    a tmp_path project writes state into the user-global store keyed by the
+    project-path hash — which both pollutes the user's data and makes runs
+    order/`--basetemp`-dependent (observed: dead-letter state from a previous
+    run failing a later one). Tests that need a specific home still win: a
+    test-level monkeypatch.setenv or an explicit subprocess env overrides this.
+    """
+    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "_memlora_home"))
+
+
 @pytest.fixture
 def tmp_db(tmp_path: Path) -> Path:
     """Return path to a freshly migrated SQLite database."""

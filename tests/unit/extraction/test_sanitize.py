@@ -117,3 +117,56 @@ class TestIsQuestionDescription:
 
     def test_statement_is_not(self) -> None:
         assert not is_question_description("We chose SQLite")
+
+
+# ── J5 data contracts ─────────────────────────────────────────────────────────
+
+from memlora.extraction.sanitize import is_context_dependent_fragment
+
+
+class TestJ5Sanitation:
+    def test_blockquote_markers_stripped(self) -> None:
+        # Measured artifact: agent quoting a constraint produced "> ..." lines.
+        text = "> Do not alias to Opus.\n> Defaulting to Opus makes cost control impossible."
+        out = sanitize_description(text)
+        assert ">" not in out
+        assert "Do not alias to Opus" in out
+
+    def test_nested_blockquote_stripped(self) -> None:
+        assert sanitize_description("> > deep quote fact") == "deep quote fact"
+
+    def test_unpaired_bold_residue_removed(self) -> None:
+        # Measured artifact: window split a bold span -> "impossible.**."
+        out = sanitize_description("Defaulting to Opus makes cost control impossible.**.")
+        assert "**" not in out
+        assert out.startswith("Defaulting to Opus")
+
+    def test_paired_bold_still_resolves(self) -> None:
+        assert sanitize_description("**Do not alias to Opus.**") == "Do not alias to Opus."
+
+    def test_single_star_identifier_preserved(self) -> None:
+        assert "*args" in sanitize_description("pass *args through unchanged")
+
+
+class TestContextDependentFragment:
+    # Positives — the measured false-mint class.
+    @pytest.mark.parametrize("desc", [
+        "The 2x multiplier only matters if _MAX_ATTEMPTS were raised above 2.",
+        "This flag only applies when the semantic cache is enabled.",
+        "It only fires if the deadline has already passed.",
+        "The cap would only be reached if every retry consumed the full window.",
+    ])
+    def test_fragment_positive(self, desc: str) -> None:
+        assert is_context_dependent_fragment(desc)
+
+    # Negatives — genuine constraints with "only"/"if" semantics must NOT demote.
+    @pytest.mark.parametrize("desc", [
+        "Only cache when temperature is explicitly 0 in the request.",
+        "Backoff applies only to 5xx and 429 responses.",
+        "Provider API keys come from environment variables only, never a database.",
+        "If the first byte does not arrive within 10 s, cancel the upstream request.",
+        "The raw key is shown to the issuer exactly once on creation.",
+        "Do not offer per-request TTL override via an API header.",
+    ])
+    def test_fragment_negative(self, desc: str) -> None:
+        assert not is_context_dependent_fragment(desc)

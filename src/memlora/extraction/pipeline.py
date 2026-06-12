@@ -254,10 +254,22 @@ _MEMORY_META_RE = re.compile(
     # (GAMMA_CK_TEST: "Resume directly — do not acknowledge the summary"
     # landed in Hard constraints).
     r"resume directly|do not acknowledge the summary|do not recap what was happening|"
-    r"continue the conversation from where it left off)\b",
+    r"continue the conversation from where it left off|"
+    # J5: leak shapes collected from the 7 benchmark DBs (scripts/_j5_meta_scan.py).
+    # Event-type tokens narrated in prose ("There's an APPROACH_ABANDONED_DO_NOT_RETRY
+    # entry recording…") — underscore forms only, so prose like "hard constraint" stays:
+    r"approach_abandoned\w*|constraint_hard|constraint_soft|thread_open|component_status|"
+    # supersession governance narration (not the superseded fact itself):
+    r"(?:now|explicitly) superseded|rejection is superseded|superseded abandoned|"
+    # memory-reference framing around a fact whose canonical capture exists separately:
+    r"memory (?:shows|says)|recorded decision|decision to record|decision log|"
+    r"locked in the project memory|prior decision being overridden|entry recording|"
+    # the MCP server instructions themselves leaking into extraction:
+    r"call recall\b|missing from the block)\b",
     re.IGNORECASE,
 )
 _META_DEMOTE = 0.15  # weight multiplier for memory-meta sentences
+_FRAG_DEMOTE = 0.4   # weight multiplier for context-dependent fragments (J5.2)
 
 # Deterministic backstop for label-value facts ("Max attempts: 2 (...)",
 # "Recovery window: 30 s", "Open threshold: 3 ..."). The salience head was not
@@ -282,7 +294,7 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
     from memlora.extraction.authority import default_authority_for_role
     from memlora.extraction.hashing import compute_content_hash
     from memlora.extraction.normalize import normalize_description
-    from memlora.extraction.sanitize import sanitize_description
+    from memlora.extraction.sanitize import is_context_dependent_fragment, sanitize_description
     from memlora.extraction.triple import augment_with_triple
     from memlora.extraction.windowing import _is_structural_label
 
@@ -314,13 +326,18 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
         desc_norm = normalize_description(desc)
         if not desc_norm:
             continue
+        # J5.2 — retype BEFORE hashing so event identity reflects the final type.
+        # A context-dependent aside must never be budget-exempt mandatory.
+        is_frag = is_context_dependent_fragment(desc_norm)
+        if is_frag and label == "CONSTRAINT_HARD":
+            label = "CONSTRAINT_SOFT"
         chash = compute_content_hash(label, desc_norm)
         if chash in seen:
             continue
         seen.add(chash)
         is_meta = bool(_MEMORY_META_RE.search(desc))
-        prov = provenance + "+meta" if is_meta else provenance
-        weight = conf * (_META_DEMOTE if is_meta else 1.0)
+        prov = provenance + ("+meta" if is_meta else "") + ("+frag" if is_frag else "")
+        weight = conf * (_META_DEMOTE if is_meta else 1.0) * (_FRAG_DEMOTE if is_frag else 1.0)
         ev = Event(
             project_id=session_meta.project_id,
             session_id=session_meta.session_id,
@@ -362,11 +379,20 @@ def _filter_and_retype_with_head(events: list[Event], head=None) -> list[Event] 
             continue
         if label == "THREAD":
             label = "THREAD_CLOSE" if _THREAD_CLOSE_VERB.search(desc) else "THREAD_OPEN"
+        # J5.2 — same fragment contract as the broad path.
+        from memlora.extraction.sanitize import is_context_dependent_fragment
+        is_frag = is_context_dependent_fragment(desc)
+        if is_frag and label == "CONSTRAINT_HARD":
+            label = "CONSTRAINT_SOFT"
         e.event_type = label
         e.payload["confidence"] = conf
-        suffix = "+head+meta" if _MEMORY_META_RE.search(desc) else "+head"
-        if "+meta" in suffix:
+        suffix = "+head"
+        if _MEMORY_META_RE.search(desc):
+            suffix += "+meta"
             e.weight = (e.weight or conf) * _META_DEMOTE
+        if is_frag:
+            suffix += "+frag"
+            e.weight = (e.weight or conf) * _FRAG_DEMOTE
         e.payload["provenance"] = (e.payload.get("provenance", "") + suffix).lstrip("+")
         kept.append(e)
     return kept
