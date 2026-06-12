@@ -67,33 +67,19 @@ def _lexical_recall(
 
 
 def _recall_hits(conn: sqlite3.Connection, project_id: str, query: str, k: int) -> list[dict]:
-    """Semantic recall when vectors are stored; deterministic lexical otherwise.
+    """Hybrid retrieval (BM25 ∪ dense → RRF) with a deterministic last resort.
 
-    Tries semantic first (embedding model + stored vectors). Falls back to the
-    deterministic lexical path when:
-      - fastembed is not installed, OR
-      - the model is not loaded *yet* (still downloading / cold) — we never block
-        the caller on the multi-minute first fetch, OR
-      - no events have stored vectors yet (e.g. before the first session_end with
-        the model available, or before a backfill has run).
-    This makes recall correct even on a fresh install and progressively stronger
-    as the model warms and the vector store fills in.
+    `hybrid_recall` handles the degradation ladder internally (both axes → RRF;
+    one axis → that axis alone; model warm-up is kicked but never awaited). It
+    returns [] only when NEITHER axis is available — no FTS5 in this SQLite
+    build and no loaded embedding model — in which case the legacy Jaccard scan
+    keeps recall correct on a minimal install.
     """
-    from memlora.embedding.model import is_ready, warm
+    from memlora.retrieval.hybrid import hybrid_recall
 
-    # Kick the single background model load (no-op if already loading/loaded). In a
-    # long-lived process (the MCP server) this makes later recalls semantic; in a
-    # short-lived hook it just primes the persistent cache for next time.
-    warm()
-    # is_ready() is non-blocking: True only if the model is loaded RIGHT NOW. Until
-    # then we serve deterministic lexical recall rather than hang on the cold-start
-    # download — the bug that made `recall` take minutes.
-    if is_ready():
-        from memlora.embedding.retrieval import recall
-        hits = recall(conn, project_id, query, k=k)
-        if hits:
-            return hits
-        # No stored vectors yet — fall through to lexical so the caller isn't silent.
+    hits = hybrid_recall(conn, project_id, query, k=k)
+    if hits:
+        return hits
     return _lexical_recall(conn, project_id, query, k)
 
 

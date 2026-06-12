@@ -99,3 +99,7 @@ models/
 checkpoints/
 *.onnx
 # (small numpy heads under src/.../heads/*.npz are intentionally NOT ignored)
+
+.bench_dbs/
+.pytest_tmp/
+analysis_gcogni/

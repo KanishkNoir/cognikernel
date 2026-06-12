@@ -16,6 +16,14 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     _bootstrap_meta(conn)
     _run_schema_migrations(conn)
     _check_projection_version(conn)
+    # FTS5 lives outside the numbered chain: availability depends on the user's
+    # SQLite build, and a missing extension must degrade (lexical axis absent),
+    # never abort migrations. ensure_fts is one meta SELECT once established.
+    try:
+        from memlora.storage.fts import ensure_fts
+        ensure_fts(conn)
+    except Exception:
+        pass
 
 
 # ── internals ────────────────────────────────────────────────────────────────
