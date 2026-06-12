@@ -222,10 +222,33 @@ def _render_hard_constraints(
         desc = c.payload.get("description", "")
         rationale = c.payload.get("rationale", "")
         if rationale:
-            lines.append(f"- {desc} — {rationale}")
+            lines.append(f"- {desc} — {rationale}{_consolidation_suffix(c)}")
         else:
-            lines.append(f"- {desc}")
+            lines.append(f"- {desc}{_consolidation_suffix(c)}")
+        lines.extend(_lineage_lines(c))
     return "\n".join(lines)
+
+
+def _consolidation_suffix(event: Event) -> str:
+    """'(×N)' marker for a golden record consolidated from N same-key events."""
+    n = event.payload.get("provenance_count", 0)
+    return f" (×{n})" if isinstance(n, int) and n > 1 else ""
+
+
+def _lineage_lines(event: Event) -> list[str]:
+    """Demoted DISTINCT values of a consolidated topic — history, not currency.
+
+    Rendered as indented sub-lines so the canonical value reads as THE value.
+    Budget enforcement drops whole events, so lineage rides with its canonical.
+    """
+    lineage = event.payload.get("lineage")
+    if not isinstance(lineage, list):
+        return []
+    return [
+        f"  — previously: {li.get('description', '')}"
+        for li in lineage
+        if isinstance(li, dict) and li.get("description")
+    ]
 
 
 def _render_graveyard(
@@ -284,9 +307,10 @@ def _render_decisions(
         rationale = d.payload.get("rationale", "")
         sess = d.session_id
         if rationale:
-            lines.append(f"{i}. {desc} — {rationale} (session {sess})")
+            lines.append(f"{i}. {desc} — {rationale}{_consolidation_suffix(d)} (session {sess})")
         else:
-            lines.append(f"{i}. {desc} (session {sess})")
+            lines.append(f"{i}. {desc}{_consolidation_suffix(d)} (session {sess})")
+        lines.extend(_lineage_lines(d))
     return "\n".join(lines)
 
 

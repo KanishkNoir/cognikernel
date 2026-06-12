@@ -112,6 +112,11 @@ def execute_merge(
     try:
         with conn:
             for event in candidates:
+                # J2: derive the decision key at the single mint choke point so
+                # every extraction path (broad, patterns, co-capture) gets one.
+                if event.decision_key is None:
+                    from memlora.extraction.decision_key import derive_decision_key
+                    event.decision_key = derive_decision_key(event.payload, event.event_type)
                 # R3: fold a near-identical restatement (echo) into its canonical
                 # BEFORE supersession can fire — bump mention_count, never mint a
                 # near-dup or let a recitation supersede the original. Lossless.
@@ -195,8 +200,9 @@ def _insert_or_update(
             """
             INSERT INTO events
                 (project_id, session_id, created_at, event_type,
-                 payload, content_hash, weight, mention_count, evidence_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 payload, content_hash, weight, mention_count, evidence_id,
+                 decision_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.project_id,
@@ -208,6 +214,7 @@ def _insert_or_update(
                 event.weight,
                 event.mention_count,
                 event.evidence_id,
+                event.decision_key,
             ),
         )
         row_id = cursor.lastrowid  # type: ignore[assignment]

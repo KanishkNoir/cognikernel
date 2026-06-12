@@ -42,6 +42,10 @@ class Event:
     superseded_by: int | None = None
     archived: bool = False
     last_mentioned_session: int = 0
+    # J2: normalized topic axis ("alias default"); None = not derived yet,
+    # '' = derivation found no key. Computed at merge time (the single mint
+    # choke point) and lazily backfilled for pre-016 rows.
+    decision_key: str | None = None
 
     def __post_init__(self) -> None:
         if self.event_type not in VALID_EVENT_TYPES:
@@ -63,8 +67,8 @@ def insert_event(conn: sqlite3.Connection, event: Event) -> int:
             """
             INSERT INTO events
                 (project_id, session_id, created_at, event_type, payload,
-                 content_hash, weight, mention_count, evidence_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 content_hash, weight, mention_count, evidence_id, decision_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.project_id,
@@ -76,6 +80,7 @@ def insert_event(conn: sqlite3.Connection, event: Event) -> int:
                 event.weight,
                 event.mention_count,
                 event.evidence_id,
+                event.decision_key,
             ),
         )
         row_id = cursor.lastrowid  # type: ignore[assignment]
@@ -306,6 +311,7 @@ def get_max_event_id(conn: sqlite3.Connection, project_id: str) -> int:
 # ── internals ────────────────────────────────────────────────────────────────
 
 def _row_to_event(row: sqlite3.Row) -> Event:
+    keys = row.keys()
     return Event(
         id=row["id"],
         project_id=row["project_id"],
@@ -319,4 +325,5 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         mention_count=row["mention_count"],
         superseded_by=row["superseded_by"],
         archived=bool(row["archived"]),
+        decision_key=row["decision_key"] if "decision_key" in keys else None,
     )

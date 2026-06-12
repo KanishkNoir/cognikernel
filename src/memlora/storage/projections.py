@@ -103,7 +103,15 @@ def invalidate_projection(conn: sqlite3.Connection, project_id: str) -> None:
 
 def rebuild_projection(conn: sqlite3.Connection, project_id: str) -> Projection:
     """Build a fresh Projection from all active events and persist it."""
+    from memlora.extraction.decision_key import backfill_keys
     from memlora.storage.events import get_events_for_projection
+
+    # J2: pre-016 rows get their decision_key lazily here (idempotent — ''
+    # marks "derived, none found", so a project is scanned at most once).
+    try:
+        backfill_keys(conn, project_id)
+    except Exception:
+        pass  # keys are an enhancement; never block a rebuild on them
 
     events = get_events_for_projection(conn, project_id, after_id=0)
 
@@ -122,6 +130,8 @@ def rebuild_projection(conn: sqlite3.Connection, project_id: str) -> Projection:
             "session_id": event.session_id,
             "content_hash": event.content_hash,
             "payload": event.payload,
+            "created_at": event.created_at,
+            "decision_key": event.decision_key,
         }
         if event.event_type in _HARD_TYPES:
             hard_constraints.append(rec)
@@ -156,6 +166,18 @@ def rebuild_projection(conn: sqlite3.Connection, project_id: str) -> Projection:
             ranked_decisions.append(rec)
         elif event.event_type in _THREAD_TYPES:
             active_threads.append(rec)
+
+    # J2.3 + J3.1: golden-record consolidation across the choice family —
+    # jointly over hard constraints and decisions (a newer DECISION can be the
+    # current value of an older CONSTRAINT's axis), then re-bucketed by the
+    # canonical's own type so each renders in its natural section. Runs before
+    # composite weighting so repetition signals see consolidated counts.
+    # Read-time only; keyless recs pass through untouched.
+    from memlora.storage.consolidate import consolidate_by_key
+
+    choice = consolidate_by_key(hard_constraints + ranked_decisions)
+    hard_constraints = [r for r in choice if r["event_type"] in _HARD_TYPES]
+    ranked_decisions = [r for r in choice if r["event_type"] not in _HARD_TYPES]
 
     # Unit 3: recompute each rec's weight via the full composite model
     # (base × recency × repetition × centrality × activity × type) before
