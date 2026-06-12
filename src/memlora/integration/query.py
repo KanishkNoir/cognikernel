@@ -19,11 +19,6 @@ from memlora.storage.connection import get_connection, get_db_path, hash_project
 from memlora.storage.migrations import run_migrations
 
 _MAX_DESC = 140
-# Event types always in the static session-start block — skip them in per-prompt
-# injection to avoid re-injecting what the agent already has in context.
-_ALWAYS_INJECTED: frozenset[str] = frozenset({
-    "CONSTRAINT_HARD", "APPROACH_ABANDONED_DO_NOT_RETRY",
-})
 
 
 def _resolve(project_path: str, config: Config | None) -> tuple[str, Path]:
@@ -89,44 +84,141 @@ def _fmt_hit(h: dict, extra: str = "") -> str:
     return f"- ({h['event_type']} · {h['score']:.2f}{extra}) {subj}{desc}"
 
 
+def select_ck1_hits(
+    hits: list[dict],
+    prompt_text: str,
+    config: Config,
+    seen_ids: set[int] | None = None,
+) -> list[dict]:
+    """The full CK-1 selection pipeline as a pure function (harness-sweepable):
+    self-echo filter → ledger redundancy filter → dual-evidence gate → cap."""
+    from memlora.delta.supersede import normalize_for_overlap
+
+    q_toks = normalize_for_overlap(prompt_text)
+    if q_toks:
+        def _echo(h: dict) -> bool:
+            d_toks = normalize_for_overlap(h.get("description", ""))
+            if not d_toks:
+                return False
+            inter = len(q_toks & d_toks)
+            return inter / len(q_toks | d_toks) >= 0.6 or inter / len(d_toks) >= 0.8
+
+        hits = [h for h in hits if not _echo(h)]
+    if seen_ids:
+        hits = [h for h in hits if h["id"] not in seen_ids]
+    return _ck1_dual_evidence(hits, prompt_text, config)
+
+
+def _ck1_dual_evidence(
+    hits: list[dict],
+    prompt_text: str,
+    config: Config,
+) -> list[dict]:
+    """Rank-based dual-evidence gate (J4.2). Precision-first; silence default.
+
+    Axis availability is inferred from the result set as a whole — a hit
+    missing one rank when both axes ran means that axis did NOT independently
+    surface it (insufficient evidence), which is different from the axis being
+    down. Modes:
+      both axes:  dense_rank ≤ N AND bm25_rank ≤ N   (independent agreement —
+                  the rank-space analogue of the xenc∧jaccard supersession hybrid)
+      BM25 only:  bm25_rank ≤ 2 AND ≥ ck1_min_term_overlap shared content terms
+                  (an ABSOLUTE floor — ratio scores are why 0.625 was the old
+                  cold-path ceiling)
+      dense only: dense_rank ≤ 2 AND cosine ≥ 0.60 (self-comparable within one axis)
+    """
+    from memlora.delta.supersede import normalize_for_overlap
+
+    dense_live = any(h.get("dense_rank") is not None for h in hits)
+    bm25_live = any(h.get("bm25_rank") is not None for h in hits)
+    q_toks = normalize_for_overlap(prompt_text)
+    passed: list[dict] = []
+    for h in hits:
+        d, b = h.get("dense_rank"), h.get("bm25_rank")
+        if dense_live and bm25_live:
+            ok = (
+                d is not None and b is not None
+                and d <= config.ck1_dense_rank_max
+                and b <= config.ck1_bm25_rank_max
+            )
+            # Lexical anchor even in dual mode: rank agreement alone is too
+            # permissive on short/generic prompts in a small store (measured:
+            # "yep i would like to replace the constraint" passed ≤5∧≤5).
+            if ok and config.ck1_dual_anchor_terms:
+                shared = q_toks & normalize_for_overlap(h.get("description", ""))
+                ok = len(shared) >= config.ck1_dual_anchor_terms
+        elif bm25_live:
+            if b is None or b > 2:
+                ok = False
+            else:
+                shared = q_toks & normalize_for_overlap(h.get("description", ""))
+                ok = len(shared) >= config.ck1_min_term_overlap
+        elif dense_live:
+            ok = d is not None and d <= 2 and (h.get("cosine") or 0.0) >= 0.60
+        else:
+            ok = False
+        if ok:
+            passed.append(h)
+    return passed[: config.ck1_max_events]
+
+
 def recall_for_prompt(
     project_path: str,
     prompt_text: str,
     *,
     config: Config | None = None,
+    session_id: str | None = None,
 ) -> str:
     """Per-prompt injection candidate for the UserPromptSubmit hook (CK-1).
 
-    Returns a compact snippet (≤ config.query_injection_max_tokens chars) when a
-    high-confidence, non-redundant prior decision is relevant to `prompt_text`.
-    Returns '' (silence) when nothing clears the threshold — silence is the
-    default, not the fallback. The caller must check the flag and handle timeouts.
+    Returns a compact snippet (≤ config.query_injection_max_tokens tokens-ish)
+    when a relevant, non-redundant prior fact clears the dual-evidence gate.
+    Returns '' (silence) otherwise — silence is the default, not the fallback.
+
+    Redundancy = the render ledger: anything this session already saw (block
+    or earlier ck1 push) is skipped. This REPLACES the old type-based filter,
+    which was empirically false — the block carries only a handful of the
+    active hard constraints, and the types it excluded were exactly the ones
+    most worth pushing.
     """
     try:
         config = config or Config.load(project_path=project_path)
         project_id, db_path = _resolve(project_path, config)
         if not db_path.exists():
             return ""
-        threshold = config.query_injection_threshold
         max_chars = config.query_injection_max_tokens * 4  # tok → approx chars
         with get_connection(db_path) as conn:
             run_migrations(conn)
-            hits = _recall_hits(conn, project_id, prompt_text, 5)
-        # Filter: skip event types that are always in the static block.
-        hits = [h for h in hits if h.get("event_type") not in _ALWAYS_INJECTED]
-        # Apply relevance gate — inject nothing below threshold.
-        hits = [h for h in hits if h.get("score", 0) >= threshold]
-        if not hits:
-            return ""
-        lines = ["[CogniKernel — relevant prior context]"]
-        used = len(lines[0])
-        for h in hits:
-            line = _fmt_hit(h)
-            if used + len(line) + 1 > max_chars:
-                break
-            lines.append(line)
-            used += len(line) + 1
-        return "\n".join(lines) if len(lines) > 1 else ""
+            from memlora.retrieval.hybrid import hybrid_recall
+
+            hits = hybrid_recall(conn, project_id, prompt_text, k=8, n_per_axis=10)
+            if not hits:
+                return ""
+            seen: set[int] = set()
+            if session_id:
+                from memlora.storage.render_ledger import rendered_event_ids
+
+                seen = rendered_event_ids(conn, project_id, session_id)
+            passed = select_ck1_hits(hits, prompt_text, config, seen)
+            if not passed:
+                return ""
+            lines = ["[CogniKernel — relevant prior context]"]
+            used = len(lines[0])
+            injected: list[int] = []
+            for h in passed:
+                line = _fmt_hit(h)
+                if used + len(line) + 1 > max_chars:
+                    break
+                lines.append(line)
+                used += len(line) + 1
+                injected.append(h["id"])
+            if len(lines) <= 1:
+                return ""
+            if session_id and injected:
+                from memlora.storage.render_ledger import record_rendered
+
+                record_rendered(conn, project_id, session_id, injected, "ck1")
+        return "\n".join(lines)
     except Exception:  # never raise; silence on any error
         return ""
 

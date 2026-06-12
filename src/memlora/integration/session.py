@@ -605,13 +605,20 @@ def get_projection(
 def render_state(
     project_path: str | Path,
     config: Config | None = None,
+    session_id: str | None = None,
 ) -> str:
-    """Return the rendered injection block — what would be prepended to the LLM system prompt."""
+    """Return the rendered injection block — what would be prepended to the LLM system prompt.
+
+    When `session_id` is provided (the SessionStart hook passes it), the events
+    that actually rendered are recorded in the render ledger (channel 'block')
+    so CK-1 can skip what this session already has in context. Fail-open: a
+    ledger error never affects the returned block.
+    """
     from memlora.storage import symbol_files as sf
     from memlora.storage.projections import load_or_rebuild, projection_to_events
     from memlora.compression.greedy import greedy_fill
     from memlora.injection.ordering import make_injection_context
-    from memlora.injection.template import render_with_budget_enforcement
+    from memlora.injection.template import render_with_budget_enforcement_ex
     from memlora.symbols.store import load_symbol_nodes, load_symbol_edges
     from memlora.symbols.projection import compress_to_skeleton
 
@@ -670,7 +677,19 @@ def render_state(
     ctx.retry_window_seconds = config.deny_retry_window_seconds
     ctx.skeleton_coverage = coverage
     ctx.skeleton_refresh = refresh
-    return render_with_budget_enforcement(ctx)
+    block, survivors = render_with_budget_enforcement_ex(ctx)
+    if session_id:
+        try:
+            from memlora.storage.render_ledger import record_rendered
+            with get_connection(db_path) as conn:
+                record_rendered(
+                    conn, project_id, session_id,
+                    (e.id for e in survivors if e.id is not None),
+                    "block",
+                )
+        except Exception:
+            pass  # ledger is observability, never load-bearing
+    return block
 
 
 def rebuild_from_raw(

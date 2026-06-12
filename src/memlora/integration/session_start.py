@@ -45,7 +45,7 @@ def _pending_jobs_count(db_path) -> int:
         return 0
 
 
-def handle_session_start(cwd: str | None, config=None) -> str:
+def handle_session_start(cwd: str | None, config=None, session_id: str | None = None) -> str:
     """Return the rendered injection block for any SessionStart source.
 
     Returns "" if cwd is falsy or the project has not been initialised.
@@ -69,7 +69,7 @@ def handle_session_start(cwd: str | None, config=None) -> str:
         return ""
 
     from memlora.integration.session import render_state
-    block = render_state(cwd, config=config)
+    block = render_state(cwd, config=config, session_id=session_id)
     if not block:
         return ""
 

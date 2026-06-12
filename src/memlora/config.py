@@ -75,11 +75,24 @@ class Config:
     # prompts, per-turn tokens under budget, quality not reduced — else stays as a
     # pull-only recall MCP tool). See integration/hooks.py:user_prompt_submit_main.
     query_time_injection: bool = False
-    # Cosine relevance bar for per-prompt injection. Higher = more selective (fewer
-    # injections). Start conservative; tune based on measured injection rate.
+    # DEPRECATED (J4): the absolute-score gate compared incomparable scorers
+    # (cosine when warm, Jaccard when cold) and silenced CK-1 entirely — replaced
+    # by the rank-based dual-evidence gate (ck1_* fields below). Parsed and
+    # ignored so existing config.toml files keep loading.
     query_injection_threshold: float = 0.75
     # Hard token ceiling for the per-turn snippet (excluding overhead).
     query_injection_max_tokens: int = 200
+    # J4 CK-1 dual-evidence gate (rank-based; precision-first; silence default).
+    # Both retrieval axes warm: inject hits ranked <= these on BOTH axes
+    # (independent-evidence agreement). Single-axis degraded modes use rank <= 2
+    # plus an absolute floor (term overlap for BM25-only, cosine for dense-only).
+    ck1_dense_rank_max: int = 5
+    ck1_bm25_rank_max: int = 5
+    ck1_min_term_overlap: int = 3
+    # Lexical anchor required even when both axes agree — rank agreement alone
+    # over-fires on short/generic prompts in a small store.
+    ck1_dual_anchor_terms: int = 2
+    ck1_max_events: int = 2
     # When True, SubagentStop fires the extraction pipeline on the subagent's
     # transcript and merges decisions into the parent project DB. Default ON once
     # SubagentStop is wired in settings.json (register hook-subagent-stop).
@@ -222,6 +235,11 @@ class Config:
             kwargs["query_injection_threshold"] = float(data["query_injection_threshold"])
         if "query_injection_max_tokens" in data:
             kwargs["query_injection_max_tokens"] = int(data["query_injection_max_tokens"])
+        for _ck1_key in ("ck1_dense_rank_max", "ck1_bm25_rank_max",
+                         "ck1_min_term_overlap", "ck1_dual_anchor_terms",
+                         "ck1_max_events"):
+            if _ck1_key in data:
+                kwargs[_ck1_key] = int(data[_ck1_key])
         if "capture_subagents" in data:
             kwargs["capture_subagents"] = bool(data["capture_subagents"])
         if "section_budgets" in data and isinstance(data["section_budgets"], dict):

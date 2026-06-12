@@ -57,7 +57,10 @@ class InjectionContext:
     pending_confirmations: list[Event] = field(default_factory=list)
 
 
-def render_injection(ctx: InjectionContext) -> str:
+def render_injection(
+    ctx: InjectionContext,
+    survivors_out: dict | None = None,
+) -> str:
     """Render the full block. Sections with no items are omitted.
 
     Section order:
@@ -70,6 +73,11 @@ def render_injection(ctx: InjectionContext) -> str:
       7. Key decisions
       8. Codebase skeleton      ← recency zone; AST-derived, Symbol Graph
       9. Summary                ← recency anchor
+
+    When `survivors_out` is provided, its 'events' key is set to the events
+    that actually rendered AFTER section-budget enforcement — the render
+    ledger's source of truth (J4): ctx buckets alone over-report because
+    _enforce_section_budget drops events locally without mutating ctx.
     """
     from memlora.symbols.render import render_skeleton_section
     has_skeleton = bool(ctx.skeleton)
@@ -103,6 +111,12 @@ def render_injection(ctx: InjectionContext) -> str:
             ),
             sb.decisions,
         )
+
+    if survivors_out is not None:
+        survivors_out["events"] = [
+            *hard, *ctx.active_threads, *ctx.pending_confirmations,
+            *grave, *comps, *decs,
+        ]
 
     sections = [
         _render_header(ctx),
@@ -419,17 +433,27 @@ def render_with_budget_enforcement(ctx: InjectionContext) -> str:
       2. Stable components
       3. Skeleton entries — pop lowest symbol-count file
     """
+    return render_with_budget_enforcement_ex(ctx)[0]
+
+
+def render_with_budget_enforcement_ex(
+    ctx: InjectionContext,
+) -> tuple[str, list[Event]]:
+    """Like render_with_budget_enforcement, but also returns the events that
+    actually survived BOTH section-budget enforcement and the global backstop —
+    the verbatim-exposed set the render ledger records (J4)."""
     ctx = copy.copy(ctx)
     ctx.decisions = list(ctx.decisions)
     ctx.components = list(ctx.components)
     ctx.active_threads = list(ctx.active_threads)  # protected — never dropped
     ctx.skeleton = list(ctx.skeleton)
 
-    block = render_injection(ctx)
+    out: dict = {}
+    block = render_injection(ctx, survivors_out=out)
     actual = count_tokens_accurate(block)
 
     if actual <= ctx.token_budget:
-        return block
+        return block, out.get("events", [])
 
     # Global backstop activated — section budgets (if set) were insufficient.
     if ctx.section_budgets is not None:
@@ -440,7 +464,7 @@ def render_with_budget_enforcement(ctx: InjectionContext) -> str:
 
     while actual > ctx.token_budget and ctx.decisions:
         ctx.decisions.pop()
-        block = render_injection(ctx)
+        block = render_injection(ctx, survivors_out=out)
         actual = count_tokens_accurate(block)
 
     while actual > ctx.token_budget and ctx.components:
@@ -452,7 +476,7 @@ def render_with_budget_enforcement(ctx: InjectionContext) -> str:
         if stable_idx is None:
             break
         ctx.components.pop(stable_idx)
-        block = render_injection(ctx)
+        block = render_injection(ctx, survivors_out=out)
         actual = count_tokens_accurate(block)
 
     while actual > ctx.token_budget and ctx.skeleton:
@@ -461,7 +485,7 @@ def render_with_budget_enforcement(ctx: InjectionContext) -> str:
             key=lambda i: len(ctx.skeleton[i].classes) + len(ctx.skeleton[i].functions),
         )
         ctx.skeleton.pop(min_idx)
-        block = render_injection(ctx)
+        block = render_injection(ctx, survivors_out=out)
         actual = count_tokens_accurate(block)
 
-    return block
+    return block, out.get("events", [])

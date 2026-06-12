@@ -88,8 +88,11 @@ def user_prompt_submit_main() -> None:
             return
 
         from memlora.integration.query import recall_for_prompt
+        session_id = payload.get("session_id") or None
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(recall_for_prompt, cwd, prompt, config=config)
+            fut = pool.submit(
+                recall_for_prompt, cwd, prompt, config=config, session_id=session_id
+            )
             try:
                 snippet = fut.result(timeout=_HOOK_TIMEOUT_S)
             except (concurrent.futures.TimeoutError, Exception):
@@ -224,7 +227,7 @@ def session_start_main() -> None:
         if not cwd:
             return
         from memlora.integration.session_start import handle_session_start
-        context = handle_session_start(cwd)
+        context = handle_session_start(cwd, session_id=payload.get("session_id") or None)
         if not context:
             return
         print(json.dumps({
