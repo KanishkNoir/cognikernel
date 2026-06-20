@@ -107,3 +107,48 @@ def test_hook_pretool_denies_fresh_skeleton_read_e2e(tmp_path, monkeypatch) -> N
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hook_pretool_write_surfaces_prohibition_e2e(tmp_path, monkeypatch) -> None:
+    """K2 end-to-end: `hook-pretool` on a Write that reintroduces a graveyarded
+    approach ALLOWS but attaches the prohibition as additionalContext — the JIT
+    bind. It must never deny a Write."""
+    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cli._cmd_init(argparse.Namespace(project_path=str(proj)))
+
+    from memlora.config import Config
+    from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+
+    pid = hash_project_path(str(proj))
+    db = get_db_path(Config.load(project_path=str(proj)), pid)
+    with get_connection(db) as conn:
+        conn.execute(
+            "INSERT INTO events (project_id, session_id, created_at, event_type, "
+            "payload, content_hash, weight, mention_count) VALUES (?,?,1,?,?,?,1.0,1)",
+            (pid, "s", "APPROACH_ABANDONED_DO_NOT_RETRY",
+             json.dumps({"description": "do not use in-process rate limit counters; "
+                                        "use Redis for the shared gateway budget",
+                         "subject": "rate limiting"}), "gh1"),
+        )
+        conn.commit()
+
+    target = proj / "gateway.py"
+    payload = json.dumps({
+        "hook_event_name": "PreToolUse", "tool_name": "Write",
+        "tool_input": {"file_path": str(target),
+                       "content": "self._counter = 0  # in-process rate limit "
+                                  "counter for the gateway budget\n"},
+        "session_id": "sess-k2", "cwd": str(proj),
+    })
+    r = subprocess.run(
+        [sys.executable, "-m", "memlora", "hook-pretool"],
+        input=payload, text=True, capture_output=True, timeout=60,
+        env={**os.environ, "MEMLORA_DIR": str(tmp_path / "data")},
+    )
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"  # never blocks a Write
+    assert "Redis" in hso.get("additionalContext", "")

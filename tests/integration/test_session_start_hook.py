@@ -88,7 +88,11 @@ class TestSessionStartHookSubprocess:
         assert result.returncode == 0
         data = json.loads(result.stdout)
         assert data["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-        assert "CogniKernel is active" in data["hookSpecificOutput"]["additionalContext"]
+        ctx = data["hookSpecificOutput"]["additionalContext"]
+        # Trust header present (canonical-source contract) ...
+        assert "canonical source of truth" in ctx
+        # ... and the anti-narration rule that fixes the "lock this in?" behavior.
+        assert "never ask to save" in ctx
 
     def test_missing_cwd_produces_no_output(self, tmp_path: Path) -> None:
         payload = {"source": "compact"}

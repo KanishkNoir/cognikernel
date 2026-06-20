@@ -11,6 +11,7 @@ Invariants honored:
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -19,6 +20,18 @@ from memlora.storage.connection import get_connection, get_db_path, hash_project
 from memlora.storage.migrations import run_migrations
 
 _MAX_DESC = 140
+
+# K2 surfacing precision: a graveyard entry is always a prohibition, but a
+# CONSTRAINT_HARD is only a *prohibition* (something an edit could re-violate)
+# when it carries an explicit negative/abandonment marker. Positive hard rules
+# ("money is integer cents", "TargetConfig dataclass") are mandatory facts
+# already in the block, not action-point bind targets — including them drove the
+# surface rate to ~83% in calibration. Graveyard ∪ hard(negative) → ~0-27%.
+_PROHIBITION_MARKER_RE = re.compile(
+    r"\b(never|don't|do not|cannot|can't|must not|shall not|avoid|"
+    r"instead of|rather than|deprecat\w*|forbid\w*|prohibit\w*|"
+    r"stop using|migrate away|ruled out|abandon\w*|no longer|not use)\b"
+)
 
 
 def _resolve(project_path: str, config: Config | None) -> tuple[str, Path]:
@@ -220,6 +233,99 @@ def recall_for_prompt(
                 record_rendered(conn, project_id, session_id, injected, "ck1")
         return "\n".join(lines)
     except Exception:  # never raise; silence on any error
+        return ""
+
+
+def surface_prohibitions_for_edit(
+    project_path: str,
+    diff_text: str,
+    *,
+    file_path: str = "",
+    config: Config | None = None,
+    session_id: str | None = None,
+) -> str:
+    """K2 — PreToolUse JIT bind: surface a prohibition the edit would violate.
+
+    The action-point analogue of `recall_for_prompt`. Given the new code a
+    Write/Edit is about to write (`diff_text`), look up matching prohibitions in
+    the type-restricted lexical pool (graveyard + hard constraints) and return a
+    short advisory if one clears the gate. Returns '' (silence) otherwise —
+    silence is the default. NEVER blocks; the caller surfaces this as
+    `additionalContext` on an `allow` decision.
+
+    Gate mirrors CK-1's BM25-only arm (precision-first): a prohibition must rank
+    <= pretool_bm25_rank_max AND share >= pretool_min_term_overlap absolute
+    content terms with the diff (over its subject+description). Already-surfaced
+    events (any channel this session) are filtered via the render ledger.
+    """
+    try:
+        config = config or Config.load(project_path=project_path)
+        if not config.pretool_prohibition_surface_enabled:
+            return ""
+        if not diff_text or not diff_text.strip():
+            return ""
+        project_id, db_path = _resolve(project_path, config)
+        if not db_path.exists():
+            return ""
+
+        from memlora.delta.supersede import normalize_for_overlap
+        from memlora.storage.fts import prohibition_search
+
+        diff_toks = normalize_for_overlap(diff_text)
+        if not diff_toks:
+            return ""
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            hits = prohibition_search(conn, project_id, diff_text, n=8)
+            if not hits:
+                return ""
+            seen: set[int] = set()
+            if session_id:
+                from memlora.storage.render_ledger import rendered_event_ids
+
+                seen = rendered_event_ids(conn, project_id, session_id)
+            passed: list[dict] = []
+            for rank, h in enumerate(hits, start=1):
+                if rank > config.pretool_bm25_rank_max:
+                    break
+                if h["id"] in seen:
+                    continue
+                # A hard constraint is only a *prohibition* an edit can re-violate
+                # when it carries a negative/abandonment marker; positive hard
+                # rules are block facts, not action-point bind targets. Graveyard
+                # entries always qualify.
+                if h.get("event_type") == "CONSTRAINT_HARD" and not (
+                    _PROHIBITION_MARKER_RE.search((h.get("description") or "").lower())
+                ):
+                    continue
+                p_toks = normalize_for_overlap(
+                    f"{h.get('subject', '')} {h.get('description', '')}"
+                )
+                if len(diff_toks & p_toks) < config.pretool_min_term_overlap:
+                    continue
+                passed.append(h)
+                if len(passed) >= config.pretool_max_surface:
+                    break
+            if not passed:
+                return ""
+            lines = ["[CogniKernel — you previously ruled this out]"]
+            for h in passed:
+                approach = (h.get("description") or "")[:_MAX_DESC]
+                rationale = (h.get("rationale") or "").strip()
+                tail = f" — {rationale[:_MAX_DESC]}" if rationale else ""
+                lines.append(f"- {approach}{tail}")
+            lines.append(
+                "Re-affirm in your message if this change is intentional; "
+                "otherwise honor the prior decision."
+            )
+            if session_id:
+                from memlora.storage.render_ledger import record_rendered
+
+                record_rendered(
+                    conn, project_id, session_id, [h["id"] for h in passed], "pretool"
+                )
+        return "\n".join(lines)
+    except Exception:  # never raise into the hook; silence on any error
         return ""
 
 

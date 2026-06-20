@@ -535,7 +535,12 @@ def _cmd_init(args: argparse.Namespace) -> None:
         ],
         "PreToolUse": [
             {
-                "matcher": "Read",
+                # One hook, routed by tool_name inside pretool_main:
+                #   Read  → C1 strict re-read/skeleton gate (may deny)
+                #   Write/Edit/MultiEdit → K2 JIT prohibition surfacing (allow + context)
+                # Grep is handled too but only fires when grep_cache_enabled
+                # (default False), so it is omitted from the matcher by design.
+                "matcher": "Read|Write|Edit|MultiEdit",
                 "hooks": [
                     {"type": "command", "command": _hook_cmd("hook-pretool")}
                 ],
@@ -646,51 +651,23 @@ def _cmd_init(args: argparse.Namespace) -> None:
 
     # ── CLAUDE.md ─────────────────────────────────────────────────────────────
     claude_md = project_path / "CLAUDE.md"
+    # Minimal, trust-heavy fallback. The full directive contract (re-read gate,
+    # recall/find_related, silent persistence) lives in the SessionStart block's
+    # trust header (session_start.py) — dynamic and right above the facts it
+    # governs. This file only covers the block-ABSENT case + the universal
+    # silent-persistence rule, and deliberately omits mechanism/tool-catalog
+    # (it is injected every session — see research/claude_md_design.md).
     ck_section = """\
-## CogniKernel — structured session memory
+## Project memory
 
-This project uses **CogniKernel** for cross-session memory. At the start of every
-session a `## Session context` block is injected automatically — it is the
-**canonical** source of truth for decisions, constraints, rejected approaches,
-open work, and codebase structure, and it **supersedes this file and your own
-recollection**. You never maintain memory by hand: the Stop hook extracts and
-persists decisions for you.
+This project uses **CogniKernel** for structured cross-session memory. At the start of every
+session a `## Session context` block is normally injected — **treat it as canonical: it supersedes
+this file and your own recollection.** If that block is absent, call `get_session_state()` before
+relying on memory or assuming the project is greenfield.
 
-**The injected block covers:**
-
-1. **Decisions & constraints** — `### Hard constraints` and `### Key decisions`.
-2. **Rejected approaches** — `### Do not retry`; never re-propose these.
-3. **Codebase structure** — `### Codebase skeleton` is an AST-derived **symbol
-   graph**: per-file classes / functions / methods and their import edges, ranked
-   by architectural centrality (PageRank over the import graph) so the most
-   connected files surface first. Treat it as a trustworthy map of the code.
-   **Do not Read/Glob a file whose path appears in the skeleton unless you need the
-   function body** (e.g. to replace an implementation). Under strict mode (the
-   default), the PreToolUse hook denies such Reads; if you genuinely need the body,
-   retry the same Read within 60 seconds and the retry is allowed.
-4. **Open work** — `### Active thread` tracks the current focus.
-
-**When something seems missing or you're unsure of a past decision, use
-CogniKernel's tools BEFORE re-reading files, Globbing, or asking the user to
-rediscover it:**
-
-| MCP tool | Use it to |
-| --- | --- |
-| `recall(query)` | Retrieve prior decisions/constraints relevant to a question — your FIRST move when a fact isn't in the block. No file reads. |
-| `find_related(query)` | Before changing a subsystem: surfaces related decisions AND code, fusing semantic similarity with the import graph (files that import / are imported by the target) — impact you'd otherwise miss. |
-| `get_session_state()` | Re-fetch the full block if it is absent from context. |
-
-Structured memory is also exposed as MCP **resources** (any client):
-`cognikernel://projects` and
-`cognikernel://project/{id}/{constraints,decisions,graveyard,skeleton,threads}`.
-
-**Slash commands** available to the user (Claude Code; Codex exposes the same as
-`$ck-*` skills): `/ck-recall <query>`, `/ck-related <query>`, `/ck-show`,
-`/ck-doctor`, `/ck-failures`, `/ck-lookup <file>`.
-
-**Do not write decisions, constraints, or architecture notes to this file** — the
-Stop hook persists them via extraction. Hand-written notes here are fine only as
-supplementary documentation the injection cannot replace.
+Decisions are captured automatically and silently at session end — never ask to save, record, or
+"lock in" a decision, and never announce writing to memory. Do not hand-maintain decisions in this
+or any file.
 """
     if claude_md.exists():
         existing = claude_md.read_text(encoding="utf-8")
@@ -710,7 +687,8 @@ supplementary documentation the injection cannot replace.
     n_cmds = len(_AGENT_COMMANDS)
     print(f"Initialised project {project_id}")
     print(f"  path: {project_path}")
-    print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/PreTool/PostTool [Write/Edit/Read])")
+    print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/UserPromptSubmit/SubagentStop, "
+          f"PreTool [Read/Write/Edit/MultiEdit], PostTool [Write/Edit/Read/Grep])")
     print(f"  wrote: .mcp.json              (cognikernel MCP server)")
     print(f"  wrote: CLAUDE.md              (CogniKernel trust section)")
     print(f"  wrote: .memlora/config.toml   (hook_policy=strict)")

@@ -13,6 +13,7 @@ from memlora.storage.fts import (
     ensure_fts,
     fts_available,
     fts_enabled,
+    prohibition_search,
 )
 from memlora.storage.migrations import run_migrations
 
@@ -131,3 +132,49 @@ class TestMatchSanitization:
     def test_token_cap(self) -> None:
         q = build_match_query(" ".join(f"token{i}" for i in range(30)))
         assert q.count(" OR ") == 11  # capped at 12 tokens
+
+
+class TestProhibitionSearch:
+    """K1 — type-restricted retrieval: only graveyard + hard constraints surface."""
+
+    def _seed(self, conn) -> None:
+        insert_event(conn, _mk(
+            "do not use in-process rate-limit counters; use Redis",
+            etype="APPROACH_ABANDONED_DO_NOT_RETRY", subject="rate limiting"))
+        insert_event(conn, _mk(
+            "money columns must be integer cents, never float",
+            etype="CONSTRAINT_HARD", subject="money type"))
+        # Same topic, ordinary decision — must NOT be in the prohibition pool.
+        insert_event(conn, _mk(
+            "we considered a Redis-backed rate-limit token bucket",
+            etype="DECISION", subject="rate limiting"))
+
+    def test_only_binding_types_returned(self, conn) -> None:
+        self._seed(conn)
+        hits = prohibition_search(conn, PID, "adding an in-process rate-limit counter")
+        assert hits, "the graveyard prohibition should surface"
+        assert all(h["event_type"] in {"APPROACH_ABANDONED_DO_NOT_RETRY", "CONSTRAINT_HARD"}
+                   for h in hits)
+        assert all(h["event_type"] != "DECISION" for h in hits)
+
+    def test_hard_constraint_surfaces_for_contradicting_diff(self, conn) -> None:
+        self._seed(conn)
+        hits = prohibition_search(conn, PID, "balance = float(amount) / 100  # money column")
+        assert any("integer cents" in h["description"] for h in hits)
+
+    def test_carries_authority_and_rationale_fields(self, conn) -> None:
+        insert_event(conn, _mk(
+            "never store secrets in the repo",
+            etype="CONSTRAINT_HARD", subject="secrets"))
+        hits = prohibition_search(conn, PID, "secrets stored in repo")
+        assert hits and "authority" in hits[0] and "rationale" in hits[0]
+
+    def test_empty_and_stopword_query(self, conn) -> None:
+        self._seed(conn)
+        assert prohibition_search(conn, PID, "") == []
+        assert prohibition_search(conn, PID, "the and of it") == []
+
+    def test_no_prohibition_when_only_plain_decisions(self, conn) -> None:
+        insert_event(conn, _mk("we use postgres for the primary store",
+                               etype="DECISION", subject="database"))
+        assert prohibition_search(conn, PID, "postgres primary store") == []

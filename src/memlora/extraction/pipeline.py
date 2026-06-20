@@ -101,6 +101,13 @@ def _extract_session_impl(
         from memlora.extraction.windowing import extract_co_captures
         sentences = tokenize(transcript)
 
+        # #41 — capture schema decisions stated in DDL code blocks (which
+        # sanitize strips) before they're lost; keyed canonically by
+        # schema_decisions so latest-wins reconciles them. Mode-independent:
+        # extended into whichever path returns. Fail-open → [].
+        from memlora.extraction.schema_decisions import extract_schema_decisions
+        schema_events = extract_schema_decisions(sentences, session_meta)
+
         # Broad mode: the head classifies EVERY prose sentence — high-recall candidate
         # gen + high-precision learned filter. v1-broad uses the frozen head; v2-broad
         # uses the SetFit fine-tuned head (salience_v2). Gated behind MEMLORA_EXTRACTOR.
@@ -111,6 +118,7 @@ def _extract_session_impl(
                 if broad is not None:
                     broad.extend(extract_file_mention_events(
                         sentences, session_meta.project_id, session_meta.session_id))
+                    broad.extend(schema_events)
                     return broad
                 _log.info("salience head unavailable — falling back to legacy")
 
@@ -170,6 +178,7 @@ def _extract_session_impl(
             sentences, session_meta.project_id, session_meta.session_id
         )
         events.extend(mention_events)
+        events.extend(schema_events)
     except Exception as exc:
         _log.error(
             "transcript extraction failed",

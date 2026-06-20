@@ -207,3 +207,69 @@ def bm25_search(
             }
         )
     return out
+
+
+def prohibition_search(
+    conn: sqlite3.Connection,
+    project_id: str,
+    query_text: str,
+    n: int = 8,
+) -> list[dict[str, Any]]:
+    """BM25-ranked active *prohibitions* for `query_text` (best first).
+
+    The K1 retrieval primitive behind PreToolUse JIT surfacing. Identical to
+    `bm25_search` but the candidate pool is type-restricted to the binding
+    event types — graveyard ("do not retry") entries and hard constraints — so
+    a prohibition is never crowded out of the top-n by ordinary decisions when
+    the query is an edit diff. The query_text is typically the new code being
+    written, not a prompt; `build_match_query` keeps identifier-shaped terms
+    (`in-process`, `rate-limit`) intact.
+
+    Returns [] when the index is unavailable or the query sanitizes to nothing
+    — callers treat that as "no prohibition evidence", not an error. Carries
+    `authority` (load-bearing: the surfacing gate weighs user_stated highest).
+    """
+    import json
+
+    from memlora.storage.sections import GRAVEYARD_TYPES, HARD_TYPES
+
+    if not fts_enabled(conn):
+        return []
+    match = build_match_query(query_text)
+    if not match:
+        return []
+    types = tuple(sorted(GRAVEYARD_TYPES | HARD_TYPES))
+    placeholders = ",".join("?" for _ in types)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT e.id, e.event_type, e.payload, bm25(events_fts) AS b
+            FROM events_fts
+            JOIN events e ON e.id = events_fts.rowid
+            WHERE events_fts MATCH ?
+              AND e.project_id    = ?
+              AND e.archived      = 0
+              AND e.superseded_by IS NULL
+              AND e.event_type IN ({placeholders})
+            ORDER BY b
+            LIMIT ?
+            """,
+            (match, project_id, *types, n),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []  # malformed MATCH despite sanitization — degrade, don't raise
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        payload = json.loads(r["payload"])
+        out.append(
+            {
+                "id": r["id"],
+                "event_type": r["event_type"],
+                "description": payload.get("description", ""),
+                "subject": payload.get("subject", ""),
+                "rationale": payload.get("rationale", payload.get("reason", "")),
+                "authority": payload.get("authority", ""),
+                "bm25": round(float(r["b"]), 4),
+            }
+        )
+    return out

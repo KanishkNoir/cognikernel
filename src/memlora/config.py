@@ -5,7 +5,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-EXPECTED_SCHEMA_VERSION: int = 16
+EXPECTED_SCHEMA_VERSION: int = 17
 EXPECTED_PROJECTION_VERSION: int = 1
 
 VALID_HOOK_POLICIES = frozenset({"advisory", "strict"})
@@ -118,6 +118,18 @@ class Config:
     # over-fires on short/generic prompts in a small store.
     ck1_dual_anchor_terms: int = 2
     ck1_max_events: int = 2
+    # K2 PreToolUse JIT surfacing: when a Write/Edit diff matches a prohibition
+    # (graveyard / hard constraint) in the type-restricted lexical pool, surface
+    # it as advisory additionalContext at the action point (never block). The
+    # gate mirrors CK-1's BM25-only arm — precision-first, silence default.
+    pretool_prohibition_surface_enabled: bool = True
+    # Calibrated on the 4 benchmark DBs (scripts/_pretool_sweep.py): rank<=1 +
+    # overlap>=3 keeps the surface rate CK-1-like (~0-27%) instead of the ~83%
+    # an untuned pool produced. Tighter than CK-1 because this fires on EVERY
+    # edit, not just prompts — precision dominates.
+    pretool_bm25_rank_max: int = 1
+    pretool_min_term_overlap: int = 3
+    pretool_max_surface: int = 1
     # When True, SubagentStop fires the extraction pipeline on the subagent's
     # transcript and merges decisions into the parent project DB. Default ON once
     # SubagentStop is wired in settings.json (register hook-subagent-stop).
@@ -265,6 +277,13 @@ class Config:
                          "ck1_max_events"):
             if _ck1_key in data:
                 kwargs[_ck1_key] = int(data[_ck1_key])
+        if "pretool_prohibition_surface_enabled" in data:
+            kwargs["pretool_prohibition_surface_enabled"] = bool(
+                data["pretool_prohibition_surface_enabled"])
+        for _pt_key in ("pretool_bm25_rank_max", "pretool_min_term_overlap",
+                        "pretool_max_surface"):
+            if _pt_key in data:
+                kwargs[_pt_key] = int(data[_pt_key])
         if "capture_subagents" in data:
             kwargs["capture_subagents"] = bool(data["capture_subagents"])
         if "section_budgets" in data and isinstance(data["section_budgets"], dict):

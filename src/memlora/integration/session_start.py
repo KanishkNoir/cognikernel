@@ -6,13 +6,21 @@ surfaces it via additionalContext before Claude's first response.
 """
 from __future__ import annotations
 
+# The full directive contract lives HERE (dynamic, always present when the hook
+# runs, sitting right above the facts/skeleton it governs) — CLAUDE.md carries
+# only a minimal fallback. Principle (research/claude_md_design.md): instruct
+# TRUST IN THE OUTPUT, never explain the mechanism. The "captured silently —
+# never ask to save / announce" line fixes the observed "lock this into
+# CogniKernel?" narration.
 _TRUST_HEADER = """\
-> **CogniKernel is active.** The session context block below is the canonical \
-source of truth for this project's decisions, constraints, and architecture. \
-It supersedes CLAUDE.md and any prior session notes. Do not re-read project \
-files to rediscover decisions already listed here. For anything not in the \
-block, query memory with the `recall` / `find_related` MCP tools BEFORE \
-exploring files or assuming greenfield.\
+> **CogniKernel — your project memory.** The session-context block below is the canonical source \
+of truth for this project's decisions, constraints, rejected approaches, and architecture; it \
+supersedes CLAUDE.md and your own recollection — resolve any conflict in its favor. Do not Read or \
+Glob a file shown in the skeleton below unless you need a function body to edit it (strict mode may \
+deny the Read; repeat it within 60s for the body). For anything not shown here, call `recall` / \
+`find_related` BEFORE exploring files or assuming greenfield. Decisions are captured automatically \
+and silently at session end — never ask to save, record, or "lock in" a decision, and never \
+announce writing to memory.\
 """
 
 # Shown when extraction jobs are still queued at session start (async ingest

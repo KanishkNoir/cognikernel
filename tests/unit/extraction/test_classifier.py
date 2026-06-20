@@ -79,12 +79,27 @@ class TestClassifyConstraint:
         assert scores[twice] >= scores[once]
 
     def test_threshold_exactly_at_boundary(self) -> None:
-        # Score of exactly HARD_THRESHOLD → CONSTRAINT_HARD
-        # We need to engineer a score of 0.85 exactly.
-        # confidence=0.85, user (+0.2) → 1.05 → hard
-        # confidence=0.65, user (+0.2) → 0.85 → hard (≥)
-        result = classify_constraint(0.65, "user", "Plain statement.")
+        # Score of exactly HARD_THRESHOLD → CONSTRAINT_HARD.
+        # confidence=0.65, user (+0.2) → 0.85 → hard (≥). The description must
+        # carry a deontic marker, else the #39 user-imperative gate caps it.
+        result = classify_constraint(0.65, "user", "You must not do that.")
         assert result == "CONSTRAINT_HARD"
+
+    def test_bare_user_imperative_demoted(self) -> None:
+        # #39: a bare user imperative with no deontic marker rides the +0.2 user
+        # bonus to 0.85 but must NOT become a mandatory hard constraint.
+        assert classify_constraint(0.65, "user", "Use Postgres.") == "CONSTRAINT_SOFT"
+        assert classify_constraint(0.7, "user", "Set the retry interval to 5.") \
+            == "CONSTRAINT_SOFT"
+
+    def test_genuine_user_prohibition_stays_hard(self) -> None:
+        # The fix must not regress real prohibitions, which carry a marker.
+        assert classify_constraint(0.7, "user", "Never use floats for money.") \
+            == "CONSTRAINT_HARD"
+        assert classify_constraint(0.7, "user", "Do not store secrets in the repo.") \
+            == "CONSTRAINT_HARD"
+        assert classify_constraint(0.7, "user", "No in-process counters.") \
+            == "CONSTRAINT_HARD"
 
     def test_pure_soft_signal_stays_soft(self) -> None:
         result = classify_constraint(0.6, "assistant", "You might consider avoiding Redis.")

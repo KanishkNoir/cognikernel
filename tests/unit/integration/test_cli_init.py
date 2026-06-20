@@ -44,6 +44,25 @@ def test_init_writes_claude_settings_with_posttool_read_hook(
         assert "-m memlora hook-posttool" in cmd
 
 
+def test_init_pretool_matcher_routes_read_and_write_edit(
+    init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
+) -> None:
+    """PreToolUse must route Read (C1 gate) AND Write/Edit/MultiEdit (K2 JIT
+    prohibition surfacing) to hook-pretool — regression guard: the matcher was
+    'Read'-only, which silently disabled K2 even though pretool_main dispatches
+    those tools."""
+    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "memlora_data"))
+    _cmd_init(init_args)
+    settings = json.loads(
+        (Path(init_args.project_path) / ".claude" / "settings.json").read_text(encoding="utf-8")
+    )
+    entries = settings["hooks"]["PreToolUse"]
+    matcher_blob = "|".join(e["matcher"] for e in entries)
+    for tool in ("Read", "Write", "Edit", "MultiEdit"):
+        assert tool in matcher_blob, f"PreToolUse does not route {tool} → hook-pretool"
+    assert all("-m memlora hook-pretool" in e["hooks"][0]["command"] for e in entries)
+
+
 def test_init_writes_per_project_config_with_strict_policy(
     init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
 ) -> None:
@@ -164,35 +183,36 @@ def test_init_writes_codex_skills(
     assert "cognikernel `recall` MCP tool" in recall
 
 
-def test_init_claude_md_mentions_strict_mode_and_skeleton(
+def test_init_claude_md_is_minimal_trust_fallback(
     init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
 ) -> None:
-    """B-4: the CLAUDE.md template tells Claude about strict mode + skeleton
-    authority so the deny behavior isn't a surprise."""
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "memlora_data"))
-
-    _cmd_init(init_args)
-
-    claude_md_path = Path(init_args.project_path) / "CLAUDE.md"
-    text = claude_md_path.read_text(encoding="utf-8")
-    assert "Codebase skeleton" in text
-    assert "PreToolUse" in text
-    assert "60 seconds" in text  # retry window mentioned explicitly
-
-
-def test_init_claude_md_advertises_tools_and_recall_affordance(
-    init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
-) -> None:
-    """The trust section must make the agent aware of CogniKernel's full surface
-    (MCP tools + resources + slash commands) and, per F7, tell it to reach for
-    recall BEFORE re-reading files or asking the user to rediscover a decision."""
+    """CLAUDE.md is the minimal block-ABSENT fallback: trust the canonical block,
+    recover via get_session_state, silent persistence. The full directive contract
+    (skeleton re-read gate, recall/find_related) lives in the SessionStart block
+    header, NOT here — research/claude_md_design.md."""
     monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "memlora_data"))
 
     _cmd_init(init_args)
 
     text = (Path(init_args.project_path) / "CLAUDE.md").read_text(encoding="utf-8")
-    assert "recall(query)" in text
-    assert "find_related(query)" in text
-    assert "cognikernel://project/" in text          # resources advertised
-    assert "/ck-recall" in text                        # slash commands advertised
-    assert "BEFORE re-reading" in text                 # F7 behavioral nudge
+    assert "canonical" in text.lower()
+    assert "supersede" in text.lower()
+    assert "get_session_state" in text          # block-absent recovery
+
+
+def test_init_claude_md_has_no_meta_narration_or_catalog(
+    init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
+) -> None:
+    """Anti-narration + de-bloat: the silent-persistence rule is present (fixes the
+    'lock this into CogniKernel?' behavior) and the mechanism/tool-catalog is NOT
+    duplicated here (it's injected every session — keep it small)."""
+    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "memlora_data"))
+
+    _cmd_init(init_args)
+
+    text = (Path(init_args.project_path) / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "never ask to save" in text                 # anti-narration rule
+    assert "PageRank" not in text                       # no mechanism explanation
+    assert "cognikernel://project/" not in text         # no resource catalog
+    # small: the section is a handful of lines, not a feature manual
+    assert len(text) < 900

@@ -9,9 +9,21 @@ harness (Stage 7) is in place.
 """
 from __future__ import annotations
 
+import re
+
 from memlora.storage.events import Event
 
 HARD_THRESHOLD: float = 0.85
+
+# Explicit deontic / prohibition signal (#39). A genuine hard constraint names
+# its force ("must", "never", "do not", "no X"); a bare imperative ("Use
+# Postgres", "Set retries to 5") names none. Word-boundary matched, deliberately
+# inclusive on negations so real user prohibitions are never demoted.
+_DEONTIC_RE = re.compile(
+    r"\b(must|mandatory|required|requirement|non-negotiable|obligatory|"
+    r"always|never|cannot|can't|do not|don't|shall not|must not|"
+    r"prohibit\w*|forbid\w*|disallow\w*|no|not)\b"
+)
 
 REQUIREMENT_MARKERS: frozenset[str] = frozenset(
     {
@@ -98,6 +110,16 @@ def classify_constraint(
     # CONSTRAINT_HARD when spoken by the assistant. Lower-confidence signals
     # (e.g. bare "never" at 0.9) get capped below the 0.85 threshold.
     if source_role == "assistant" and confidence < 1.0:
+        score = min(score, 0.80)
+
+    # User source-role gate (#39): a bare user imperative ("Use Postgres", "Set
+    # retries to 5") collects the +0.2 user-authority bump and can clear the hard
+    # threshold with no deontic signal at all — minting an ordinary decision as a
+    # budget-exempt mandatory constraint. Symmetric to the assistant gate above:
+    # a user constraint with no explicit deontic/prohibition marker is capped
+    # below HARD. Genuine user prohibitions ("never use floats", "do not …",
+    # "no X") carry a marker via _DEONTIC_RE and are unaffected.
+    if source_role == "user" and confidence < 1.0 and not _DEONTIC_RE.search(d):
         score = min(score, 0.80)
 
     return "CONSTRAINT_HARD" if score >= HARD_THRESHOLD else "CONSTRAINT_SOFT"

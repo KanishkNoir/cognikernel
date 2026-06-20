@@ -282,6 +282,8 @@ def pretool_main() -> None:
         _pretool_read(payload)
     elif tool_name == "Grep":
         _pretool_grep(payload)
+    elif tool_name in ("Write", "Edit", "MultiEdit"):
+        _pretool_edit(payload)
     else:
         _pretool("allow")
 
@@ -331,6 +333,63 @@ def _pretool_read(payload: dict) -> None:
                 "[CogniKernel] body-needed retry granted — record this read in your "
                 "context; the next attempt to re-read this file will be denied."
             ))
+        else:
+            _pretool("allow")
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        _pretool("allow")
+
+
+def _edit_diff_text(tool_name: str, tool_input: dict) -> str:
+    """The new code a Write/Edit/MultiEdit is about to write — the surface a
+    prohibition would be violated on. Empty when nothing new is being written."""
+    if tool_name == "Write":
+        return tool_input.get("content", "") or ""
+    if tool_name == "Edit":
+        return tool_input.get("new_string", "") or ""
+    if tool_name == "MultiEdit":
+        edits = tool_input.get("edits", []) or []
+        return "\n".join(
+            e.get("new_string", "") for e in edits if isinstance(e, dict)
+        )
+    return ""
+
+
+def _pretool_edit(payload: dict) -> None:
+    """K2 — JIT bind at the action point. ALWAYS allows; on a prohibition match
+    it attaches an advisory `additionalContext` reminding the agent of the prior
+    decision. Fail-open: any error → plain allow, never a deny."""
+    tool_name = payload.get("tool_name", "")
+    tool_input = payload.get("tool_input", {}) or {}
+    file_path = tool_input.get("file_path", "")
+    session_id = payload.get("session_id", "")
+    cwd = payload.get("cwd", "")
+    diff_text = _edit_diff_text(tool_name, tool_input)
+    if not diff_text.strip():
+        _pretool("allow")
+        return
+    try:
+        from memlora.config import Config
+        from memlora.integration.query import surface_prohibitions_for_edit
+
+        project_root = _find_project_root(Path(file_path)) if file_path else None
+        if project_root is None:
+            project_root = Path(cwd) if cwd else (
+                Path(file_path).parent if file_path else None
+            )
+        if project_root is None:
+            _pretool("allow")
+            return
+        config = Config.load(project_path=project_root)
+        context = surface_prohibitions_for_edit(
+            str(project_root),
+            diff_text,
+            file_path=file_path,
+            config=config,
+            session_id=session_id or "__unknown__",
+        )
+        if context:
+            _pretool("allow", context=context)
         else:
             _pretool("allow")
     except Exception:
