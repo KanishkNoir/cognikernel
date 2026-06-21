@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from memlora.delta.decay import DECAY_FACTOR
 from memlora.delta.merge import execute_merge, merge_event
 from memlora.storage.evidence import store_evidence
 from memlora.storage.events import Event, MAX_EVENT_WEIGHT, WEIGHT_INCREMENT_ON_DEDUP, insert_event
@@ -351,6 +352,79 @@ class TestExecuteMergeDecay:
         execute_merge(conn, "sess_current", [e])
         row = conn.execute("SELECT weight FROM events WHERE content_hash='h1'").fetchone()
         assert row["weight"] == pytest.approx(1.0)
+
+
+# ── execute_merge — replay idempotency (audit P1) ─────────────────────────────
+
+class TestExecuteMergeReplayIdempotency:
+    """A recovered job replays the SAME evidence slice (merge committed, but the
+    worker was killed before the ingest cursor advanced). The merge must be a
+    no-op on replay — no second ×0.92 decay tick, no extra mention_count bump.
+    The guard keys on event_provenance(raw_evidence_id), which is written inside
+    the merge transaction, so it witnesses only a fully-committed prior merge.
+    """
+
+    def test_replay_same_evidence_is_skipped(self, conn: sqlite3.Connection) -> None:
+        ev = store_evidence(conn, "proj1", "sess1", "transcript", b"slice-1")
+        first = execute_merge(conn, "sess1", [make_event(content_hash="hx", evidence_id=ev)])
+        assert first["inserted"] == 1
+        second = execute_merge(conn, "sess1", [make_event(content_hash="hx", evidence_id=ev)])
+        assert second == {
+            "inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0, "archived": 0,
+        }
+
+    def test_replay_does_not_rebump_mention_count(self, conn: sqlite3.Connection) -> None:
+        ev = store_evidence(conn, "proj1", "sess1", "transcript", b"slice-2")
+        # Pre-existing cross-session original so the merge folds an echo (+1 mention).
+        conn.execute(
+            "INSERT INTO events (project_id, session_id, created_at, event_type, "
+            "payload, content_hash, weight, mention_count) VALUES "
+            "('proj1','sess0',0,'DECISION','{\"description\":\"Use SQLite for local storage\"}',"
+            "'hash_a',1.0,1)"
+        )
+        conn.commit()
+        execute_merge(conn, "sess1", [make_event(session_id="sess1", content_hash="hash_a", evidence_id=ev)])
+        assert get_row(conn, "hash_a")["mention_count"] == 2
+        # Replay the same evidence slice — must not climb to 3.
+        execute_merge(conn, "sess1", [make_event(session_id="sess1", content_hash="hash_a", evidence_id=ev)])
+        assert get_row(conn, "hash_a")["mention_count"] == 2
+
+    def test_replay_does_not_reapply_decay(self, conn: sqlite3.Connection) -> None:
+        ev = store_evidence(conn, "proj1", "sess_new", "transcript", b"slice-3")
+        conn.execute(
+            "INSERT INTO events (project_id, session_id, created_at, event_type, "
+            "payload, content_hash, weight, mention_count) VALUES "
+            "('proj1','sess_old',0,'DECISION','{\"description\":\"stale\"}','stale_hash',0.5,1)"
+        )
+        conn.commit()
+        execute_merge(conn, "sess_new", [make_event(content_hash="newh", session_id="sess_new", evidence_id=ev)])
+        w1 = conn.execute("SELECT weight FROM events WHERE content_hash='stale_hash'").fetchone()["weight"]
+        assert w1 == pytest.approx(0.5 * DECAY_FACTOR)
+        # Replay — the ×0.92 decay tick must NOT fire a second time.
+        execute_merge(conn, "sess_new", [make_event(content_hash="newh", session_id="sess_new", evidence_id=ev)])
+        w2 = conn.execute("SELECT weight FROM events WHERE content_hash='stale_hash'").fetchone()["weight"]
+        assert w2 == pytest.approx(w1)
+
+    def test_distinct_evidence_still_merges(self, conn: sqlite3.Connection) -> None:
+        """The guard keys on evidence id, not content: a genuinely new evidence
+        slice merges normally — it must not be mistaken for a replay."""
+        ev1 = store_evidence(conn, "proj1", "sess1", "transcript", b"ev-a")
+        ev2 = store_evidence(conn, "proj1", "sess1", "transcript", b"ev-b")
+        # Distinct descriptions so the R3 echo guard doesn't fold the second event.
+        execute_merge(conn, "sess1", [make_event(
+            content_hash="h1", payload={"description": "Use Redis for the cache layer"}, evidence_id=ev1)])
+        stats = execute_merge(conn, "sess1", [make_event(
+            content_hash="h2", payload={"description": "Use Postgres for durable storage"}, evidence_id=ev2)])
+        assert stats["inserted"] == 1
+
+    def test_no_evidence_id_is_not_guarded(self, conn: sqlite3.Connection) -> None:
+        """Merges without an evidence id (no durable witness) keep prior behavior:
+        the guard is inert, so back-to-back merges still process."""
+        execute_merge(conn, "sess1", [make_event(
+            content_hash="ng1", payload={"description": "Adopt FastAPI for the gateway"})])
+        stats = execute_merge(conn, "sess1", [make_event(
+            content_hash="ng2", payload={"description": "Adopt Uvicorn as the ASGI server"})])
+        assert stats["inserted"] == 1
 
 
 # ── execute_merge — transaction and rollback ──────────────────────────────────

@@ -109,6 +109,24 @@ def execute_merge(
     project_id = candidates[0].project_id
     stats = {"inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0, "archived": 0}
 
+    # Idempotency guard (audit P1). A worker can be killed (the Job Object tears
+    # down hook-spawned drains at hook exit) AFTER this merge commits but BEFORE
+    # the ingest cursor advances; the job is then recovered and the SAME evidence
+    # slice is replayed. _insert_or_update is hash-idempotent, but the echo
+    # mention_count bump and the ×0.92 decay tick are NOT — a replay double-applies
+    # both. event_provenance rows for this evidence are written inside this very
+    # transaction (link_event_provenance in _insert_or_update / _bump_event), so
+    # their presence is a durable "already merged" marker with no crash window:
+    # provenance exists iff the full merge committed. Skip the replay; the caller
+    # still advances the cursor and completes the job.
+    evidence_id = candidates[0].evidence_id
+    if evidence_id is not None and _evidence_already_merged(conn, evidence_id):
+        _log.info(
+            "merge.skip_replayed_evidence",
+            extra={"session_id": session_id, "evidence_id": evidence_id},
+        )
+        return stats
+
     try:
         with conn:
             for event in candidates:
@@ -174,6 +192,20 @@ def execute_merge(
 
 
 # ── transaction-internal helpers (no conn.commit()) ───────────────────────────
+
+def _evidence_already_merged(conn: sqlite3.Connection, evidence_id: int) -> bool:
+    """True if a prior merge of this raw evidence already committed (audit P1).
+
+    event_provenance links every minted/bumped event to its raw evidence inside
+    the merge transaction, so a row here is a durable, crash-safe witness that the
+    merge ran to completion. Indexed by raw_evidence_id — a single sub-ms lookup.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM event_provenance WHERE raw_evidence_id = ? LIMIT 1",
+        (evidence_id,),
+    ).fetchone()
+    return row is not None
+
 
 def _store_event_embedding(conn: sqlite3.Connection, event_id: int, event: Event) -> None:
     """Compute + store the event's embedding from its composed input (E1).
