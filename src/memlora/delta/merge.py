@@ -133,7 +133,7 @@ def execute_merge(
                 # J2: derive the decision key at the single mint choke point so
                 # every extraction path (broad, patterns, co-capture) gets one.
                 if event.decision_key is None:
-                    from memlora.extraction.decision_key import derive_decision_key
+                    from memlora.utils.decision_key import derive_decision_key
                     event.decision_key = derive_decision_key(event.payload, event.event_type)
                 # R3: fold a near-identical restatement (echo) into its canonical
                 # BEFORE supersession can fire — bump mention_count, never mint a

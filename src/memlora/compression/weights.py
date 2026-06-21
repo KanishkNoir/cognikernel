@@ -13,7 +13,7 @@ from memlora.compression.centrality import centrality_factor
 from memlora.compression.recency import recency_factor
 
 if TYPE_CHECKING:
-    from memlora.storage.events import Event
+    from memlora.model import Event
 
 BASE_WEIGHT: dict[str, float] = {
     "CONSTRAINT_HARD": 1.0,

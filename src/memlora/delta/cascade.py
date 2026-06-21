@@ -66,7 +66,7 @@ def cascade_component_status(
             "reason": f"depends on {target_path} which is {payload['status']}",
             "cascaded_from": status_event.id,
         }
-        from memlora.extraction.hashing import compute_content_hash
+        from memlora.utils.hashing import compute_content_hash
         cascade_hash = compute_content_hash(
             "COMPONENT_STATUS",
             f"{dep_path} needs_review cascade from {target_path}",

@@ -12,7 +12,7 @@ import functools
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from memlora.storage.events import Event
+    from memlora.model import Event
 
 _CHARS_PER_TOKEN = 4
 

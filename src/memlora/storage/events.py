@@ -3,19 +3,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from dataclasses import dataclass, field
-from typing import Any
 
-VALID_EVENT_TYPES: frozenset[str] = frozenset({
-    "DECISION",
-    "CONSTRAINT_HARD",
-    "CONSTRAINT_SOFT",
-    "COMPONENT_STATUS",
-    "APPROACH_ABANDONED",
-    "APPROACH_ABANDONED_DO_NOT_RETRY",
-    "THREAD_OPEN",
-    "THREAD_CLOSE",
-})
+# Event + VALID_EVENT_TYPES live in the dependency-free base model module so the
+# layered packages can type-hint Event without importing "up" into storage (the
+# layering fix). Re-exported here for backward compatibility — existing
+# `from memlora.storage.events import Event` call sites are unaffected.
+from memlora.model import Event, VALID_EVENT_TYPES  # noqa: F401  (re-export)
 
 # Weight boost applied to an event that already exists (dedup hit).
 WEIGHT_INCREMENT_ON_DEDUP: float = 0.15
@@ -25,34 +18,6 @@ MAX_EVENT_WEIGHT: float = 5.0
 
 # Weight below which events are archived during the decay pass.
 ARCHIVE_THRESHOLD: float = 0.05
-
-
-@dataclass
-class Event:
-    project_id: str
-    session_id: str
-    event_type: str
-    payload: dict[str, Any]
-    content_hash: str
-    evidence_id: int | None = None
-    weight: float = 1.0
-    mention_count: int = 1
-    created_at: int = field(default_factory=lambda: int(time.time() * 1000))
-    id: int | None = None
-    superseded_by: int | None = None
-    archived: bool = False
-    last_mentioned_session: int = 0
-    # J2: normalized topic axis ("alias default"); None = not derived yet,
-    # '' = derivation found no key. Computed at merge time (the single mint
-    # choke point) and lazily backfilled for pre-016 rows.
-    decision_key: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.event_type not in VALID_EVENT_TYPES:
-            raise ValueError(
-                f"Unknown event_type {self.event_type!r}. "
-                f"Valid types: {sorted(VALID_EVENT_TYPES)}"
-            )
 
 
 # ── writes ───────────────────────────────────────────────────────────────────

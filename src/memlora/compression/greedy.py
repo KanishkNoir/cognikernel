@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from memlora.compression.token_count import estimate_tokens
 
 if TYPE_CHECKING:
-    from memlora.storage.events import Event
+    from memlora.model import Event
 
 _MANDATORY_TYPES: frozenset[str] = frozenset({
     "CONSTRAINT_HARD",
