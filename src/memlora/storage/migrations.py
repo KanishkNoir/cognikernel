@@ -85,14 +85,31 @@ def _run_schema_migrations(conn: sqlite3.Connection) -> None:
             continue
 
         sql = migration_file.read_text(encoding="utf-8")
-        # executescript issues an implicit COMMIT first, then runs all statements.
-        conn.executescript(sql)
-        # Record the new version in a separate transaction after the script commits.
-        conn.execute(
-            "UPDATE meta SET value = ? WHERE key = 'schema_version'",
-            (str(version),),
+        # Atomicity (audit P1): the migration body AND its version bump must commit
+        # as ONE transaction. Previously the script ran (auto-committing each DDL)
+        # and the version was bumped in a separate commit, so a crash mid-script —
+        # e.g. after a table RENAME but before the rebuild — left a half-applied
+        # schema still recorded at the OLD version. The next startup re-ran the
+        # migration, the RENAME failed (the table was already gone), and the DB
+        # never booted again. Wrapping in an explicit BEGIN/COMMIT makes it
+        # all-or-nothing: executescript implicitly COMMITs any pending tx first,
+        # then runs our script verbatim, so the BEGIN we own brackets the whole
+        # unit. Migration .sql files must NOT contain their own BEGIN/COMMIT or
+        # transaction-incompatible statements (PRAGMA/VACUUM) — none do today.
+        script = (
+            "BEGIN;\n"
+            f"{sql}\n"
+            f"UPDATE meta SET value = '{version}' WHERE key = 'schema_version';\n"
+            "COMMIT;"
         )
-        conn.commit()
+        try:
+            conn.executescript(script)
+        except Exception:
+            # On a mid-script failure the BEGIN transaction is left open; roll it
+            # back so the partial schema change is discarded and the DB stays at
+            # `current`, then re-raise so startup surfaces the bad migration.
+            conn.rollback()
+            raise
 
 
 def _check_projection_version(conn: sqlite3.Connection) -> None:

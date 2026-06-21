@@ -1,8 +1,15 @@
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from memlora.config import EXPECTED_PROJECTION_VERSION, EXPECTED_SCHEMA_VERSION
 from memlora.storage.connection import get_connection
-from memlora.storage.migrations import run_migrations
+from memlora.storage.migrations import (
+    _bootstrap_meta,
+    _run_schema_migrations,
+    run_migrations,
+)
 
 
 def _fresh_conn(tmp_path: Path, name: str = "test.db"):
@@ -192,6 +199,94 @@ class TestVersions:
                 ).fetchone()[0]
             )
         assert version == EXPECTED_PROJECTION_VERSION
+
+
+class TestAtomicity:
+    """A migration's body and its version bump must commit as one transaction.
+
+    Regression guard for the audit P1: migration 017 does a multi-statement table
+    rebuild (RENAME -> CREATE -> INSERT -> DROP). Before the fix, executescript
+    auto-committed each DDL and the version was bumped separately, so a crash
+    after the RENAME left the table gone, no replacement, and the OLD version
+    recorded — every subsequent startup re-ran the migration, the RENAME failed,
+    and the DB never booted again.
+    """
+
+    def _seed_dir(self, tmp_path: Path) -> Path:
+        mdir = tmp_path / "migrations"
+        mdir.mkdir()
+        # 001: a clean migration that establishes a table with data.
+        (mdir / "001_base.sql").write_text(
+            "CREATE TABLE t (id INTEGER);\nINSERT INTO t VALUES (1);\n",
+            encoding="utf-8",
+        )
+        # 002: mirrors the 017 rebuild shape but fails mid-script — the INSERT
+        # references a table that does not exist, AFTER the RENAME has run.
+        (mdir / "002_break.sql").write_text(
+            "ALTER TABLE t RENAME TO t_old;\n"
+            "CREATE TABLE t (id INTEGER, extra TEXT);\n"
+            "INSERT INTO t (id) SELECT id FROM does_not_exist;\n"
+            "DROP TABLE t_old;\n",
+            encoding="utf-8",
+        )
+        return mdir
+
+    def test_partial_failure_rolls_back_and_keeps_old_version(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        mdir = self._seed_dir(tmp_path)
+        monkeypatch.setattr(
+            "memlora.storage.migrations._MIGRATIONS_DIR", mdir
+        )
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        _bootstrap_meta(conn)
+
+        with pytest.raises(sqlite3.OperationalError):
+            _run_schema_migrations(conn)
+
+        # 001 applied and committed -> version 1; 002 rolled back fully -> NOT 2.
+        version = int(
+            conn.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()[0]
+        )
+        assert version == 1
+
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        # The RENAME was rolled back: original table intact, no orphaned _old,
+        # no half-built replacement leaking the new column.
+        assert "t" in tables
+        assert "t_old" not in tables
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(t)").fetchall()}
+        assert cols == {"id"}
+        # Original row survived.
+        assert conn.execute("SELECT id FROM t").fetchone()[0] == 1
+
+    def test_connection_usable_after_failed_migration(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The rollback must leave no dangling transaction — the connection is
+        immediately writable again (a left-open tx would lock the next write)."""
+        mdir = self._seed_dir(tmp_path)
+        monkeypatch.setattr(
+            "memlora.storage.migrations._MIGRATIONS_DIR", mdir
+        )
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        _bootstrap_meta(conn)
+        with pytest.raises(sqlite3.OperationalError):
+            _run_schema_migrations(conn)
+        # No "cannot start a transaction within a transaction" / lock errors.
+        conn.execute("CREATE TABLE probe (x INTEGER)")
+        conn.execute("INSERT INTO probe VALUES (1)")
+        conn.commit()
+        assert conn.execute("SELECT x FROM probe").fetchone()[0] == 1
 
 
 class TestIdempotency:
