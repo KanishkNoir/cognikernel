@@ -32,6 +32,52 @@ class TestNewEntrypoints:
             assert callable(getattr(hooks, fn)), fn
 
 
+class TestUserPromptSubmitTimeout:
+    """Audit P1: a stalled recall must not block the prompt past the budget.
+
+    The old `with ThreadPoolExecutor()` joined the worker on block-exit (and at
+    interpreter shutdown), so the result-timeout was illusory. The daemon-thread
+    form abandons a slow recall and returns within budget.
+    """
+
+    def test_stalled_recall_returns_within_budget_and_silent(
+        self, monkeypatch, capsys
+    ) -> None:
+        import threading
+        import time
+
+        from memlora.integration import hooks
+
+        monkeypatch.setattr(hooks, "_HOOK_TIMEOUT_S", 0.1)
+        monkeypatch.setattr(
+            hooks, "_read_payload",
+            lambda: {"cwd": "/proj", "prompt": "q", "session_id": "s"},
+        )
+
+        class _Cfg:
+            query_time_injection = True
+
+        monkeypatch.setattr("memlora.config.Config.load", lambda **k: _Cfg())
+
+        release = threading.Event()
+
+        def _stalled(*args, **kwargs):
+            release.wait(5.0)  # would block far past the budget
+            return "LATE — should never be printed"
+
+        monkeypatch.setattr(
+            "memlora.integration.query.recall_for_prompt", _stalled
+        )
+
+        start = time.monotonic()
+        hooks.user_prompt_submit_main()
+        elapsed = time.monotonic() - start
+        release.set()  # let the abandoned daemon finish
+
+        assert elapsed < 1.0, f"hook blocked {elapsed:.2f}s past its 0.1s budget"
+        assert capsys.readouterr().out.strip() == ""  # timed out → silence
+
+
 class TestUserPromptSubmitSilenceContract:
     def test_flag_off_exits_silently(self, tmp_path: Path) -> None:
         """With query_time_injection=False (default), the hook prints nothing."""

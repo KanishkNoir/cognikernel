@@ -73,7 +73,7 @@ def user_prompt_submit_main() -> None:
     SessionStart to amortise cold-load. Flag-gated: exits immediately when
     query_time_injection is disabled.
     """
-    import concurrent.futures
+    import threading
 
     try:
         payload = _read_payload()
@@ -89,14 +89,29 @@ def user_prompt_submit_main() -> None:
 
         from memlora.integration.query import recall_for_prompt
         session_id = payload.get("session_id") or None
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(
-                recall_for_prompt, cwd, prompt, config=config, session_id=session_id
-            )
+        # Hard budget (audit P1). A `with ThreadPoolExecutor()` block joins the
+        # worker on exit (shutdown(wait=True)), AND the executor registers an
+        # atexit handler that joins all worker threads at interpreter shutdown —
+        # so even shutdown(wait=False) would not let the hook *process* exit while
+        # a recall is stalled on a write lock (up to busy_timeout=30s). The 3s
+        # result-timeout was therefore fiction. Use a daemon thread instead: it is
+        # abandoned on timeout and never joined at exit, so the hook always returns
+        # within budget. recall is read-only; the orphaned reader dies with the
+        # process and any uncommitted CK-1 ledger write rolls back harmlessly.
+        result: dict[str, str] = {"snippet": ""}
+
+        def _recall() -> None:
             try:
-                snippet = fut.result(timeout=_HOOK_TIMEOUT_S)
-            except (concurrent.futures.TimeoutError, Exception):
-                snippet = ""
+                result["snippet"] = recall_for_prompt(
+                    cwd, prompt, config=config, session_id=session_id
+                ) or ""
+            except Exception:
+                result["snippet"] = ""
+
+        worker = threading.Thread(target=_recall, daemon=True)
+        worker.start()
+        worker.join(timeout=_HOOK_TIMEOUT_S)
+        snippet = result["snippet"]  # "" if the worker is still running (timed out)
 
         if not snippet:
             return  # silence — print nothing, exit 0
