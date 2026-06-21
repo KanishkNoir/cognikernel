@@ -179,15 +179,35 @@ class TestCrashAndReplay:
         """Gamma post-mortem F2: a second worker must exit immediately when the
         project lock is held (worker storm prevention)."""
         project_path = _make_project(tmp_path)
+        from memlora.config import Config
         from memlora.integration.session import process_jobs, _acquire_worker_lock
 
+        # Hold the lock under the SAME root process_jobs resolves from config, so
+        # the second worker actually sees it (audit P2: lock dir follows config).
+        cfg = Config.load(project_path=str(project_path))
         pid = hash_project_path(str(project_path))
-        lock = _acquire_worker_lock(pid)
+        lock = _acquire_worker_lock(pid, memlora_dir=cfg.memlora_dir)
         assert lock is not None
         try:
             summary = process_jobs(str(project_path))
             assert summary["skipped"] is True
             assert summary["processed"] == 0
+        finally:
+            lock.unlink(missing_ok=True)
+
+    def test_worker_lock_follows_configured_memlora_dir(self, tmp_path, monkeypatch):
+        """Audit P2: the lock lives under the configured memlora_dir, never a
+        hardcoded ~/.memlora — needed for read-only homes and relocated data."""
+        monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
+        from memlora.config import Config
+        from memlora.integration.session import _acquire_worker_lock
+
+        cfg = Config.load()
+        lock = _acquire_worker_lock("pidX", memlora_dir=cfg.memlora_dir)
+        try:
+            assert lock is not None
+            assert lock.parent == cfg.memlora_dir / "locks"
+            assert str(tmp_path / "data") in str(lock)
         finally:
             lock.unlink(missing_ok=True)
 

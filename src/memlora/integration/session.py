@@ -296,12 +296,22 @@ def sys_platform_win32() -> bool:
     return _sys.platform == "win32"
 
 
-def _acquire_worker_lock(project_id: str, stale_after_s: int = 15 * 60) -> Path | None:
+def _acquire_worker_lock(
+    project_id: str,
+    memlora_dir: Path | None = None,
+    stale_after_s: int = 15 * 60,
+) -> Path | None:
     """Single-flight guard: one worker per project (gamma post-mortem F2).
 
     Without this, N drains pile onto the same SQLite file and starve each
     other. Returns the lock path on success, None if another live worker
     holds it.
+
+    The lock lives under `memlora_dir` — the same root as the project DB — so it
+    honours MEMLORA_DIR / per-project config and works under a read-only home
+    (audit P2). A hardcoded ~/.memlora split-brained workers whose data dir was
+    relocated and broke entirely under a read-only home. Defaults to ~/.memlora
+    only when no dir is supplied (back-compat for direct callers/tests).
 
     Takeover rules (I7c): the lock file stores the holder's pid. If that
     process is dead — e.g. a hook-spawned worker killed by the Job Object at
@@ -310,7 +320,8 @@ def _acquire_worker_lock(project_id: str, stale_after_s: int = 15 * 60) -> Path 
     age-out remains as the fallback when pid liveness can't be determined.
     """
     import os
-    lock_dir = Path.home() / ".memlora" / "locks"
+    base = memlora_dir if memlora_dir is not None else (Path.home() / ".memlora")
+    lock_dir = base / "locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_path = lock_dir / f"worker-{project_id}.lock"
     try:
@@ -376,7 +387,7 @@ def process_jobs(
     claimant = f"worker-{os.getpid()}"
     processed = failed = replayed = 0
 
-    lock_path = _acquire_worker_lock(project_id)
+    lock_path = _acquire_worker_lock(project_id, memlora_dir=config.memlora_dir)
     if lock_path is None:
         _worker_log(project_id, f"{claimant} exit: another worker holds the lock")
         return {"processed": 0, "failed": 0, "replayed": 0, "skipped": True}
