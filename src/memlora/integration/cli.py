@@ -918,6 +918,16 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
                 print(f"    {sess_short}  cache={pct}  saved={read:,}tok")
 
     print()
+    print("-- symbol extraction ----------------------------------------")
+    from memlora.symbols.extractor import typescript_support_status
+    ts_ok, ts_detail = typescript_support_status()
+    print("  python (ast)       : OK")
+    print(f"  typescript/js      : {'OK' if ts_ok else 'UNAVAILABLE'} - {ts_detail}")
+    if not ts_ok:
+        print("  (TS/JS files yield no symbol graph until the parser is installed; "
+              "Python extraction is unaffected)")
+
+    print()
     print("status     : OK")
 
 

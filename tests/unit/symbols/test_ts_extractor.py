@@ -1,7 +1,11 @@
 """Unit tests for the TypeScript/JavaScript symbol extractor."""
 from __future__ import annotations
 
+import logging
+import sys
+
 import pytest
+from memlora.symbols import extractor as _extractor_mod
 from memlora.symbols.extractor import (
     TypeScriptExtractor,
     SymbolNode,
@@ -48,6 +52,48 @@ class TestTSClassExtraction:
     def test_abstract_class(self) -> None:
         nodes, _ = _extract("abstract class Repo { abstract find(): void; }")
         assert any(n.node_type == "class" and n.name == "Repo" for n in nodes)
+
+
+class TestTypeScriptDiagnostics:
+    """Audit P3: the extractor still fails open to an empty graph, but the cause
+    (missing parser dep vs parse failure) is now logged + doctor-probeable instead
+    of silently swallowed."""
+
+    def test_support_status_available_in_this_env(self) -> None:
+        ok, detail = _extractor_mod.typescript_support_status()
+        assert ok is True
+        assert "OK" in detail
+
+    def test_missing_dependency_fails_open_and_warns_once(
+        self, monkeypatch, caplog
+    ) -> None:
+        # Setting the module to None makes `from ... import get_parser` raise
+        # ImportError — i.e. the dependency is effectively absent.
+        monkeypatch.setitem(sys.modules, "tree_sitter_language_pack", None)
+        monkeypatch.setattr(_extractor_mod, "_TS_DEP_WARNED", False)
+        with caplog.at_level(logging.WARNING, logger="memlora.symbols"):
+            r1 = _EXTRACTOR.extract("a.ts", "class Foo {}", _PID, _KNOWN)
+            r2 = _EXTRACTOR.extract("b.ts", "class Bar {}", _PID, _KNOWN)
+        assert r1 == ([], [])
+        assert r2 == ([], [])
+        unavailable = [
+            r for r in caplog.records if "typescript_unavailable" in r.getMessage()
+        ]
+        assert len(unavailable) == 1  # one-shot config warning, not per-file spam
+
+    def test_parse_failure_fails_open_and_warns(self, monkeypatch, caplog) -> None:
+        import tree_sitter_language_pack as tslp
+
+        def _boom(_lang):
+            raise RuntimeError("parser blew up")
+
+        monkeypatch.setattr(tslp, "get_parser", _boom)
+        with caplog.at_level(logging.WARNING, logger="memlora.symbols"):
+            result = _EXTRACTOR.extract("c.ts", "class Foo {}", _PID, _KNOWN)
+        assert result == ([], [])
+        assert any(
+            "typescript_parse_failed" in r.getMessage() for r in caplog.records
+        )
 
 
 class TestTSMethodExtraction:
