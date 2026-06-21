@@ -33,6 +33,33 @@ _PROHIBITION_MARKER_RE = re.compile(
     r"stop using|migrate away|ruled out|abandon\w*|no longer|not use)\b"
 )
 
+# #56 selection: authority + scope ranking so the right prohibition surfaces.
+_AUTH_RANK = {
+    "user_stated": 3.0, "assistant_decided": 2.0,
+    "assistant_answer_to_user_question": 1.0, "inferred_from_code": 0.0,
+}
+# A prohibition about WHERE state lives (multi-instance / shared / distributed)
+# is a higher-value bind target than an implementation-mechanic one — the D5/D16
+# lesson: BM25 buried "must be shared / local counters don't work" under a
+# token-dense "RPM check sits outside the attempt loop".
+_ARCH_MARKER_RE = re.compile(
+    r"\b(multi-?instance|instances?|shared|distributed|redis|process-local|"
+    r"in-process|\blocal\b|across|cluster|workers?|global state|single.?point|"
+    r"per-process|per-request)\b", re.I
+)
+
+
+def _prohibition_priority(h: dict) -> float:
+    """Rank a prohibition for action-point surfacing: authority + scope boosts.
+    Graveyard ('do not retry') and architecture-scope prohibitions rank above
+    implementation-detail ones so high term-overlap can't bury them."""
+    pri = _AUTH_RANK.get(h.get("authority", ""), 1.0)
+    if h.get("event_type") == "APPROACH_ABANDONED_DO_NOT_RETRY":
+        pri += 0.5
+    if _ARCH_MARKER_RE.search(f"{h.get('subject', '')} {h.get('description', '')}"):
+        pri += 1.0
+    return pri
+
 
 def _resolve(project_path: str, config: Config | None) -> tuple[str, Path]:
     config = config or Config.load(project_path=project_path)
@@ -276,7 +303,11 @@ def surface_prohibitions_for_edit(
             return ""
         with get_connection(db_path) as conn:
             run_migrations(conn)
-            hits = prohibition_search(conn, project_id, diff_text, n=8)
+            # #56: pull a BROAD pool, then re-rank by (authority, overlap) — NOT
+            # by raw BM25 rank. The live Relay run proved rank≤1/BM25 surfaced a
+            # token-dense impl-detail prohibition and buried the architecture one
+            # (D5/D16) at BM25 ranks 6-9. Selection, not retrieval, was the gap.
+            hits = prohibition_search(conn, project_id, diff_text, n=config.pretool_pool_size)
             if not hits:
                 return ""
             seen: set[int] = set()
@@ -284,16 +315,13 @@ def surface_prohibitions_for_edit(
                 from memlora.storage.render_ledger import rendered_event_ids
 
                 seen = rendered_event_ids(conn, project_id, session_id)
-            passed: list[dict] = []
-            for rank, h in enumerate(hits, start=1):
-                if rank > config.pretool_bm25_rank_max:
-                    break
+            cand: list[tuple[float, int, dict]] = []
+            for h in hits:
                 if h["id"] in seen:
                     continue
                 # A hard constraint is only a *prohibition* an edit can re-violate
                 # when it carries a negative/abandonment marker; positive hard
-                # rules are block facts, not action-point bind targets. Graveyard
-                # entries always qualify.
+                # rules are block facts, not bind targets. Graveyard always qualifies.
                 if h.get("event_type") == "CONSTRAINT_HARD" and not (
                     _PROHIBITION_MARKER_RE.search((h.get("description") or "").lower())
                 ):
@@ -301,8 +329,23 @@ def surface_prohibitions_for_edit(
                 p_toks = normalize_for_overlap(
                     f"{h.get('subject', '')} {h.get('description', '')}"
                 )
-                if len(diff_toks & p_toks) < config.pretool_min_term_overlap:
+                ov = len(diff_toks & p_toks)
+                if ov < config.pretool_min_term_overlap:
                     continue
+                cand.append((_prohibition_priority(h), ov, h))
+            # Highest authority first, then strongest term overlap. A high-
+            # authority architecture prohibition now beats a token-dense
+            # impl-detail one even when BM25 ranked the latter first.
+            cand.sort(key=lambda t: (t[0], t[1]), reverse=True)
+            passed: list[dict] = []
+            seen_topics: set[str] = set()
+            for _pri, _ov, h in cand:
+                topic = h.get("decision_key") or " ".join(
+                    sorted(normalize_for_overlap(
+                        h.get("subject") or h.get("description") or ""))[:3])
+                if topic and topic in seen_topics:
+                    continue
+                seen_topics.add(topic)
                 passed.append(h)
                 if len(passed) >= config.pretool_max_surface:
                     break

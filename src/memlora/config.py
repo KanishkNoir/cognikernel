@@ -123,13 +123,15 @@ class Config:
     # it as advisory additionalContext at the action point (never block). The
     # gate mirrors CK-1's BM25-only arm — precision-first, silence default.
     pretool_prohibition_surface_enabled: bool = True
-    # Calibrated on the 4 benchmark DBs (scripts/_pretool_sweep.py): rank<=1 +
-    # overlap>=3 keeps the surface rate CK-1-like (~0-27%) instead of the ~83%
-    # an untuned pool produced. Tighter than CK-1 because this fires on EVERY
-    # edit, not just prompts — precision dominates.
-    pretool_bm25_rank_max: int = 1
-    pretool_min_term_overlap: int = 3
-    pretool_max_surface: int = 1
+    # #56 selection: pull a broad pool, then rank by (authority + graveyard/
+    # architecture-scope boost, term overlap) — NOT by BM25 rank. The live Relay
+    # run showed BM25-rank≤1 surfaced a token-dense impl-detail prohibition and
+    # buried the architecture one (D5/D16) at ranks 6-9; ranking by authority+
+    # scope fixes the *selection* without loosening the overlap floor.
+    pretool_pool_size: int = 12          # candidates pulled before re-ranking
+    pretool_min_term_overlap: int = 3    # absolute floor (catches low-overlap binds e.g. money-float ov3)
+    pretool_max_surface: int = 1         # priority-ranking surfaces the RIGHT one, so cap 1 keeps volume calibrated
+    pretool_bm25_rank_max: int = 1       # DEPRECATED (parsed, no longer gates)
     # When True, SubagentStop fires the extraction pipeline on the subagent's
     # transcript and merges decisions into the parent project DB. Default ON once
     # SubagentStop is wired in settings.json (register hook-subagent-stop).
@@ -281,7 +283,7 @@ class Config:
             kwargs["pretool_prohibition_surface_enabled"] = bool(
                 data["pretool_prohibition_surface_enabled"])
         for _pt_key in ("pretool_bm25_rank_max", "pretool_min_term_overlap",
-                        "pretool_max_surface"):
+                        "pretool_max_surface", "pretool_pool_size"):
             if _pt_key in data:
                 kwargs[_pt_key] = int(data[_pt_key])
         if "capture_subagents" in data:

@@ -107,6 +107,26 @@ def test_positive_hard_rule_not_surfaced(tmp_path: Path, monkeypatch) -> None:
     assert surface_prohibitions_for_edit(proj, diff) == ""
 
 
+def test_priority_surfaces_architecture_over_impldetail(tmp_path: Path, monkeypatch) -> None:
+    """#56 core fix: when a diff matches BOTH a token-dense impl-detail prohibition
+    AND a lower-overlap architecture prohibition, the architecture one must surface
+    (authority+scope ranking beats raw overlap). This is the live D5/D16 miss."""
+    proj, pid, db = _project(tmp_path, monkeypatch)
+    # impl-detail graveyard: HIGH overlap with the diff, no architecture scope
+    _insert(db, pid, "RPM check sits outside the attempt loop — one count per request "
+                     "with rate limit counter increment",
+            etype="APPROACH_ABANDONED_DO_NOT_RETRY", subject="rpm loop", h="impl")
+    # architecture graveyard: lower overlap, but about WHERE state lives
+    _insert(db, pid, "Local counters don't work — with N instances each enforcing the "
+                     "full limit independently the shared rate limit breaks",
+            etype="APPROACH_ABANDONED_DO_NOT_RETRY", subject="rate limiting", h="arch")
+    diff = ("class RateLimiter:  # sliding-window rpm/tpm limiter, one instance per "
+            "deployment; counters live in a dict, rate limit count per request loop")
+    out = surface_prohibitions_for_edit(proj, diff)
+    assert "Local counters don't work" in out   # architecture prohibition wins
+    assert "instances" in out
+
+
 def test_term_overlap_floor(tmp_path: Path, monkeypatch) -> None:
     """An unrelated edit that happens to rank first in a tiny store stays silent
     (< pretool_min_term_overlap shared content terms)."""
