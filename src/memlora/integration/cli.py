@@ -143,6 +143,10 @@ def main() -> None:
     # ── doctor ────────────────────────────────────────────────────────────────
     p_doctor = sub.add_parser("doctor", help="Check DB health and print a summary")
     p_doctor.add_argument("project_path", help="Path to the project root")
+    p_doctor.add_argument(
+        "--strict", action="store_true",
+        help="Exit non-zero if any subsystem is degraded (for pre-flight / CI).",
+    )
 
     # ── reset ─────────────────────────────────────────────────────────────────
     p_reset = sub.add_parser("reset", help="Delete all events for a project")
@@ -918,17 +922,26 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
                 print(f"    {sess_short}  cache={pct}  saved={read:,}tok")
 
     print()
-    print("-- symbol extraction ----------------------------------------")
-    from memlora.symbols.extractor import typescript_support_status
-    ts_ok, ts_detail = typescript_support_status()
-    print("  python (ast)       : OK")
-    print(f"  typescript/js      : {'OK' if ts_ok else 'UNAVAILABLE'} - {ts_detail}")
-    if not ts_ok:
-        print("  (TS/JS files yield no symbol graph until the parser is installed; "
-              "Python extraction is unaffected)")
+    print("-- subsystem health -----------------------------------------")
+    from memlora.integration.health import run_health_checks
+    with get_connection(db_path) as conn:
+        checks = run_health_checks(conn, project_id, config)
+    for c in checks:
+        mark = "OK" if c.ok else "!!"
+        print(f"  [{mark}] {c.name:<12}: {c.detail}")
+    unhealthy = [c for c in checks if not c.ok]
 
     print()
-    print("status     : OK")
+    if unhealthy:
+        names = ", ".join(c.name for c in unhealthy)
+        msg = f"status     : DEGRADED — {len(unhealthy)} subsystem(s): {names}"
+        if getattr(args, "strict", False):
+            print(msg, file=sys.stderr)
+            sys.exit(1)
+        print(msg)
+        print("             (run `memlora doctor --strict` to fail on this)")
+    else:
+        print("status     : OK")
 
 
 def _cmd_telemetry(args: argparse.Namespace) -> None:

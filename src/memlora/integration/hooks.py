@@ -13,6 +13,7 @@ every Read — pays only for what it uses, never the extraction/symbol stack.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,20 @@ import traceback
 from pathlib import Path
 
 _REINJECT_SOURCES = frozenset({"startup", "resume", "compact", "clear"})
+
+# Fail-open is the contract (a hook must never block Claude), but a swallowed
+# exception that leaves no trace is indistinguishable from "nothing happened" —
+# the silence-reads-as-success failure mode (audit P3). Log the swallow at WARNING
+# with the traceback so a degraded hook is greppable; never re-raise.
+_log = logging.getLogger("memlora.hooks")
+
+
+def _log_swallowed(hook: str, exc: BaseException) -> None:
+    """Record a fail-open swallow without ever raising from the logger itself."""
+    try:
+        _log.warning("hook.%s_swallowed_error: %s", hook, exc, exc_info=True)
+    except Exception:
+        pass
 
 
 # ── shared helpers ────────────────────────────────────────────────────────────
@@ -122,8 +137,8 @@ def user_prompt_submit_main() -> None:
                 "additionalContext": snippet,
             }
         }))
-    except Exception:
-        pass  # never block the user
+    except Exception as exc:
+        _log_swallowed("user_prompt_submit", exc)  # never block the user
 
 
 # ── SubagentStop — subagent memory capture (CK-4) ─────────────────────────────
@@ -183,8 +198,8 @@ def subagent_stop_main() -> None:
         # No spawn: detached workers die with the hook's Job Object (I7c).
         # The job drains at the next Stop firing's sync drain or via the MCP
         # server's background drainer.
-    except Exception:
-        pass  # never block subagent teardown
+    except Exception as exc:
+        _log_swallowed("subagent_stop", exc)  # never block subagent teardown
 
 
 # ── PostToolUse:Grep — cache grep results (CK-3a) ─────────────────────────────
@@ -279,8 +294,8 @@ def session_start_main() -> None:
                         backfill_embeddings(_conn, _pid)
         except Exception:
             pass
-    except Exception:
-        pass  # never block Claude
+    except Exception as exc:
+        _log_swallowed("pretool", exc)  # never block Claude
 
 
 # ── PreToolUse (Read gate + optional Grep cache) ──────────────────────────────
@@ -497,8 +512,8 @@ def posttool_main() -> None:
             if config.grep_cache_enabled:
                 from memlora.storage.grep_cache import invalidate_project_cache
                 invalidate_project_cache(conn, project_id, changed_path=rel_path)
-    except Exception:
-        pass  # posttool hook must never block Claude
+    except Exception as exc:
+        _log_swallowed("posttool", exc)  # posttool hook must never block Claude
 
 
 # ── PostToolUse (Read → read_session_cache) ───────────────────────────────────
