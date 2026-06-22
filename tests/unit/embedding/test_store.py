@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import sqlite3
 
-import numpy as np
 import pytest
+
+# numpy ships only with the optional `embedding` extra. Skip cleanly (not a
+# collection error) when it's absent — e.g. the default lexical-only CI lane.
+np = pytest.importorskip("numpy")
 
 from memlora.embedding.store import cosine_matches, load_embeddings, upsert_embedding
 from memlora.storage.migrations import run_migrations

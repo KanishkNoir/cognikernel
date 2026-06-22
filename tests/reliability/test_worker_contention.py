@@ -38,11 +38,13 @@ class TestWorkerContention:
         assert not errors, f"worker(s) raised: {errors}"
         assert all(not t.is_alive() for t in threads), "a worker hung"
 
-        # Exactly-once across both workers: the single-flight lock means one worker
-        # processes the queue and the other skips; no job is processed twice.
+        # Exactly-once across both workers: every job is processed exactly once,
+        # never twice. (We deliberately do NOT assert the second worker observed a
+        # held lock — on a fast runner worker A can drain all three and release
+        # before B even attempts, so B legitimately finds an empty queue. The real
+        # invariant is the outcome below, not the interleaving.)
         total_processed = sum(r.get("processed", 0) for r in results)
         assert total_processed == 3, f"expected 3 jobs processed once, got {total_processed}"
-        assert any(r.get("skipped") for r in results), "second worker should have skipped"
 
         # The queue is fully drained and no duplicate events were minted.
         with get_connection(project.db) as conn:
