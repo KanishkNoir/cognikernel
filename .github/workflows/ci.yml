@@ -1,0 +1,57 @@
+name: CI
+
+# The promotion gate (audit P4 / #67). Before this, the project had NO CI: the one
+# architectural guardrail (import-linter) could silently die and the failure-path
+# tests did not exist, so "green" meant only "the happy-path unit tests a developer
+# happened to run locally passed." This workflow makes the guardrails mandatory on
+# every push/PR: architecture layering, the full test suite (which includes the
+# reliability/failure-injection suite and the contract meta-guard), across the
+# supported Python versions.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  architecture:
+    # Layering enforcement is its own job so a boundary regression is an
+    # unambiguous, fast signal — separate from a test failure.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync dev dependencies
+        run: uv sync
+      - name: Check import-layering contracts
+        # Fails the build if any contract is broken OR if a contract names a
+        # nonexistent module (which would abort the run and silently disable
+        # enforcement — the audit P2 root cause). lint-imports exits non-zero on
+        # both, and the contract meta-guard test (below) re-asserts it.
+        run: uv run lint-imports
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Sync dev dependencies
+        run: uv sync --extra embedding
+      - name: Run the full test suite
+        # Includes tests/reliability/ (failure injection) and the architecture
+        # contract meta-guard — the categories the audit showed were missing.
+        env:
+          MEMLORA_DISABLE_AUTO_WARM: "1"
+        run: uv run pytest -q
