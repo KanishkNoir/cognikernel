@@ -17,6 +17,46 @@ _ROLE_HEADER = re.compile(
     r"^(Human|User|Assistant|Claude)\s*:\s*", re.MULTILINE | re.IGNORECASE
 )
 _BULLET = re.compile(r"^\s*(?:[-*•]|\d+\.)\s+\S")
+# Label-value line: "Max attempts: 2 (...)", "Recovery window: 30 s", "Open
+# threshold: 3 consecutive ...". Short capitalized noun-phrase label, colon,
+# then content. These carry numerically-precise decisions; without this rule,
+# consecutive unterminated label lines merge into one mega-sentence that the
+# salience head rejects as noise (GAMMA_CK_TEST: max-attempts/recovery-window/
+# open-threshold all died together inside one blob). Role markers ("User:",
+# "Assistant:") never reach _split_prose, so they can't match here.
+_LABEL_LINE = re.compile(r"^[A-Z][A-Za-z0-9 _/()\-]{0,48}:\s+\S")
+# Clause starters — a real label is a noun phrase ("Max attempts"), not the
+# beginning of a sentence ("We considered the following options: ...").
+_LABEL_STOP_FIRST = frozenset({
+    "we", "i", "it", "this", "that", "these", "those", "they", "you",
+    "he", "she", "there", "here", "if", "when", "while", "because",
+    "note", "see", "example", "remember", "warning", "however",
+})
+
+
+def is_label_value_line(stripped: str) -> bool:
+    """True for self-contained "Label: value" fact lines (shared with pipeline).
+
+    Guards against prose false-positives: label <= 4 words, must not start
+    with a clause-starter, and the line must not end mid-clause (trailing
+    comma = a wrapped sentence, not a fact line).
+    """
+    if not _LABEL_LINE.match(stripped):
+        return False
+    label = stripped.split(":", 1)[0].strip()
+    words = label.split()
+    if len(words) > 4:
+        return False
+    if words[0].lower() in _LABEL_STOP_FIRST:
+        return False
+    if stripped.rstrip().endswith(","):
+        return False
+    return True
+# v1 A-1: the leading list marker is presentational. Keeping it ("4. Every
+# upstream call…") pollutes the description, defeats dedup (same fact under a
+# different ordinal hashes differently), and trips classifiers. Strip it; record
+# that the sentence was a list item so v2 aggregation can recover the run.
+_LIST_MARKER = re.compile(r"^(?:[-*•]|\d+\.)\s+")
 _SENT_BOUNDARY = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 _ABBREVS = frozenset(
     {
@@ -35,6 +75,11 @@ class Sentence:
     role: str              # "user" | "assistant"
     is_code_block: bool
     sentence_index: int = field(default=0, compare=False)
+    # v1 A-1: list provenance. list_item marks a sentence that came from a bullet
+    # or numbered line (marker already stripped from `text`); list_group_id ties
+    # a contiguous run of list items together for later aggregation.
+    list_item: bool = field(default=False, compare=False)
+    list_group_id: int = field(default=-1, compare=False)
 
 
 def tokenize(transcript: str) -> list[Sentence]:
@@ -56,7 +101,27 @@ def tokenize(transcript: str) -> list[Sentence]:
     for idx, s in enumerate(sentences):
         s.sentence_index = idx
 
+    _assign_list_groups(sentences)
     return sentences
+
+
+def _assign_list_groups(sentences: list[Sentence]) -> None:
+    """Tie each contiguous run of list items to a shared group id (v1 A-1).
+
+    A run is broken by any non-list sentence (including a code block). v2 list
+    aggregation collapses/splits a run into the right count of atomic facts; v1
+    only records the grouping.
+    """
+    gid = 0
+    prev_was_list = False
+    for s in sentences:
+        if s.list_item:
+            if not prev_was_list:
+                gid += 1
+            s.list_group_id = gid
+            prev_was_list = True
+        else:
+            prev_was_list = False
 
 
 # ── region helpers ────────────────────────────────────────────────────────────
@@ -141,15 +206,32 @@ def _split_prose(
                 _flush_prose(accumulated, acc_start, offset, role, sentences)
                 accumulated = []
                 acc_start = offset
-            sentences.append(
-                Sentence(
-                    text=stripped,
-                    start_offset=offset,
-                    end_offset=line_end,
-                    role=role,
-                    is_code_block=False,
+            item_text = _LIST_MARKER.sub("", stripped, count=1).strip()
+            if item_text:
+                sentences.append(
+                    Sentence(
+                        text=item_text,
+                        start_offset=offset,
+                        end_offset=line_end,
+                        role=role,
+                        is_code_block=False,
+                        list_item=True,
+                    )
                 )
-            )
+            acc_start = line_end + 1
+            offset = line_end + 1
+            continue
+
+        # Label-value lines are self-contained facts — emit them standalone
+        # (like bullets) instead of accumulating them into the prose joiner,
+        # where consecutive unterminated labels would merge into one blob.
+        if is_label_value_line(stripped):
+            if accumulated:
+                _flush_prose(accumulated, acc_start, offset, role, sentences)
+                accumulated = []
+            # The line may still hold a trailing sentence after the value
+            # ("Max attempts: 2 (...). Do not retry ..."): split normally.
+            _flush_prose([stripped], offset, line_end, role, sentences)
             acc_start = line_end + 1
             offset = line_end + 1
             continue

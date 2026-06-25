@@ -24,6 +24,13 @@ def init_project(
     db_path = get_db_path(config, project_id)
     with get_connection(db_path) as conn:
         run_migrations(conn)
+        # Persist the resolved path so resource discovery can reverse-map
+        # project_id → path (cognikernel://projects MCP resource, CK-5).
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('project_path', ?)",
+            (str(Path(project_path).resolve()),),
+        )
+        conn.commit()
     _log.info("init_project.done", extra={"project_id": project_id, "db": str(db_path)})
     return project_id
 
@@ -45,23 +52,56 @@ def session_end(
     """
     from memlora.extraction.pipeline import SessionMetadata, extract_session
     from memlora.delta.merge import execute_merge
+    from memlora.storage.cursors import (
+        get_cursor, save_cursor,
+        slice_jsonl_for_extraction, slice_storage_delta,
+    )
     from memlora.storage.evidence import store_evidence
-    from memlora.storage.jobs import ack_stage, enqueue_extraction, fail_job
+    from memlora.storage.jobs import ack_stage, enqueue_extraction, fail_job, recover_stuck_running_jobs
 
     config = config or Config.load(project_path=project_path)
     project_id = hash_project_path(project_path)
     db_path = get_db_path(config, project_id)
 
+    # I2: delta extraction — process only new JSONL lines since last firing.
+    # I3: delta storage — store only new lines, chain-linked to previous chunk.
+    # Fail-open: cursor miss or compaction detected -> full extraction + full store.
+    raw_jsonl = evidence_content if isinstance(evidence_content, str) else transcript
     with get_connection(db_path) as conn:
         run_migrations(conn)
+        recover_stuck_running_jobs(conn)
+        cursor = get_cursor(conn, project_id, session_id)
+
+    extraction_slice, new_line_count, new_anchor = slice_jsonl_for_extraction(
+        raw_jsonl, cursor
+    )
+    storage_bytes, is_delta_store, has_new = slice_storage_delta(raw_jsonl, cursor)
+    if not has_new:
+        # Nothing new since the cursor — storing again would collide on
+        # content_sha256 and hand back a terminal job (ack would raise).
+        _log.info("session_end.no_new_content", extra={"session_id": session_id})
+        return {
+            "extracted": 0, "inserted": 0, "updated": 0,
+            "superseded": 0, "cascaded": 0, "archived": 0,
+            "evidence_id": None, "job_id": None, "delta_mode": False,
+        }
+    delta_mode = cursor is not None and extraction_slice != raw_jsonl
+
+    # Use the chain's previous evidence id when storing a delta chunk.
+    prev_ev_id = cursor.last_evidence_id if (is_delta_store and cursor) else None
+
+    with get_connection(db_path) as conn:
         evidence_id = store_evidence(
             conn,
             project_id=project_id,
             session_id=session_id,
             source_type=evidence_source_type,
-            content=evidence_content if evidence_content is not None else transcript,
+            content=storage_bytes if is_delta_store else (
+                evidence_content if evidence_content is not None else transcript
+            ),
             source_path=evidence_source_path,
-            metadata={"git_diff": bool(git_diff)},
+            metadata={"git_diff": bool(git_diff), "delta_mode": delta_mode, "chain_delta": is_delta_store},
+            prev_evidence_id=prev_ev_id,
         )
         job_id = enqueue_extraction(
             conn,
@@ -80,20 +120,30 @@ def session_end(
         ended_at=now,
     )
     try:
-        candidates = extract_session(transcript, session_meta, git_diff=git_diff)
+        # Extract from the delta slice (or full transcript on first/fallback run).
+        candidates = extract_session(
+            extraction_slice, session_meta, git_diff=git_diff, extractor=config.extractor
+        )
         for event in candidates:
             event.evidence_id = evidence_id
 
         with get_connection(db_path) as conn:
             ack_stage(conn, job_id, "PARSED", output_ref=f"events:{len(candidates)}")
             ack_stage(conn, job_id, "CLASSIFIED", output_ref=f"events:{len(candidates)}")
-            stats = execute_merge(conn, session_id, candidates)
+            stats = execute_merge(
+                conn, session_id, candidates,
+                embed_events=config.embedding_enabled,
+                use_cross_encoder=config.cross_encoder_supersession,
+            )
             ack_stage(
                 conn,
                 job_id,
                 "MERGED",
                 output_ref=json_like_stats(stats),
             )
+            # Advance cursor only after a successful merge — never on exception.
+            save_cursor(conn, project_id, session_id, new_line_count, new_anchor,
+                        last_evidence_id=evidence_id)
             _update_symbol_graph(conn, project_id, str(project_path), git_diff, session_id=session_id)
             ack_stage(conn, job_id, "PROJECTED", output_ref="projection:invalidated")
             ack_stage(conn, job_id, "COMPLETED", output_ref="session_end")
@@ -108,6 +158,7 @@ def session_end(
     stats["extracted"] = len(candidates)
     stats["evidence_id"] = evidence_id
     stats["job_id"] = job_id
+    stats["delta_mode"] = delta_mode
     _log.info("session_end.done", extra={"session_id": session_id, **stats})
     return stats
 
@@ -116,6 +167,380 @@ def json_like_stats(stats: dict[str, Any]) -> str:
     import json
 
     return json.dumps(stats, sort_keys=True, separators=(",", ":"))
+
+
+def session_capture(
+    project_path: str | Path,
+    session_id: str,
+    raw_jsonl: str,
+    config: Config | None = None,
+    git_diff: str | None = None,
+    evidence_source_type: str = "jsonl_transcript",
+    evidence_source_path: str = "",
+) -> dict[str, Any]:
+    """Store evidence + enqueue extraction job. Returns immediately without extracting.
+
+    This is the capture half of the I4 decoupled pipeline. It performs the fast,
+    I/O-only work: delta evidence storage (I3 chain) + job enqueue. The slow work
+    (extract_session + execute_merge + symbol graph) is handled by process_jobs(),
+    which runs as a detached worker subprocess so the Stop hook returns in <500ms.
+
+    When the transcript has no new lines since the cursor, returns
+    {"job_id": None, ...} and stores nothing — re-storing identical content
+    would collide on content_sha256 and return a possibly-terminal job.
+
+    A git diff, when provided, is persisted as its own raw_evidence row
+    (source_type='git_diff') and linked via the transcript evidence's metadata
+    so the worker can pass it to extraction + the symbol graph. (Gamma
+    post-mortem F5: the diff content used to be silently dropped.)
+
+    Returns {"job_id": int|None, "evidence_id": int|None, "delta_mode": bool}.
+    """
+    from memlora.storage.cursors import get_cursor, slice_storage_delta
+    from memlora.storage.evidence import store_evidence
+    from memlora.storage.jobs import enqueue_extraction, recover_stuck_running_jobs
+
+    config = config or Config.load(project_path=project_path)
+    project_id = hash_project_path(project_path)
+    db_path = get_db_path(config, project_id)
+
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        # 30-min grace: must exceed any plausible live merge so capture never
+        # dead-letters a job the worker is actively processing between acks.
+        recover_stuck_running_jobs(conn, stale_after_ms=30 * 60 * 1000)
+        cursor = get_cursor(conn, project_id, session_id)
+
+    storage_bytes, is_delta_store, has_new = slice_storage_delta(raw_jsonl, cursor)
+    if not has_new:
+        _log.info("session_capture.no_new_content", extra={"session_id": session_id})
+        return {"job_id": None, "evidence_id": None, "delta_mode": False}
+
+    prev_ev_id = cursor.last_evidence_id if (is_delta_store and cursor) else None
+
+    with get_connection(db_path) as conn:
+        metadata: dict[str, Any] = {"chain_delta": is_delta_store}
+        if git_diff:
+            git_ev_id = store_evidence(
+                conn,
+                project_id=project_id,
+                session_id=session_id,
+                source_type="git_diff",
+                content=git_diff,
+                metadata={"for_session": session_id},
+            )
+            metadata["git_diff_evidence_id"] = git_ev_id
+
+        evidence_id = store_evidence(
+            conn,
+            project_id=project_id,
+            session_id=session_id,
+            source_type=evidence_source_type,
+            content=storage_bytes if is_delta_store else raw_jsonl,
+            source_path=evidence_source_path,
+            metadata=metadata,
+            prev_evidence_id=prev_ev_id,
+        )
+        job_id = enqueue_extraction(
+            conn,
+            project_id=project_id,
+            session_id=session_id,
+            evidence_id=evidence_id,
+            job_category="extract.transcript",
+        )
+    _log.info("session_capture.done", extra={
+        "session_id": session_id, "job_id": job_id,
+        "evidence_id": evidence_id, "is_delta": is_delta_store,
+    })
+    return {"job_id": job_id, "evidence_id": evidence_id, "delta_mode": is_delta_store}
+
+
+def _worker_log(project_id: str, msg: str) -> None:
+    """Append a line to the worker log. Workers run detached with stdout/stderr
+    on DEVNULL — without this, every failure is invisible (gamma post-mortem F2)."""
+    try:
+        log_dir = Path.home() / ".memlora" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_dir / f"worker-{project_id}.log", "a", encoding="utf-8") as f:
+            f.write(f"{stamp} {msg}\n")
+    except Exception:
+        pass
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort liveness check for a pid. Unknown -> assume alive (conservative)."""
+    try:
+        if sys_platform_win32():
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+            )
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        else:
+            import os
+            os.kill(pid, 0)
+            return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True  # can't tell — don't steal a possibly-live worker's lock
+
+
+def sys_platform_win32() -> bool:
+    import sys as _sys
+    return _sys.platform == "win32"
+
+
+def _acquire_worker_lock(
+    project_id: str,
+    memlora_dir: Path | None = None,
+    stale_after_s: int = 15 * 60,
+) -> Path | None:
+    """Single-flight guard: one worker per project (gamma post-mortem F2).
+
+    Without this, N drains pile onto the same SQLite file and starve each
+    other. Returns the lock path on success, None if another live worker
+    holds it.
+
+    The lock lives under `memlora_dir` — the same root as the project DB — so it
+    honours MEMLORA_DIR / per-project config and works under a read-only home
+    (audit P2). A hardcoded ~/.memlora split-brained workers whose data dir was
+    relocated and broke entirely under a read-only home. Defaults to ~/.memlora
+    only when no dir is supplied (back-compat for direct callers/tests).
+
+    Takeover rules (I7c): the lock file stores the holder's pid. If that
+    process is dead — e.g. a hook-spawned worker killed by the Job Object at
+    hook exit — the lock is orphaned and taken over IMMEDIATELY (waiting the
+    15-min age-out would block every per-turn drain in the meantime). The
+    age-out remains as the fallback when pid liveness can't be determined.
+    """
+    import os
+    base = memlora_dir if memlora_dir is not None else (Path.home() / ".memlora")
+    lock_dir = base / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"worker-{project_id}.lock"
+    try:
+        with open(lock_path, "x", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+        return lock_path
+    except FileExistsError:
+        try:
+            holder_pid: int | None = None
+            try:
+                holder_pid = int(lock_path.read_text(encoding="utf-8").strip())
+            except Exception:
+                pass
+            orphaned = holder_pid is not None and not _pid_alive(holder_pid)
+            aged_out = (time.time() - lock_path.stat().st_mtime) > stale_after_s
+            if orphaned or aged_out:
+                lock_path.write_text(str(os.getpid()), encoding="utf-8")  # takeover
+                return lock_path
+        except Exception:
+            pass
+        return None
+
+
+def process_jobs(
+    project_path: str | Path,
+    config: Config | None = None,
+    max_jobs: int = 50,
+    time_budget_s: float | None = None,
+) -> dict[str, Any]:
+    """Claim and process all queued extraction jobs for a project.
+
+    This is the processing half of the I4 decoupled pipeline. Runs as a detached
+    subprocess spawned by `memlora capture`. Processes jobs in oldest-first order,
+    advances the ingest cursor after each successful merge, then exits.
+
+    Hardened after the gamma post-mortem:
+    - single-flight lock (one worker per project; extra spawns exit immediately)
+    - startup retried on a locked DB instead of crashing silently
+    - claim loop survives a race-lost claim (re-checks the queue, doesn't exit)
+    - only TIMEOUT dead-letters are auto-replayed (poison jobs stay dead)
+    - git diffs persisted by capture are loaded and passed through
+    - the cursor never moves backwards
+
+    Returns summary stats: {"processed": int, "failed": int, "replayed": int,
+    "skipped": bool} — skipped=True means another worker held the lock.
+    """
+    import json as _json
+    import os
+    from memlora.delta.merge import execute_merge
+    from memlora.extraction.pipeline import SessionMetadata, extract_session
+    from memlora.extraction.jsonl_converter import jsonl_to_transcript
+    from memlora.storage.cursors import get_cursor, save_cursor, slice_jsonl_for_extraction
+    from memlora.storage.evidence import load_evidence, load_full_transcript
+    from memlora.storage.jobs import (
+        ack_stage, claim_next_job, fail_job, list_jobs,
+        reclaim_stale_jobs, recover_orphaned_jobs, recover_stuck_running_jobs,
+        replay_dead_letter,
+    )
+
+    config = config or Config.load(project_path=project_path)
+    project_id = hash_project_path(project_path)
+    db_path = get_db_path(config, project_id)
+    claimant = f"worker-{os.getpid()}"
+    processed = failed = replayed = 0
+
+    lock_path = _acquire_worker_lock(project_id, memlora_dir=config.memlora_dir)
+    if lock_path is None:
+        _worker_log(project_id, f"{claimant} exit: another worker holds the lock")
+        return {"processed": 0, "failed": 0, "replayed": 0, "skipped": True}
+
+    try:
+        # Startup: a long-running merge elsewhere can hold the write lock briefly.
+        # Retry instead of crashing — a crashed worker leaves jobs queued forever.
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                with get_connection(db_path) as conn:
+                    run_migrations(conn)
+                    # Grace-free: claimant pid dead => job orphaned, requeue now.
+                    recover_orphaned_jobs(conn, _pid_alive)
+                    reclaim_stale_jobs(conn, stale_after_ms=10 * 60 * 1000)
+                    recover_stuck_running_jobs(conn, stale_after_ms=10 * 60 * 1000)
+                    # Auto-replay ONLY process-killed jobs (failure_class TIMEOUT).
+                    # POISON_INPUT / EXTRACTOR_BUG dead-letters need a human or a
+                    # code fix — resurrecting them forever masks real bugs.
+                    dead_jobs = list_jobs(conn, project_id, state="dead_lettered", limit=max_jobs)
+                    for dj in dead_jobs:
+                        if dj.failure_class != "TIMEOUT":
+                            continue
+                        try:
+                            replay_dead_letter(conn, dj.id)
+                            replayed += 1
+                        except Exception:
+                            pass
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                _worker_log(project_id, f"{claimant} startup attempt {attempt + 1} failed: {exc}")
+                time.sleep(2.0 * (attempt + 1))
+        if last_exc is not None:
+            _worker_log(project_id, f"{claimant} giving up after 3 startup attempts")
+            return {"processed": 0, "failed": 0, "replayed": replayed, "skipped": False}
+
+        _worker_log(project_id, f"{claimant} started (replayed {replayed} TIMEOUT dead-letters)")
+
+        started_at = time.monotonic()
+        budget = max_jobs
+        while budget > 0:
+            budget -= 1
+            if time_budget_s is not None and (time.monotonic() - started_at) >= time_budget_s:
+                _worker_log(project_id, f"{claimant} time budget {time_budget_s}s exhausted — exiting "
+                                        f"(remaining jobs stay queued for the next drain)")
+                break
+            try:
+                with get_connection(db_path) as conn:
+                    job = claim_next_job(conn, "extract.transcript", claimant)
+            except Exception as exc:
+                _worker_log(project_id, f"{claimant} claim failed: {exc}")
+                time.sleep(1.0)
+                continue
+            if job is None:
+                # Empty queue OR race-lost claim. Check which before exiting.
+                try:
+                    with get_connection(db_path) as conn:
+                        remaining = conn.execute(
+                            "SELECT COUNT(*) FROM extraction_jobs "
+                            "WHERE state IN ('queued','retryable_failure') "
+                            "AND job_category='extract.transcript'"
+                        ).fetchone()[0]
+                    if remaining == 0:
+                        break
+                    time.sleep(0.3)
+                    continue
+                except Exception:
+                    break
+
+            try:
+                with get_connection(db_path) as conn:
+                    full_bytes = load_full_transcript(conn, job.evidence_id)
+                    cursor = get_cursor(conn, project_id, job.session_id)
+                    evidence = load_evidence(conn, job.evidence_id)
+                    git_diff: str | None = None
+                    if evidence is not None:
+                        git_eid = (evidence.metadata or {}).get("git_diff_evidence_id")
+                        if git_eid:
+                            git_ev = load_evidence(conn, int(git_eid))
+                            if git_ev is not None:
+                                git_diff = git_ev.content.decode("utf-8", errors="replace")
+
+                raw = full_bytes.decode("utf-8", errors="replace")
+                extraction_slice, new_line_count, new_anchor = slice_jsonl_for_extraction(
+                    raw, cursor
+                )
+                if evidence is not None and evidence.source_type == "jsonl_transcript":
+                    transcript = jsonl_to_transcript(extraction_slice)
+                else:
+                    transcript = extraction_slice  # plain-text transcript path
+
+                now = int(time.time() * 1000)
+                session_meta = SessionMetadata(
+                    project_id=project_id,
+                    session_id=job.session_id,
+                    started_at=now,
+                    ended_at=now,
+                )
+                candidates = extract_session(
+                    transcript, session_meta, git_diff=git_diff, extractor=config.extractor
+                )
+                for event in candidates:
+                    event.evidence_id = job.evidence_id
+
+                with get_connection(db_path) as conn:
+                    ack_stage(conn, job.id, "PARSED", output_ref=f"events:{len(candidates)}")
+                    ack_stage(conn, job.id, "CLASSIFIED", output_ref=f"events:{len(candidates)}")
+                    stats = execute_merge(
+                        conn, job.session_id, candidates,
+                        embed_events=config.embedding_enabled,
+                        use_cross_encoder=config.cross_encoder_supersession,
+                    )
+                    ack_stage(conn, job.id, "MERGED", output_ref=json_like_stats(stats))
+                    # Monotonic guard: a retried old job must never rewind the
+                    # cursor below what a newer job already committed (F7).
+                    latest = get_cursor(conn, project_id, job.session_id)
+                    if latest is None or new_line_count >= latest.last_line_count:
+                        save_cursor(conn, project_id, job.session_id, new_line_count,
+                                    new_anchor, last_evidence_id=job.evidence_id)
+                    _update_symbol_graph(conn, project_id, str(project_path),
+                                         git_diff=git_diff, session_id=job.session_id)
+                    ack_stage(conn, job.id, "PROJECTED", output_ref="projection:invalidated")
+                    ack_stage(conn, job.id, "COMPLETED", output_ref="process_jobs")
+                processed += 1
+                _worker_log(project_id, f"{claimant} job={job.id} done: {json_like_stats(stats)}")
+
+            except Exception as exc:
+                with get_connection(db_path) as conn:
+                    try:
+                        fail_job(conn, job.id, "EXTRACTOR_BUG", str(exc))
+                    except Exception:
+                        pass
+                failed += 1
+                _worker_log(project_id, f"{claimant} job={job.id} FAILED: {exc}")
+
+            # Heartbeat: refresh lock mtime so a long queue isn't stolen mid-run.
+            try:
+                os.utime(lock_path)
+            except Exception:
+                pass
+
+    finally:
+        try:
+            lock_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    summary = {"processed": processed, "failed": failed, "replayed": replayed, "skipped": False}
+    _worker_log(project_id, f"{claimant} exit: {_json.dumps(summary)}")
+    _log.info("process_jobs.done", extra=summary)
+    return summary
 
 
 def replay_job(
@@ -131,7 +556,7 @@ def replay_job(
     enqueue_extraction) so it advances queued -> completed in place, or
     back to dead_lettered if the underlying problem persists.
     """
-    from memlora.storage.evidence import load_evidence
+    from memlora.storage.evidence import load_evidence, load_full_transcript
     from memlora.storage.jobs import get_job, replay_dead_letter
 
     config = config or Config.load(project_path=project_path)
@@ -152,9 +577,13 @@ def replay_job(
                 f"evidence_id={job.evidence_id} referenced by job {job_id} "
                 f"is missing from raw_evidence — cannot replay"
             )
+        # I3: reconstruct the full transcript by following the evidence chain.
+        # A delta-stored chunk must be concatenated with its ancestors to
+        # produce the complete JSONL that session_end expects.
+        full_bytes = load_full_transcript(conn, job.evidence_id)
         replay_dead_letter(conn, job_id)
 
-    raw = evidence.content.decode("utf-8")
+    raw = full_bytes.decode("utf-8", errors="replace")
     transcript = raw
     if evidence.source_type == "jsonl_transcript":
         from memlora.extraction.jsonl_converter import jsonl_to_transcript
@@ -187,13 +616,20 @@ def get_projection(
 def render_state(
     project_path: str | Path,
     config: Config | None = None,
+    session_id: str | None = None,
 ) -> str:
-    """Return the rendered injection block — what would be prepended to the LLM system prompt."""
-    from memlora.storage.events import get_events_for_projection
+    """Return the rendered injection block — what would be prepended to the LLM system prompt.
+
+    When `session_id` is provided (the SessionStart hook passes it), the events
+    that actually rendered are recorded in the render ledger (channel 'block')
+    so CK-1 can skip what this session already has in context. Fail-open: a
+    ledger error never affects the returned block.
+    """
     from memlora.storage import symbol_files as sf
+    from memlora.storage.projections import load_or_rebuild, projection_to_events
     from memlora.compression.greedy import greedy_fill
     from memlora.injection.ordering import make_injection_context
-    from memlora.injection.template import render_with_budget_enforcement
+    from memlora.injection.template import render_with_budget_enforcement_ex
     from memlora.symbols.store import load_symbol_nodes, load_symbol_edges
     from memlora.symbols.projection import compress_to_skeleton
 
@@ -203,7 +639,10 @@ def render_state(
 
     with get_connection(db_path) as conn:
         run_migrations(conn)
-        events = get_events_for_projection(conn, project_id, after_id=0)
+        # Source events from the projection (single partition + component-collapse
+        # site, behind the high-water cache) rather than re-querying + re-routing
+        # all events on every render.
+        events = projection_to_events(load_or_rebuild(conn, project_id))
         session_count: int = conn.execute(
             """
             SELECT COUNT(DISTINCT session_id)
@@ -243,13 +682,27 @@ def render_state(
     ctx.skeleton = skeleton
     ctx.ckl_mode = config.ckl_mode
     ctx.ckl_v2 = config.ckl_v2
-    ctx.section_budgets = config.section_budgets
+    # J7.2: section caps track the configured budget proportionally so a
+    # larger block grows every section, not just the greedy tail.
+    ctx.section_budgets = config.section_budgets.scaled(config.token_budget)
     # Phase B trust signals — only carried through to the renderer.
     ctx.hook_policy = config.hook_policy
     ctx.retry_window_seconds = config.deny_retry_window_seconds
     ctx.skeleton_coverage = coverage
     ctx.skeleton_refresh = refresh
-    return render_with_budget_enforcement(ctx)
+    block, survivors = render_with_budget_enforcement_ex(ctx)
+    if session_id:
+        try:
+            from memlora.storage.render_ledger import record_rendered
+            with get_connection(db_path) as conn:
+                record_rendered(
+                    conn, project_id, session_id,
+                    (e.id for e in survivors if e.id is not None),
+                    "block",
+                )
+        except Exception:
+            pass  # ledger is observability, never load-bearing
+    return block
 
 
 def rebuild_from_raw(
@@ -372,10 +825,16 @@ def rebuild_from_raw(
             )
 
             try:
-                candidates = extract_session(transcript, session_meta)
+                candidates = extract_session(
+                    transcript, session_meta, extractor=config.extractor
+                )
                 for event in candidates:
                     event.evidence_id = evidence_id
-                stats = execute_merge(sidecar_conn, session_id, candidates)
+                stats = execute_merge(
+                    sidecar_conn, session_id, candidates,
+                    embed_events=config.embedding_enabled,
+                    use_cross_encoder=config.cross_encoder_supersession,
+                )
                 _update_symbol_graph(sidecar_conn, project_id, str(project_path), git_diff=None, session_id=session_id)
                 total_extracted += len(candidates)
                 total_inserted += stats.get("inserted", 0)

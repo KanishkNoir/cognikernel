@@ -67,3 +67,14 @@ class TestEstimateTokens:
             payload={"path": "src/auth/middleware.py", "description": "Modified"},
         )
         assert estimate_tokens(e) >= 1
+
+
+class TestSingleCounter:
+    """Selection and enforcement must use the one canonical counter."""
+
+    def test_count_tokens_matches_renderer_counter(self) -> None:
+        from memlora.compression.token_count import count_tokens
+        from memlora.injection.template import count_tokens_accurate
+        for s in ("", "Use SQLite for local storage.",
+                  "### Hard constraints\n- never log secrets — security"):
+            assert count_tokens(s) == count_tokens_accurate(s)

@@ -145,3 +145,34 @@ def smart_truncate(text: str, max_chars: int, *, ellipsis: str = _ELLIPSIS) -> s
     # Hard cut — no whitespace in the budget window. Append ellipsis anyway so
     # the reader knows it's incomplete.
     return text[:budget_for_text] + ellipsis
+
+
+def keep_whole_fact(text: str, hard_max: int) -> str:
+    """Description policy for a memory store (v1 A-2): do NOT truncate facts.
+
+    Truncation is always lossy, and for a stored fact the discarded tail is
+    usually the operative value — a number, env var, or model id ("…gate at 120 s
+    max", "…TASKFLOW_JWT_SECRET", "…claude-sonnet-4-6"). The old 120-char
+    word-boundary ellipsis cut severed exactly that tail (12 mid-value
+    truncations in one Relay session). So we keep the fact WHOLE and never append
+    an ellipsis. There is no severing.
+
+    `hard_max` is only a guard against a mis-segmented blob (a code dump that
+    slipped through as one "sentence"). Even then we cut ONLY at a complete
+    sentence boundary — never mid-sentence — and if the text is a single
+    enormous sentence we keep it whole rather than risk severing a value. A blob
+    that large is a segmentation defect to fix upstream, not to paper over here.
+    """
+    if not text:
+        return ""
+    if len(text) <= hard_max:
+        return text
+
+    window = text[:hard_max]
+    terminator_pos = max(window.rfind(t) for t in _TERMINATORS)
+    if terminator_pos > 0:
+        # Trim trailing complete sentences only; no ellipsis, no mid-sentence cut.
+        return text[: terminator_pos + 1]
+
+    # One giant sentence: keep it whole rather than sever its tail.
+    return text

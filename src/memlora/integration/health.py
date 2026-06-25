@@ -1,0 +1,117 @@
+"""Subsystem health checks — the diagnostic spine for fail-open (audit P3 / #66).
+
+Fail-open keeps a session alive when a subsystem degrades, but without a health
+surface a degraded subsystem looks identical to a healthy one — which is how
+silent degradation (a missing FTS5 build, an embedding model that never loaded, a
+queue full of dead-letters) read as "working" for a long time. These checks make
+degradation legible: ``memlora doctor`` prints them and ``memlora doctor
+--strict`` exits nonzero if any subsystem is unhealthy, so a pre-flight or CI can
+catch what fail-open would otherwise hide.
+
+Each check is itself fail-open (a probe that raises is reported as unhealthy, it
+never crashes doctor).
+"""
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+
+from memlora.config import EXPECTED_SCHEMA_VERSION, Config
+
+
+@dataclass
+class HealthCheck:
+    name: str
+    ok: bool
+    detail: str
+
+
+def check_schema_version(conn: sqlite3.Connection) -> HealthCheck:
+    try:
+        v = int(conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()[0])
+    except Exception as exc:
+        return HealthCheck("schema", False, f"schema_version unreadable ({exc})")
+    if v == EXPECTED_SCHEMA_VERSION:
+        return HealthCheck("schema", True, f"v{v} (current)")
+    return HealthCheck(
+        "schema", False,
+        f"v{v} != expected v{EXPECTED_SCHEMA_VERSION} — migrations not applied",
+    )
+
+
+def check_fts(conn: sqlite3.Connection) -> HealthCheck:
+    try:
+        from memlora.storage.fts import fts_available
+        avail = fts_available(conn)
+    except Exception as exc:
+        return HealthCheck("fts5", False, f"probe failed ({exc})")
+    if avail:
+        return HealthCheck("fts5", True, "available (lexical retrieval active)")
+    return HealthCheck(
+        "fts5", False,
+        "unavailable in this SQLite build — lexical retrieval axis is disabled",
+    )
+
+
+def check_embedding(config: Config) -> HealthCheck:
+    if not config.embedding_enabled:
+        return HealthCheck("embedding", True, "disabled by config (lexical-only)")
+    try:
+        from memlora.embedding import model
+        if model.is_ready() or model.is_available():
+            return HealthCheck("embedding", True, "model loaded")
+        return HealthCheck(
+            "embedding", False,
+            "model failed to load — semantic recall falls back to lexical",
+        )
+    except Exception as exc:
+        return HealthCheck(
+            "embedding", False,
+            f"model error ({exc}) — semantic recall falls back to lexical",
+        )
+
+
+def check_symbol_extraction() -> HealthCheck:
+    try:
+        from memlora.symbols.extractor import typescript_support_status
+        ts_ok, ts_detail = typescript_support_status()
+    except Exception as exc:
+        return HealthCheck("symbols", False, f"probe failed ({exc})")
+    if ts_ok:
+        return HealthCheck("symbols", True, "python ast + typescript OK")
+    return HealthCheck(
+        "symbols", False,
+        f"python ast OK; typescript unavailable — {ts_detail} "
+        "(TS/JS files yield no symbol graph)",
+    )
+
+
+def check_worker_queue(conn: sqlite3.Connection, project_id: str) -> HealthCheck:
+    try:
+        from memlora.storage.jobs import list_jobs
+        dead = len(list_jobs(conn, project_id, state="dead_lettered", limit=1000))
+        retry = len(list_jobs(conn, project_id, state="retryable_failure", limit=1000))
+    except Exception as exc:
+        return HealthCheck("worker_queue", False, f"probe failed ({exc})")
+    if dead == 0:
+        return HealthCheck("worker_queue", True, f"no dead-letters ({retry} retryable)")
+    return HealthCheck(
+        "worker_queue", False,
+        f"{dead} dead-lettered job(s) — extraction silently dropped; "
+        "inspect failure_class and replay",
+    )
+
+
+def run_health_checks(
+    conn: sqlite3.Connection, project_id: str, config: Config
+) -> list[HealthCheck]:
+    """Run every subsystem probe. Order: foundational first, optional last."""
+    return [
+        check_schema_version(conn),
+        check_fts(conn),
+        check_embedding(config),
+        check_symbol_extraction(),
+        check_worker_queue(conn, project_id),
+    ]

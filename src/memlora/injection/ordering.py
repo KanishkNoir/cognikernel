@@ -12,18 +12,18 @@ from memlora.extraction.authority import (
     USER_STATED,
     normalize_subject,
 )
+from memlora.storage.sections import (
+    COMPONENT_TYPES as _COMPONENT_TYPES,
+    DECISION_TYPES as _DECISION_TYPES,
+    GRAVEYARD_TYPES as _GRAVEYARD_TYPES,
+    HARD_TYPES as _HARD_TYPES,
+    THREAD_TYPES as _THREAD_TYPES,
+)
 from memlora.utils.paths import is_bare_basename
 
 if TYPE_CHECKING:
     from memlora.storage.events import Event
     from memlora.injection.template import InjectionContext
-
-_HARD_TYPES      = frozenset({"CONSTRAINT_HARD"})
-_GRAVEYARD_TYPES = frozenset({"APPROACH_ABANDONED_DO_NOT_RETRY"})
-_COMPONENT_TYPES = frozenset({"COMPONENT_STATUS"})
-_DECISION_TYPES  = frozenset({"DECISION", "CONSTRAINT_SOFT", "APPROACH_ABANDONED"})
-_THREAD_TYPES    = frozenset({"THREAD_OPEN"})
-# THREAD_CLOSE: intentionally excluded — low base weight, historical noise
 
 # Authority priority used when ranking THREAD_OPEN events for the singular
 # "Active thread" slot. Lower wins. The renderer takes threads[0], so a stable

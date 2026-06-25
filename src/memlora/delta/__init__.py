@@ -3,7 +3,9 @@
 Public API:
   execute_merge         — full six-step merge in one transaction
   merge_event           — insert-or-update a single event (with commit)
-  detect_supersession   — find existing events superseded by a new one
+  find_superseded       — gated supersession finder (temporal + authority +
+                          provenance, with optional semantic axis); the merge path
+  detect_supersession   — ungated lexical-only finder (legacy primitive)
   apply_supersession    — mark events as superseded_by in the DB
   events_overlap        — OR of Jaccard + Levenshtein overlap detection
   jaccard_similarity    — token-set overlap in [0, 1]
@@ -19,11 +21,16 @@ from memlora.delta.merge import execute_merge, merge_event
 from memlora.delta.supersede import (
     JACCARD_THRESHOLD,
     LEVENSHTEIN_THRESHOLD,
+    SUBJECT_MATCH_MIN_JACCARD,
     apply_supersession,
+    derive_subject,
     detect_supersession,
     events_overlap,
+    find_superseded,
     jaccard_similarity,
     levenshtein_normalized,
+    subject_supersedes,
+    supersedes,
 )
 
 __all__ = [
@@ -31,13 +38,18 @@ __all__ = [
     "DECAY_FACTOR",
     "JACCARD_THRESHOLD",
     "LEVENSHTEIN_THRESHOLD",
+    "SUBJECT_MATCH_MIN_JACCARD",
     "apply_decay_pass",
     "apply_supersession",
     "cascade_component_status",
+    "derive_subject",
     "detect_supersession",
     "events_overlap",
     "execute_merge",
+    "find_superseded",
     "jaccard_similarity",
     "levenshtein_normalized",
     "merge_event",
+    "subject_supersedes",
+    "supersedes",
 ]

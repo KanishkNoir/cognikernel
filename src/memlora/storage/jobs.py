@@ -104,6 +104,12 @@ def claim_next_job(
     claimant: str,
     now_ms: int | None = None,
 ) -> ExtractionJob | None:
+    """Claim the oldest queued job for `job_category`. Returns None if none available.
+
+    Uses optimistic concurrency: the UPDATE includes `AND state IN (...)` so that
+    if two workers race on the same row, only the first commit succeeds (rowcount=1)
+    and the second sees rowcount=0 and retries. Safe under concurrent SQLite writers.
+    """
     now = now_ms if now_ms is not None else _now_ms()
     with conn:
         row = conn.execute(
@@ -118,14 +124,17 @@ def claim_next_job(
         ).fetchone()
         if row is None:
             return None
-        conn.execute(
+        result = conn.execute(
             """
             UPDATE extraction_jobs
             SET state='claimed', claimed_by=?, claimed_at=?, updated_at=?
-            WHERE id=?
+            WHERE id=? AND state IN ('queued', 'retryable_failure')
             """,
             (claimant, now, now, row["id"]),
         )
+        if result.rowcount == 0:
+            # Another worker claimed it between our SELECT and UPDATE — skip.
+            return None
     return get_job(conn, row["id"])
 
 
@@ -222,6 +231,87 @@ def reclaim_stale_jobs(
         WHERE state='claimed'
           AND claimed_at IS NOT NULL
           AND claimed_at < ?
+        """,
+        (now, cutoff),
+    )
+    conn.commit()
+    return result.rowcount
+
+
+def recover_orphaned_jobs(
+    conn: sqlite3.Connection,
+    pid_alive,
+) -> int:
+    """Immediately recover claimed/running jobs whose claimant process is dead.
+
+    Hook-spawned drains are killed at the hook ceiling (subprocess timeout or
+    Claude Code's hook timeout), leaving their job claimed/running with a dead
+    claimant pid. Time-graced recovery (recover_stuck_running_jobs, 10 min)
+    makes the queue invisible to the MCP drainer for that whole window — the
+    GAMMA_CK_TEST run showed 30+ minute per-job lag from exactly this. The
+    claimant string is "worker-{pid}", so pid liveness gives definitive,
+    grace-free orphan detection. Jobs with no parseable claimant fall back to
+    the time-graced paths.
+
+    `pid_alive` is injected (callable pid->bool) to keep this module free of
+    platform-specific process probing. Returns number of jobs recovered.
+    """
+    recovered = 0
+    rows = conn.execute(
+        "SELECT id, state, claimed_by FROM extraction_jobs "
+        "WHERE state IN ('claimed','running') AND claimed_by IS NOT NULL"
+    ).fetchall()
+    now = _now_ms()
+    for row in rows:
+        claimant = row["claimed_by"] or ""
+        if not claimant.startswith("worker-"):
+            continue
+        try:
+            pid = int(claimant.split("-", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        if pid_alive(pid):
+            continue
+        conn.execute(
+            """
+            UPDATE extraction_jobs
+            SET state='queued', claimed_by=NULL, claimed_at=NULL, updated_at=?
+            WHERE id=? AND state IN ('claimed','running')
+            """,
+            (now, row["id"]),
+        )
+        recovered += 1
+    if recovered:
+        conn.commit()
+    return recovered
+
+
+def recover_stuck_running_jobs(
+    conn: sqlite3.Connection,
+    stale_after_ms: int = 5 * 60 * 1000,
+    now_ms: int | None = None,
+) -> int:
+    """Transition stuck `running` jobs to `dead_lettered` so replay can recover them.
+
+    A `running` job that hasn't been updated in `stale_after_ms` milliseconds was
+    almost certainly killed mid-execution (Stop hook subprocess torn down when the
+    session ended). Its raw_evidence is intact; it just needs a merge replay.
+    Moving it to `dead_lettered` makes it eligible for `replay_dead_letter`.
+
+    Default grace period: 5 minutes. Call at session_end / SessionStart to surface
+    stuck jobs from prior runs before the next extraction starts.
+    """
+    now = now_ms if now_ms is not None else _now_ms()
+    cutoff = now - stale_after_ms
+    result = conn.execute(
+        """
+        UPDATE extraction_jobs
+        SET state='dead_lettered',
+            failure_class='TIMEOUT',
+            last_error='subprocess killed mid-execution; recovered by recover_stuck_running_jobs',
+            updated_at=?
+        WHERE state='running'
+          AND updated_at < ?
         """,
         (now, cutoff),
     )

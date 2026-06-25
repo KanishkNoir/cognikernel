@@ -6,11 +6,15 @@ Language-agnostic interface; Python via stdlib ast, TypeScript/JS via tree-sitte
 from __future__ import annotations
 
 import ast
+import logging
 import posixpath
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+_log = logging.getLogger("memlora.symbols")
+_TS_DEP_WARNED = False  # one-shot: don't spam the log on every TS file
 
 
 # ── data model ────────────────────────────────────────────────────────────────
@@ -142,13 +146,29 @@ class TypeScriptExtractor:
     ) -> tuple[list[SymbolNode], list[SymbolEdge]]:
         if not source.strip():
             return [], []
+        # Fail-open in both branches (a symbol-graph gap must never break ingest),
+        # but distinguish the causes so a silent empty graph is diagnosable
+        # (audit P3): a missing parser dependency is a one-shot config warning;
+        # a parse failure on a real file is a per-file warning.
         try:
             from tree_sitter_language_pack import get_parser  # type: ignore[import]
+        except ImportError as exc:
+            global _TS_DEP_WARNED
+            if not _TS_DEP_WARNED:
+                _log.warning(
+                    "symbols.typescript_unavailable: tree-sitter-language-pack not "
+                    "importable (%s) — TS/JS files yield no symbol graph. Install the "
+                    "dependency; run 'memlora doctor' to confirm.", exc,
+                )
+                _TS_DEP_WARNED = True
+            return [], []
+        try:
             parser = get_parser(self._language)
             source_bytes = source.encode("utf-8")
             tree = parser.parse_bytes(source_bytes)
             root = tree.root_node()
-        except Exception:
+        except Exception as exc:
+            _log.warning("symbols.typescript_parse_failed: %s (%s)", path, exc)
             return [], []
 
         nodes: list[SymbolNode] = []
@@ -367,6 +387,25 @@ def _ts_resolve_import(specifier: str, from_path: str, known: frozenset[str]) ->
 
 
 # ── extractor registry + dispatch ─────────────────────────────────────────────
+
+def typescript_support_status() -> tuple[bool, str]:
+    """Probe whether TS/JS symbol extraction is actually available (audit P3).
+
+    The extractor fails open to an empty graph, so a missing parser is otherwise
+    invisible. `memlora doctor` calls this to surface the cause. Returns
+    (available, human-readable detail).
+    """
+    try:
+        from tree_sitter_language_pack import get_parser  # type: ignore[import]
+    except ImportError as exc:
+        return False, f"tree-sitter-language-pack not importable ({exc})"
+    try:
+        parser = get_parser("typescript")
+        parser.parse_bytes(b"const x = 1;").root_node()
+        return True, "tree-sitter typescript parser OK"
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        return False, f"parser init/parse failed ({exc})"
+
 
 EXTRACTORS: dict[str, SymbolExtractor] = {
     ".py": PythonASTExtractor(),

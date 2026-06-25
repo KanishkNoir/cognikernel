@@ -6,12 +6,12 @@ graveyard sections with a prefix-tagged single-line form.
 V1 — mechanical prose truncation (always available):
     CSTR: we will never issue SQL DELETE  # recoverability
     DEC:  pagination uses page+page_size — max 100 server-side
-    DEAD: celery — broker dependency  # simplicity goal
+    DEAD: polling loop — latency  # one dead end per line
 
 V2 — triple-syntax when payload["triple"] is present (set at extraction time):
     CSTR: ¬ SQL DELETE  # recoverability
     DEC:  pagination → page+page_size  # max 100
-    DEAD: celery ∅  # broker dep
+    DEAD: polling loop ∅  # latency
 
 V2 triples are written into event.payload["triple"] by
 memlora.extraction.triple.augment_with_triple() at session-end.

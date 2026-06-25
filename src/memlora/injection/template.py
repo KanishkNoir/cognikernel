@@ -57,7 +57,10 @@ class InjectionContext:
     pending_confirmations: list[Event] = field(default_factory=list)
 
 
-def render_injection(ctx: InjectionContext) -> str:
+def render_injection(
+    ctx: InjectionContext,
+    survivors_out: dict | None = None,
+) -> str:
     """Render the full block. Sections with no items are omitted.
 
     Section order:
@@ -70,6 +73,11 @@ def render_injection(ctx: InjectionContext) -> str:
       7. Key decisions
       8. Codebase skeleton      ← recency zone; AST-derived, Symbol Graph
       9. Summary                ← recency anchor
+
+    When `survivors_out` is provided, its 'events' key is set to the events
+    that actually rendered AFTER section-budget enforcement — the render
+    ledger's source of truth (J4): ctx buckets alone over-report because
+    _enforce_section_budget drops events locally without mutating ctx.
     """
     from memlora.symbols.render import render_skeleton_section
     has_skeleton = bool(ctx.skeleton)
@@ -103,6 +111,12 @@ def render_injection(ctx: InjectionContext) -> str:
             ),
             sb.decisions,
         )
+
+    if survivors_out is not None:
+        survivors_out["events"] = [
+            *hard, *ctx.active_threads, *ctx.pending_confirmations,
+            *grave, *comps, *decs,
+        ]
 
     sections = [
         _render_header(ctx),
@@ -222,10 +236,33 @@ def _render_hard_constraints(
         desc = c.payload.get("description", "")
         rationale = c.payload.get("rationale", "")
         if rationale:
-            lines.append(f"- {desc} — {rationale}")
+            lines.append(f"- {desc} — {rationale}{_consolidation_suffix(c)}")
         else:
-            lines.append(f"- {desc}")
+            lines.append(f"- {desc}{_consolidation_suffix(c)}")
+        lines.extend(_lineage_lines(c))
     return "\n".join(lines)
+
+
+def _consolidation_suffix(event: Event) -> str:
+    """'(×N)' marker for a golden record consolidated from N same-key events."""
+    n = event.payload.get("provenance_count", 0)
+    return f" (×{n})" if isinstance(n, int) and n > 1 else ""
+
+
+def _lineage_lines(event: Event) -> list[str]:
+    """Demoted DISTINCT values of a consolidated topic — history, not currency.
+
+    Rendered as indented sub-lines so the canonical value reads as THE value.
+    Budget enforcement drops whole events, so lineage rides with its canonical.
+    """
+    lineage = event.payload.get("lineage")
+    if not isinstance(lineage, list):
+        return []
+    return [
+        f"  — previously: {li.get('description', '')}"
+        for li in lineage
+        if isinstance(li, dict) and li.get("description")
+    ]
 
 
 def _render_graveyard(
@@ -284,9 +321,10 @@ def _render_decisions(
         rationale = d.payload.get("rationale", "")
         sess = d.session_id
         if rationale:
-            lines.append(f"{i}. {desc} — {rationale} (session {sess})")
+            lines.append(f"{i}. {desc} — {rationale}{_consolidation_suffix(d)} (session {sess})")
         else:
-            lines.append(f"{i}. {desc} (session {sess})")
+            lines.append(f"{i}. {desc}{_consolidation_suffix(d)} (session {sess})")
+        lines.extend(_lineage_lines(d))
     return "\n".join(lines)
 
 
@@ -375,13 +413,14 @@ def generate_summary(ctx: InjectionContext) -> str:
 # ── token counting ────────────────────────────────────────────────────────────
 
 def count_tokens_accurate(text: str) -> int:
-    """Token count via tiktoken (cl100k_base); falls back to len/4 if unavailable."""
-    try:
-        import tiktoken
-        encoder = tiktoken.get_encoding("cl100k_base")
-        return len(encoder.encode(text))
-    except Exception:
-        return max(1, len(text) // 4)
+    """Token count via the single canonical counter (tiktoken cl100k_base).
+
+    Delegates to `compression.token_count.count_tokens` so the renderer and
+    `greedy_fill` share one counter (and one cached encoder) rather than two
+    independent implementations.
+    """
+    from memlora.compression.token_count import count_tokens
+    return count_tokens(text)
 
 
 # ── budget enforcement ────────────────────────────────────────────────────────
@@ -394,17 +433,27 @@ def render_with_budget_enforcement(ctx: InjectionContext) -> str:
       2. Stable components
       3. Skeleton entries — pop lowest symbol-count file
     """
+    return render_with_budget_enforcement_ex(ctx)[0]
+
+
+def render_with_budget_enforcement_ex(
+    ctx: InjectionContext,
+) -> tuple[str, list[Event]]:
+    """Like render_with_budget_enforcement, but also returns the events that
+    actually survived BOTH section-budget enforcement and the global backstop —
+    the verbatim-exposed set the render ledger records (J4)."""
     ctx = copy.copy(ctx)
     ctx.decisions = list(ctx.decisions)
     ctx.components = list(ctx.components)
     ctx.active_threads = list(ctx.active_threads)  # protected — never dropped
     ctx.skeleton = list(ctx.skeleton)
 
-    block = render_injection(ctx)
+    out: dict = {}
+    block = render_injection(ctx, survivors_out=out)
     actual = count_tokens_accurate(block)
 
     if actual <= ctx.token_budget:
-        return block
+        return block, out.get("events", [])
 
     # Global backstop activated — section budgets (if set) were insufficient.
     if ctx.section_budgets is not None:
@@ -415,7 +464,7 @@ def render_with_budget_enforcement(ctx: InjectionContext) -> str:
 
     while actual > ctx.token_budget and ctx.decisions:
         ctx.decisions.pop()
-        block = render_injection(ctx)
+        block = render_injection(ctx, survivors_out=out)
         actual = count_tokens_accurate(block)
 
     while actual > ctx.token_budget and ctx.components:
@@ -427,7 +476,7 @@ def render_with_budget_enforcement(ctx: InjectionContext) -> str:
         if stable_idx is None:
             break
         ctx.components.pop(stable_idx)
-        block = render_injection(ctx)
+        block = render_injection(ctx, survivors_out=out)
         actual = count_tokens_accurate(block)
 
     while actual > ctx.token_budget and ctx.skeleton:
@@ -436,7 +485,7 @@ def render_with_budget_enforcement(ctx: InjectionContext) -> str:
             key=lambda i: len(ctx.skeleton[i].classes) + len(ctx.skeleton[i].functions),
         )
         ctx.skeleton.pop(min_idx)
-        block = render_injection(ctx)
+        block = render_injection(ctx, survivors_out=out)
         actual = count_tokens_accurate(block)
 
-    return block
+    return block, out.get("events", [])

@@ -3,20 +3,55 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from memlora.config import Config
-from memlora.integration.session import (
-    get_projection,
-    init_project,
-    rebuild_from_raw,
-    render_state,
-    session_end,
-)
+
+# `memlora.integration.session` (and its extraction / symbol / tree-sitter stack)
+# is imported lazily inside the handlers that need it, NOT at module top — so the
+# `python -m memlora hook-*` hot path (hook-pretool fires on every Read) never pays
+# for the heavy stack it doesn't use. See main()'s hook fast-path dispatch (CK-6a).
+
+
+def _ensure_utf8_output() -> None:
+    """Make CLI/hook output encoding-safe on non-UTF-8 consoles (e.g. Windows
+    cp1252). The rendered block uses non-ASCII (the skeleton's '→'), which raises
+    UnicodeEncodeError when printed to a cp1252 stdout. Best-effort: reconfigure
+    stdout/stderr to UTF-8 with replacement; leave streams that can't reconfigure.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+# Hook subcommand → integration.hooks entrypoint. Dispatched before argparse and
+# before any heavy import so the per-Read hook stays light (CK-6a).
+_HOOK_ENTRYPOINTS = {
+    "hook-session-start": "session_start_main",
+    "hook-stop": "stop_main",
+    "hook-pretool": "pretool_main",
+    "hook-posttool": "posttool_main",
+    "hook-posttool-read": "posttool_read_main",
+    # CK-1: UserPromptSubmit query-time injection (flag: query_time_injection)
+    "hook-user-prompt": "user_prompt_submit_main",
+    # CK-4: SubagentStop transcript extraction (flag: capture_subagents)
+    "hook-subagent-stop": "subagent_stop_main",
+    # CK-3a: PostToolUse:Grep cache storage (gate: grep_cache_enabled)
+    "hook-posttool-grep": "posttool_grep_main",
+}
 
 
 def main() -> None:
+    _ensure_utf8_output()
+    argv = sys.argv[1:]
+    if argv and argv[0] in _HOOK_ENTRYPOINTS:
+        from memlora.integration import hooks
+        getattr(hooks, _HOOK_ENTRYPOINTS[argv[0]])()
+        return
     parser = argparse.ArgumentParser(
         prog="memlora",
         description="MemLoRA Edge — structured session memory for AI coding assistants",
@@ -26,6 +61,11 @@ def main() -> None:
     # ── init ──────────────────────────────────────────────────────────────────
     p_init = sub.add_parser("init", help="Initialise the DB for a project")
     p_init.add_argument("project_path", help="Path to the project root")
+    p_init.add_argument(
+        "--no-warm",
+        action="store_true",
+        help="Skip the one-time embedding-model download (recall stays lexical until warmed)",
+    )
 
     # ── extract ───────────────────────────────────────────────────────────────
     p_extract = sub.add_parser(
@@ -61,6 +101,35 @@ def main() -> None:
         help="Optional path to a git-diff file to augment extraction",
     )
 
+    # ── capture ───────────────────────────────────────────────────────────────
+    p_capture = sub.add_parser(
+        "capture",
+        help="Store evidence + enqueue job, then spawn background worker (I4 fast path)",
+    )
+    p_capture.add_argument("project_path", help="Path to the project root")
+    p_capture.add_argument("transcript_file", help="Path to the JSONL session file")
+    p_capture.add_argument("--auto-session-id", action="store_true",
+                           help="Derive session ID from the JSONL filename stem")
+    p_capture.add_argument("--session-id", default=None, metavar="ID")
+    p_capture.add_argument("--jsonl", action="store_true",
+                           help="Transcript is a Claude Code JSONL file (default: yes for capture)")
+    p_capture.add_argument("--git-diff", metavar="FILE",
+                           help="Optional path to a git-diff file")
+    p_capture.add_argument("--no-spawn", action="store_true",
+                           help="Store evidence + enqueue only; do not spawn the worker subprocess")
+
+    # ── process-jobs ──────────────────────────────────────────────────────────
+    p_pjobs = sub.add_parser(
+        "process-jobs",
+        help="Claim and process queued extraction jobs (background worker for I4)",
+    )
+    p_pjobs.add_argument("project_path", help="Path to the project root")
+    p_pjobs.add_argument("--max-jobs", type=int, default=50, metavar="N",
+                         help="Max jobs to process in one run (default 50)")
+    p_pjobs.add_argument("--time-budget", type=float, default=None, metavar="S",
+                         dest="time_budget",
+                         help="Stop claiming new jobs after S seconds (hook-safe drains)")
+
     # ── show ──────────────────────────────────────────────────────────────────
     p_show = sub.add_parser("show", help="Display current project state")
     p_show.add_argument("project_path", help="Path to the project root")
@@ -74,6 +143,10 @@ def main() -> None:
     # ── doctor ────────────────────────────────────────────────────────────────
     p_doctor = sub.add_parser("doctor", help="Check DB health and print a summary")
     p_doctor.add_argument("project_path", help="Path to the project root")
+    p_doctor.add_argument(
+        "--strict", action="store_true",
+        help="Exit non-zero if any subsystem is degraded (for pre-flight / CI).",
+    )
 
     # ── reset ─────────────────────────────────────────────────────────────────
     p_reset = sub.add_parser("reset", help="Delete all events for a project")
@@ -159,12 +232,43 @@ def main() -> None:
     p_lookup.add_argument("project_path", help="Path to the project root")
     p_lookup.add_argument("file_path", help="File path to look up")
 
+    # ── warm ──────────────────────────────────────────────────────────────────
+    sub.add_parser(
+        "warm",
+        help=(
+            "Download + load the embedding model once into the persistent cache. "
+            "Run before benchmarking so no session pays the cold-start download."
+        ),
+    )
+
+    # ── install-heads ───────────────────────────────────────────────────────────
+    p_install = sub.add_parser(
+        "install-heads",
+        help=(
+            "Install the v2 (SetFit) encoder ONNX body + tokenizer into the canonical "
+            "~/.memlora/models/salience_v2/ so v2/v2-broad extraction works outside a "
+            "repo checkout. Run once before benchmarking the encoder backend."
+        ),
+    )
+    p_install.add_argument(
+        "--source",
+        help="Dir containing body.onnx + tokenizer.json (default: the repo export output "
+             "at models/salience_setfit/onnx). Produce it with scripts/export_setfit_onnx.py.",
+    )
+    p_install.add_argument(
+        "--force", action="store_true", help="Overwrite artifacts already installed",
+    )
+
     args = parser.parse_args()
 
     if args.command == "init":
         _cmd_init(args)
     elif args.command == "extract":
         _cmd_extract(args)
+    elif args.command == "capture":
+        _cmd_capture(args)
+    elif args.command == "process-jobs":
+        _cmd_process_jobs(args)
     elif args.command == "show":
         _cmd_show(args)
     elif args.command == "doctor":
@@ -181,23 +285,225 @@ def main() -> None:
         _cmd_rebuild(args)
     elif args.command == "lookup":
         sys.exit(_cmd_lookup(args))
+    elif args.command == "warm":
+        _cmd_warm()
+    elif args.command == "install-heads":
+        _cmd_install_heads(args)
 
 
 # ── subcommand handlers ───────────────────────────────────────────────────────
 
+
+def _warm_embedding_model() -> bool:
+    """Best-effort: download + load the embedding model into the persistent cache.
+
+    The first fastembed fetch is ~130MB and can take minutes; doing it once, in the
+    foreground (init or `memlora warm`), means no hook or MCP `recall` ever pays
+    that cost mid-session. Prints status; returns True if the model is ready.
+    Never raises — recall degrades to deterministic lexical matching without it.
+    """
+    import importlib.util
+    import time
+
+    if importlib.util.find_spec("fastembed") is None:
+        print("embedding extra not installed — recall/find_related will use lexical matching.")
+        return False
+
+    from memlora.embedding.model import EMBEDDING_MODEL_VERSION, ensure_ready
+
+    print(f"warming embedding model ({EMBEDDING_MODEL_VERSION}); first run downloads ~130MB, please wait…")
+    t0 = time.monotonic()
+    try:
+        ok = ensure_ready(timeout=None)  # block fully: the one place a long wait is OK
+    except Exception:
+        ok = False
+    dt = time.monotonic() - t0
+    if ok:
+        print(f"embedding model ready in {dt:.1f}s — cached under MEMLORA_DIR/models (default ~/.memlora/models)")
+    else:
+        print("embedding model download failed — recall/find_related will use lexical matching.")
+    return ok
+
+
+def _cmd_warm() -> None:
+    if not _warm_embedding_model():
+        sys.exit(1)
+
+# ── In-session slash commands / skills (so operators never drop out of the
+# assistant to run the `memlora` CLI) ─────────────────────────────────────────
+# Two client surfaces, written by `memlora init` into every project:
+#   - Claude Code: `.claude/commands/<name>.md` — a slash command whose body
+#     `!`-executes the CLI and asks the model to summarise the output.
+#   - Codex:       `.agents/skills/<name>/SKILL.md` — a repo-level skill that
+#     instructs Codex to run the CLI itself. (Codex only discovers project skills
+#     from `.agents/skills`; `.codex/prompts` is user-home-only and deprecated.)
+# These files are CK-managed and rewritten on every init so template fixes
+# propagate. `recall` / `find_related` are MCP tools, so those wrappers steer the
+# model to the tool rather than shelling out (there is no `memlora recall` CLI).
+#
+# Spec tuple: (name, kind, target, takes_arg, blurb)
+#   kind="cli" → runs `memlora <target>`; kind="mcp" → steers to the <target> MCP tool.
+_AGENT_COMMANDS: list[tuple[str, str, str, bool, str]] = [
+    ("ck-doctor", "cli", "doctor", False,
+     "CogniKernel DB health: schema/projection version, job counts, telemetry, dead-letters."),
+    ("ck-show", "cli", "show", False,
+     "Render the current CogniKernel session-context block on demand."),
+    ("ck-failures", "cli", "failures", False,
+     "List CogniKernel dead-lettered extraction jobs for triage."),
+    ("ck-lookup", "cli", "lookup", True,
+     "Debug CogniKernel's strict Read-gate decision for a file path."),
+    ("ck-recall", "mcp", "recall", True,
+     "Recall prior CogniKernel decisions/constraints relevant to a query."),
+    ("ck-related", "mcp", "find_related", True,
+     "Find decisions and code areas related to a query via semantics and the import graph."),
+    ("ck-skeleton", "mcp", "skeleton", True,
+     "Full AST signatures for a file from the CogniKernel skeleton — no file read needed."),
+]
+
+
+def _write_claude_command(
+    commands_dir: Path, name: str, kind: str, target: str, takes_arg: bool, blurb: str
+) -> None:
+    """Write one `.claude/commands/<name>.md` slash command."""
+    front = ["---", f"description: {blurb}"]
+    if takes_arg:
+        hint = "<file-path>" if target in ("lookup", "skeleton") else "<query>"
+        front.append(f"argument-hint: {hint}")
+    if kind == "cli":
+        # Prefix-scoped permission so the `!` execution doesn't prompt every time.
+        front.append(f"allowed-tools: Bash(python -m memlora {target}:*)")
+    front.append("---")
+
+    # The `!`-executed command MUST NOT contain a shell expansion: Claude Code
+    # static-checks it against `allowed-tools` before running and rejects any
+    # `$VAR` / `$(...)` ("Contains simple_expansion") because the expansion can't
+    # be verified — so the command silently fails to run. We therefore pass the
+    # project root as a literal `.` (slash-command `!`-bash runs from the project
+    # root), NOT `$CLAUDE_PROJECT_DIR`. `$ARGUMENTS` is safe — Claude Code
+    # substitutes it into the command string *before* the permission check.
+    if kind == "mcp":
+        body = (
+            f'Use the cognikernel `{target}` MCP tool to answer: "$ARGUMENTS". Pass '
+            "project_path as the absolute path of this project's root directory. "
+            "Summarise the returned items; do not re-read files for facts already covered.\n"
+        )
+    elif takes_arg:
+        body = (
+            f"Explain CogniKernel's `{target}` result for `$ARGUMENTS`, based on the "
+            "output below. Do not modify any files.\n\n"
+            f'!`python -m memlora {target} . "$ARGUMENTS"`\n'
+        )
+    else:
+        body = (
+            f"Run CogniKernel's `{target}` for this project and give a short, "
+            "actionable summary of the output below. Do not modify any files.\n\n"
+            f"!`python -m memlora {target} .`\n"
+        )
+    (commands_dir / f"{name}.md").write_text("\n".join(front) + "\n\n" + body, encoding="utf-8")
+
+
+def _write_codex_skill(
+    skills_dir: Path, name: str, kind: str, target: str, takes_arg: bool, blurb: str
+) -> None:
+    """Write one `.agents/skills/<name>/SKILL.md` repo-level Codex skill."""
+    skill_dir = skills_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    desc = f"{blurb} Use when the user asks for this CogniKernel/memlora operation."
+    front = f"---\nname: {name}\ndescription: {desc}\n---\n\n"
+
+    if kind == "mcp":
+        body = (
+            f"Use the cognikernel `{target}` MCP tool with the user's query and "
+            "project_path set to the repository root, then summarise the returned "
+            "decisions/constraints concisely.\n"
+        )
+    elif takes_arg:
+        body = (
+            f'From the repository root, run `python -m memlora {target} . "<PATH>"`, '
+            "substituting the path the user supplied, then explain the result. Do not "
+            "modify any files.\n"
+        )
+    else:
+        body = (
+            f"From the repository root, run `python -m memlora {target} .` and give a "
+            "short, actionable summary of the output. Do not modify any files.\n"
+        )
+    (skill_dir / "SKILL.md").write_text(front + body, encoding="utf-8")
+
+
+def _write_agent_commands(project_path: Path) -> None:
+    """Scaffold the Claude Code slash commands and Codex skills for a project."""
+    commands_dir = project_path / ".claude" / "commands"
+    commands_dir.mkdir(parents=True, exist_ok=True)
+    skills_dir = project_path / ".agents" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    for spec in _AGENT_COMMANDS:
+        _write_claude_command(commands_dir, *spec)
+        _write_codex_skill(skills_dir, *spec)
+
+
+def _cmd_install_heads(args: argparse.Namespace) -> None:
+    """Copy the trained encoder ONNX bodies + tokenizers into the canonical install paths.
+
+    The 133 MB body.onnx files are gitignored (regenerable), so they are not shipped. This
+    places them at <MEMLORA_DIR>/models/{salience_v2, supersession_xenc}/ — the locations
+    extraction.salience_v2 and delta.supersede_xenc resolve — so v2 extraction AND the
+    cross-encoder supersession axis work outside a repo checkout (else they fail open to
+    legacy / lexical). Each head is independent: a missing source is skipped, not fatal.
+    """
+    import os
+    import shutil
+
+    repo_models = Path(__file__).resolve().parents[3] / "models"
+    models_root = Path(os.environ.get("MEMLORA_DIR") or (Path.home() / ".memlora")) / "models"
+    heads = [
+        ("v2 salience head", repo_models / "salience_setfit" / "onnx", "salience_v2"),
+        ("supersession cross-encoder", repo_models / "supersession_xenc" / "onnx", "supersession_xenc"),
+    ]
+    if args.source:  # explicit override installs just the salience head from that dir
+        heads = [("v2 salience head", Path(args.source).resolve(), "salience_v2")]
+
+    needed = ["body.onnx", "tokenizer.json"]
+    installed_any = False
+    for label, src, dest_name in heads:
+        if not all((src / f).exists() for f in needed):
+            print(f"  skip [{label}]: source missing in {src} "
+                  "(export via scripts/export_setfit_onnx.py / export_xenc_onnx.py)")
+            continue
+        dest = models_root / dest_name
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in needed:
+            target = dest / f
+            if target.exists() and not args.force:
+                print(f"  exists (skip): {target}  — use --force to overwrite")
+                continue
+            shutil.copy2(src / f, target)
+            print(f"  installed [{label}]: {target}  ({(src / f).stat().st_size / 1e6:.1f} MB)")
+        installed_any = True
+
+    if not installed_any:
+        print("no head artifacts found to install", file=sys.stderr)
+        sys.exit(1)
+    print(f"\nheads installed under {models_root}")
+    print('Enable in .memlora/config.toml:  extractor = "v2-broad"  and '
+          "(optional) cross_encoder_supersession = true.")
+
+
 def _cmd_init(args: argparse.Namespace) -> None:
     import shutil
 
+    from memlora.integration.session import init_project
     project_id = init_project(args.project_path)
     project_path = Path(args.project_path).resolve()
 
     # Use forward slashes — hooks run through bash on Windows; backslashes break them
     python_exe = (shutil.which("python") or "python").replace("\\", "/")
-    scripts_base = Path(__file__).resolve().parent.parent.parent.parent / "scripts"
 
-    def _hook_cmd(script: str) -> str:
-        script_path = str(scripts_base / script).replace("\\", "/")
-        return f"{python_exe} {script_path}"
+    def _hook_cmd(subcommand: str) -> str:
+        # Path-portable: invoke the installed package (`python -m memlora <sub>`)
+        # rather than an absolute script path, so moving the repo or reinstalling
+        # never breaks the registered hooks (CK-6a). Requires `memlora` importable.
+        return f"{python_exe} -m memlora {subcommand}"
 
     # ── .claude/settings.json ─────────────────────────────────────────────────
     claude_dir = project_path / ".claude"
@@ -217,22 +523,30 @@ def _cmd_init(args: argparse.Namespace) -> None:
         "SessionStart": [
             {
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_session_start_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-session-start")}
                 ]
             }
         ],
         "Stop": [
             {
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_hook.py")}
+                    # timeout 300s: covers capture (15s) + the sync drain
+                    # (180s kill ceiling) with margin. Claude Code's default
+                    # hook timeout (60s) killed drains mid-job (I7d).
+                    {"type": "command", "command": _hook_cmd("hook-stop"), "timeout": 300}
                 ]
             }
         ],
         "PreToolUse": [
             {
-                "matcher": "Read",
+                # One hook, routed by tool_name inside pretool_main:
+                #   Read  → C1 strict re-read/skeleton gate (may deny)
+                #   Write/Edit/MultiEdit → K2 JIT prohibition surfacing (allow + context)
+                # Grep is handled too but only fires when grep_cache_enabled
+                # (default False), so it is omitted from the matcher by design.
+                "matcher": "Read|Write|Edit|MultiEdit",
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_pretool_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-pretool")}
                 ],
             }
         ],
@@ -240,21 +554,51 @@ def _cmd_init(args: argparse.Namespace) -> None:
             {
                 "matcher": "Write",
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_posttool_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-posttool")}
                 ],
             },
             {
                 "matcher": "Edit",
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_posttool_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-posttool")}
                 ],
             },
             {
                 "matcher": "Read",
                 "hooks": [
-                    {"type": "command", "command": _hook_cmd("memlora_posttool_read_hook.py")}
+                    {"type": "command", "command": _hook_cmd("hook-posttool-read")}
                 ],
             },
+            {
+                # CK-3a: cache grep results; gated by grep_cache_enabled in config.
+                "matcher": "Grep",
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-posttool-grep")}
+                ],
+            },
+        ],
+        "SubagentStop": [
+            {
+                # CK-4: extract decisions from subagent transcripts; gated by
+                # capture_subagents in config (default True).
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-subagent-stop")}
+                ]
+            }
+        ],
+        # CK-1: per-prompt query-time injection. Benchmark evidence (two gamma
+        # runs): imperative-update prompts ("switch the default alias ...") do
+        # not reliably trigger the agent's pull path, and the block's section
+        # budgets can't carry the full decision surface by design — push the
+        # prompt-relevant slice instead. Fail-open, 3s budget, silent when
+        # nothing clears the relevance gate; still gated by the
+        # query_time_injection config flag.
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-user-prompt")}
+                ]
+            }
         ],
     }
     settings_path.write_text(
@@ -271,7 +615,30 @@ def _cmd_init(args: argparse.Namespace) -> None:
     if not project_cfg_path.exists():
         project_cfg_path.write_text(
             '# CogniKernel per-project config. Overrides ~/.memlora/config.toml.\n'
-            'hook_policy = "strict"\n',
+            'hook_policy = "strict"\n'
+            '\n'
+            '# Stage-2 extraction backend: legacy | v1 | v1-broad | v2 | v2-broad.\n'
+            '#   legacy   = deterministic keyword/Aho-Corasick pipeline (default).\n'
+            '#   v2-broad = SetFit fine-tuned encoder head (best quality). Requires the\n'
+            '#              ONNX body installed once: `python -m memlora install-heads`.\n'
+            '# The MEMLORA_EXTRACTOR env var overrides this. Heads fail open to legacy\n'
+            '# when artifacts are absent, so a non-legacy value is always safe.\n'
+            '# New projects default to the best mode (v2-broad). Install the ONNX body\n'
+            '# once with `python -m memlora install-heads`, or set this to "legacy".\n'
+            'extractor = "v2-broad"\n'
+            '\n'
+            '# Cross-encoder supersession axis (R5): catches a few paraphrased\n'
+            '# corrections lexical misses, precision-safe (additive above the\n'
+            '# temporal/authority/provenance gates; fail-open to lexical if the\n'
+            '# cross-encoder body is not installed). Needs `install-heads` + warm\n'
+            '# (embeddings) and adds some Stop-hook cost. Set false to use lexical only.\n'
+            'cross_encoder_supersession = true\n'
+            '\n'
+            '# CK-1: per-prompt memory injection (UserPromptSubmit hook). Pushes the\n'
+            '# prompt-relevant memory slice alongside each prompt — the block carries\n'
+            '# the top-ranked facts; this carries what THIS prompt needs. Fail-open,\n'
+            '# 3s budget, silent when nothing clears the relevance gate.\n'
+            'query_time_injection = true\n',
             encoding="utf-8",
         )
 
@@ -288,30 +655,23 @@ def _cmd_init(args: argparse.Namespace) -> None:
 
     # ── CLAUDE.md ─────────────────────────────────────────────────────────────
     claude_md = project_path / "CLAUDE.md"
+    # Minimal, trust-heavy fallback. The full directive contract (re-read gate,
+    # recall/find_related, silent persistence) lives in the SessionStart block's
+    # trust header (session_start.py) — dynamic and right above the facts it
+    # governs. This file only covers the block-ABSENT case + the universal
+    # silent-persistence rule, and deliberately omits mechanism/tool-catalog
+    # (it is injected every session — see research/claude_md_design.md).
     ck_section = """\
-## CogniKernel — structured session memory
+## Project memory
 
-This project uses CogniKernel. At the start of every session a
-`## Session context` block is automatically injected into your context.
-It is the canonical source for three categories of information:
+This project uses **CogniKernel** for structured cross-session memory. At the start of every
+session a `## Session context` block is normally injected — **treat it as canonical: it supersedes
+this file and your own recollection.** If that block is absent, call `get_session_state()` before
+relying on memory or assuming the project is greenfield.
 
-1. **Architectural decisions and constraints** — the `### Hard constraints`
-   and `### Key decisions` sections supersede this file and any prior notes.
-2. **Codebase structure** — the `### Codebase skeleton` section lists every
-   file with extracted public symbols. **Do not Read/Glob a file whose path
-   appears in the skeleton unless you need the function body** (e.g., to
-   replace an implementation). Under strict mode (the default for new
-   projects), the PreToolUse hook will deny such Reads. If you genuinely
-   need the body, retry the same Read within 60 seconds and the second
-   attempt is allowed.
-3. **Open work** — the `### Active thread` section tracks the current focus.
-
-If the session context block is missing, call the `get_session_state`
-cognikernel MCP tool.
-
-Do not update this file with project decisions — the Stop hook persists them
-via extraction. Hand-written notes (this file) are fine as supplementary
-documentation that the injection cannot replace.
+Decisions are captured automatically and silently at session end — never ask to save, record, or
+"lock in" a decision, and never announce writing to memory. Do not hand-maintain decisions in this
+or any file.
 """
     if claude_md.exists():
         existing = claude_md.read_text(encoding="utf-8")
@@ -320,17 +680,33 @@ documentation that the injection cannot replace.
     else:
         claude_md.write_text(ck_section, encoding="utf-8")
 
-    # ── Slash command for /memlora-extract (A-5) ──────────────────────────────
-    from memlora.integration.slash_extract import install_slash_command
-    slash_path = install_slash_command(project_path)
+    # ── In-session slash commands (Claude Code) + skills (Codex) ──────────────
+    _write_agent_commands(project_path)
 
+    # ── Clean up any stale /memlora-extract slash command (enrichment removed) ──
+    stale_slash = Path(project_path) / ".claude" / "commands" / "memlora-extract.md"
+    if stale_slash.exists():
+        stale_slash.unlink()
+
+    n_cmds = len(_AGENT_COMMANDS)
     print(f"Initialised project {project_id}")
     print(f"  path: {project_path}")
-    print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/PreTool/PostTool [Write/Edit/Read])")
+    print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/UserPromptSubmit/SubagentStop, "
+          f"PreTool [Read/Write/Edit/MultiEdit], PostTool [Write/Edit/Read/Grep])")
     print(f"  wrote: .mcp.json              (cognikernel MCP server)")
     print(f"  wrote: CLAUDE.md              (CogniKernel trust section)")
     print(f"  wrote: .memlora/config.toml   (hook_policy=strict)")
-    print(f"  wrote: {slash_path.relative_to(project_path)}  (slash command)")
+    print(f"  wrote: .claude/commands/ck-*.md       ({n_cmds} Claude Code slash commands)")
+    print(f"  wrote: .agents/skills/ck-*/SKILL.md   ({n_cmds} Codex skills)")
+
+    # Bundle the one-time embedding-model download into init so the very first
+    # session never pays the multi-minute cold start (the bug behind the hung
+    # `recall`). Foreground + best-effort; only the first init per machine actually
+    # downloads — later inits load from the persistent cache. Opt out with
+    # `--no-warm`; MEMLORA_DISABLE_AUTO_WARM=1 disables it for tests/CI (set in
+    # tests/conftest.py so the suite never downloads 130MB per test).
+    if not getattr(args, "no_warm", False) and not os.environ.get("MEMLORA_DISABLE_AUTO_WARM"):
+        _warm_embedding_model()
 
 
 def _cmd_extract(args: argparse.Namespace) -> None:
@@ -365,6 +741,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     if getattr(args, "git_diff", None):
         git_diff = Path(args.git_diff).read_text(encoding="utf-8")
 
+    from memlora.integration.session import session_end
     stats = session_end(
         args.project_path,
         session_id,
@@ -377,7 +754,52 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     print(json.dumps(stats, indent=2))
 
 
+def _cmd_capture(args: argparse.Namespace) -> None:
+    """Store evidence + enqueue, then spawn detached worker (I4 fast path)."""
+    session_id: str | None = getattr(args, "session_id", None)
+    auto = getattr(args, "auto_session_id", False)
+    if auto:
+        session_id = Path(args.transcript_file).stem
+    if not session_id:
+        print("ERROR: provide --session-id or --auto-session-id.", file=sys.stderr)
+        sys.exit(1)
+
+    raw_jsonl = Path(args.transcript_file).read_text(encoding="utf-8")
+
+    git_diff: str | None = None
+    if getattr(args, "git_diff", None):
+        git_diff = Path(args.git_diff).read_text(encoding="utf-8")
+
+    from memlora.integration.session import session_capture
+    result = session_capture(
+        args.project_path,
+        session_id,
+        raw_jsonl,
+        git_diff=git_diff,
+        evidence_source_type="jsonl_transcript",
+        evidence_source_path=str(Path(args.transcript_file).resolve()),
+    )
+    print(json.dumps(result))
+
+    # I7c: no spawn — a worker detached from a Claude Code hook is killed with
+    # the hook's Job Object at hook exit (and a doomed worker can orphan the
+    # single-flight lock). The Stop hook runs a sync time-budgeted drain after
+    # capture instead; --no-spawn is kept for CLI back-compat and is a no-op.
+
+
+def _cmd_process_jobs(args: argparse.Namespace) -> None:
+    """Claim and process queued extraction jobs (worker / hook-drain entry point)."""
+    from memlora.integration.session import process_jobs
+    summary = process_jobs(
+        args.project_path,
+        max_jobs=args.max_jobs,
+        time_budget_s=getattr(args, "time_budget", None),
+    )
+    print(json.dumps(summary))
+
+
 def _cmd_show(args: argparse.Namespace) -> None:
+    from memlora.integration.session import get_projection, render_state
     if args.as_json:
         proj = get_projection(args.project_path)
         data = {
@@ -482,10 +904,12 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
         print("  no telemetry - run 'memlora telemetry <project_path>' to ingest")
     else:
         hit_pct = cache_stats["avg_cache_hit_rate"] * 100
-        saved = cache_stats["total_tokens_saved"]
+        read = cache_stats["total_cache_read_tokens"]
+        saved = cache_stats["effective_tokens_saved"]
         print(f"  sessions with data : {n}")
         print(f"  avg cache hit rate : {hit_pct:.1f}%")
-        print(f"  total tokens saved : {saved:,}")
+        print(f"  cache reads served : {read:,} tok")
+        print(f"  effective saved    : {saved:,} tok (read billed ~0.1x)")
         recent = cache_stats["recent_sessions"]
         if recent:
             print("  last sessions      :")
@@ -498,7 +922,26 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
                 print(f"    {sess_short}  cache={pct}  saved={read:,}tok")
 
     print()
-    print("status     : OK")
+    print("-- subsystem health -----------------------------------------")
+    from memlora.integration.health import run_health_checks
+    with get_connection(db_path) as conn:
+        checks = run_health_checks(conn, project_id, config)
+    for c in checks:
+        mark = "OK" if c.ok else "!!"
+        print(f"  [{mark}] {c.name:<12}: {c.detail}")
+    unhealthy = [c for c in checks if not c.ok]
+
+    print()
+    if unhealthy:
+        names = ", ".join(c.name for c in unhealthy)
+        msg = f"status     : DEGRADED — {len(unhealthy)} subsystem(s): {names}"
+        if getattr(args, "strict", False):
+            print(msg, file=sys.stderr)
+            sys.exit(1)
+        print(msg)
+        print("             (run `memlora doctor --strict` to fail on this)")
+    else:
+        print("status     : OK")
 
 
 def _cmd_telemetry(args: argparse.Namespace) -> None:
@@ -531,17 +974,36 @@ def _cmd_reset(args: argparse.Namespace) -> None:
 
     with get_connection(db_path) as conn:
         run_migrations(conn)
+        # Memory + ingest state.
         conn.execute("DELETE FROM extraction_job_acks")
         conn.execute("DELETE FROM extraction_jobs")
+        conn.execute("DELETE FROM enrichment_jobs")
         conn.execute("DELETE FROM event_provenance")
+        conn.execute("DELETE FROM event_embeddings")
         conn.execute("DELETE FROM events")
         conn.execute("DELETE FROM state_projections")
         conn.execute("DELETE FROM extraction_failures")
         conn.execute("DELETE FROM raw_evidence")
-        conn.execute("DELETE FROM meta WHERE key != 'schema_version' AND key != 'projection_version'")
+        conn.execute("DELETE FROM ingest_cursors")
+        # Symbol graph — `memlora show` renders skeleton/component-map from these;
+        # a reset that leaves them makes show look "not reset" (user-reported).
+        conn.execute("DELETE FROM symbol_nodes")
+        conn.execute("DELETE FROM symbol_edges")
+        conn.execute("DELETE FROM symbol_files")
+        # Session-scoped caches + telemetry.
+        conn.execute("DELETE FROM grep_cache")
+        conn.execute("DELETE FROM read_session_cache")
+        conn.execute("DELETE FROM denied_reads")
+        conn.execute("DELETE FROM api_telemetry")
+        # Keep schema/projection versions AND project_path (resources need it;
+        # deleting it broke render_state-by-project-id until the next init).
+        conn.execute(
+            "DELETE FROM meta WHERE key NOT IN "
+            "('schema_version', 'projection_version', 'project_path')"
+        )
         conn.commit()
 
-    print(f"Reset complete for project {project_id}.")
+    print(f"Reset complete for project {project_id} (all 16 data tables cleared).")
 
 
 def _cmd_failures(args: argparse.Namespace) -> None:
@@ -612,6 +1074,7 @@ def _cmd_failures(args: argparse.Namespace) -> None:
 
 
 def _cmd_rebuild(args: argparse.Namespace) -> None:
+    from memlora.integration.session import rebuild_from_raw
     config = Config.load()
     stats = rebuild_from_raw(
         project_path=args.project_path,

@@ -31,11 +31,51 @@ _NARRATION_PREFIXES = re.compile(
 )
 
 # References to CogniKernel tooling or CLAUDE.md instructions — meta-talk, not decisions.
+# F3: also catch "session context" and "already decided" — the assistant narrating
+# *about* injected memory ("From the session context, this is already decided…").
 _META_REFERENCES = re.compile(
-    r"\b(?:get_session_state|mcp__|claude\.md|session\s+memory"
-    r"|as\s+required\s+by|per\s+claude\.md|cognikernel|memlora)\b",
+    r"\b(?:get_session_state|mcp__|claude\.md|session\s+(?:memory|context)"
+    r"|as\s+required\s+by|per\s+claude\.md|cognikernel|memlora|already\s+decided)\b",
     re.IGNORECASE,
 )
+
+# F3: status narration — momentary assistant chatter ("I need to check…", "Reading
+# the body…", "Already fully implemented", "Nothing to do here."). These trip the
+# high-frequency THREAD_* signals (need to / to do / implemented / done) but are
+# not durable memory. First-person singular only — "We need to…" is a real thread.
+_STATUS_NARRATION = re.compile(
+    r"^(?:i\s+need\s+to|i\s+can(?:'?t|not)?\b|i'?m\b|i\s+have\b|i'?ve\b"
+    r"|reading\b|already\b|nothing\b|checking\b|looking\b|here'?s\b)",
+    re.IGNORECASE,
+)
+
+# F3: a quick proxy for "substance" — alphanumeric tokens of length >= 3. Used to
+# drop empty fragments ("---") and one-word THREAD statuses ("Done.").
+_CONTENT_WORD = re.compile(r"[a-z0-9]{3,}")
+
+
+def _content_word_count(text: str) -> int:
+    return len(_CONTENT_WORD.findall(text.lower()))
+
+
+def _is_noise_description(description: str) -> bool:
+    """Type-independent noise filter (F3 + earlier guards).
+
+    Empty fragments, status narration, workflow narration, meta-talk about injected
+    memory, and implementation-review sentences are momentary chatter, not durable
+    memory. Shared by the trie path and the co-capture path so neither leaks noise.
+    """
+    if _content_word_count(description) == 0:
+        return True
+    if _STATUS_NARRATION.match(description):
+        return True
+    if _NARRATION_PREFIXES.match(description):
+        return True
+    if _META_REFERENCES.search(description):
+        return True
+    if _IMPLEMENTATION_REVIEW.match(description):
+        return True
+    return False
 
 # Verbatim user-prompt fragments mistaken for decisions.
 _USER_PROMPT_ECHO = re.compile(
@@ -52,8 +92,8 @@ _IMPLEMENTATION_REVIEW = re.compile(
     r"|note\s+that\b"                                            # "Note that is_deleted is..."
     r"|making\s+all\b"                                           # "Making all five changes..."
     r"|all\s+\d+\s+tests?\s+(?:pass|fail)"                       # "All 18 tests pass..."
-    r"|the\s+(?:[\w-]+\s+){1,4}(?:is|are|was|were)\s+"           # "The soft-delete sync is handled..."
-    r"(?:handled|done|managed|triggered|implemented|synced|wired)"
+    r"|the\s+(?:[\w-]+\s+){1,4}(?:is|are|was|were)\s+(?:\w+\s+){0,3}"  # "The login endpoint is already fully implemented..."
+    r"(?:handled|done|managed|triggered|implemented|synced|wired|complete|finished|ready)"
     r")",
     re.IGNORECASE,
 )
@@ -180,6 +220,11 @@ def extract_events_from_matches(
         if not description:
             continue
 
+        # Type-independent noise filter (F3): empty fragments, status/workflow
+        # narration, meta-talk, implementation-review. Shared with the co-capture path.
+        if _is_noise_description(description):
+            continue
+
         source_role = sentences[match.sentence_index].role
 
         # Downgrade questions masquerading as constraints.
@@ -189,14 +234,6 @@ def extract_events_from_matches(
             event_type = "CONSTRAINT_SOFT"
             confidence = min(confidence, 0.3)
 
-        # Drop workflow narration and meta-talk regardless of event type.
-        if _NARRATION_PREFIXES.match(description) or _META_REFERENCES.search(description):
-            continue
-
-        # Drop assistant code-review and implementation-summary sentences.
-        if _IMPLEMENTATION_REVIEW.match(description):
-            continue
-
         # Downgrade descriptive "never" hits — third-person subject describes what
         # code currently does, not a normative rule. e.g. "routes never touch X".
         if event_type == "CONSTRAINT_HARD" and match.matched_phrase == "never":
@@ -204,10 +241,20 @@ def extract_events_from_matches(
                 event_type = "CONSTRAINT_SOFT"
                 confidence = min(confidence, 0.3)
 
-        # Drop DECISION events from non-assistant turns or echoed user prompts.
+        # F4: a DECISION stated in a USER turn is a first-class, highest-authority
+        # decision (authority=user_stated via default_authority_for_role) — keep it.
+        # Previously user-turn DECISIONs were blanket-dropped, which silently lost
+        # user-stated decisions like "we're switching from bcrypt to argon2id" and
+        # left supersession nothing to link. Still drop imperative prompt echoes
+        # ("implement X", "decide on Y") and questions, which assert no decision.
         if event_type == "DECISION":
-            if source_role != "assistant" or _USER_PROMPT_ECHO.match(description):
+            if _USER_PROMPT_ECHO.match(description) or is_question_description(description):
                 continue
+
+        # F3: a THREAD event must name a work item with some substance — a one-word
+        # status ("Done.") is narration, not a durable open/closed thread.
+        if event_type in ("THREAD_OPEN", "THREAD_CLOSE") and _content_word_count(description) < 2:
+            continue
 
         events.append(
             Event(
@@ -287,6 +334,12 @@ def extract_co_captures(
 
         description = sanitize_description(captured)
         if not description:
+            continue
+
+        # F3: co-captures bypass the trie-path filters, so apply the shared noise
+        # filter here too — an assistant reply that just narrates about the session
+        # context ("From the session context, this is already decided…") is not memory.
+        if _is_noise_description(description):
             continue
 
         events.append(

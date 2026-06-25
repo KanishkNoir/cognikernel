@@ -14,14 +14,19 @@ dependencies = [
     "tree-sitter-language-pack>=1.0",
 ]
 
+# Optional local semantic layer (config.embedding_enabled). Off by default;
+# supersession degrades to lexical matching when not installed.
+[project.optional-dependencies]
+embedding = ["fastembed>=0.3", "numpy>=1.24"]
+
 [project.scripts]
 memlora = "memlora.integration.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/memlora"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.0",
     "hypothesis>=6.0",
     "import-linter>=2.1",
@@ -38,11 +43,17 @@ root_packages = ["memlora"]
 [[tool.importlinter.contracts]]
 name = "Main pipeline layers"
 type = "layers"
+# storage sits ABOVE compression: storage.projections ranks events using
+# compression's centrality/weight math, and compression imports nothing from
+# storage (the domain model Event lives in memlora.model, below both). The
+# previous order (compression above storage) was aspirational and mis-declared —
+# it was never enforced because the import-linter run aborted on a typo'd
+# contract (see the removed observability note below).
 layers = [
     "memlora.integration",
     "memlora.injection",
-    "memlora.compression",
     "memlora.storage",
+    "memlora.compression",
 ]
 
 # Extraction feeds storage only — must not reach forward into the pipeline.
@@ -69,16 +80,15 @@ forbidden_modules = [
     "memlora.extraction",
 ]
 
-# Observability is read-only from stage code's perspective — stages import
-# observability, observability does not import stage modules.
-[[tool.importlinter.contracts]]
-name = "Observability does not import stage modules"
-type = "forbidden"
-source_modules = ["memlora.observability"]
-forbidden_modules = [
-    "memlora.extraction",
-    "memlora.compression",
-    "memlora.injection",
-    "memlora.delta",
-    "memlora.integration",
-]
+# NOTE (audit P2): there used to be an "Observability does not import stage
+# modules" contract whose source_modules pointed at "memlora.observability" — a
+# module that never existed. import-linter aborts the ENTIRE run when a contract
+# names a missing module ("Module '...' does not exist."), so this typo silently
+# disabled enforcement of every contract above. It was removed rather than
+# retargeted: the real observer module is memlora.telemetry, and its purpose
+# (render_cost.render_cost_report) is to invoke integration.session.render_state
+# and measure the rendered block — telemetry legitimately depends on the
+# integration + injection stages it observes, so a "telemetry imports no stage
+# modules" boundary does not hold and was never enforced. The four contracts
+# above (the layered pipeline + extraction/delta forbidden-upstream) are the real,
+# maintained invariants; with the broken contract gone they are checked again.
