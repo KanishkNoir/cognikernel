@@ -676,6 +676,54 @@ def _cmd_init(args: argparse.Namespace) -> None:
             encoding="utf-8",
         )
 
+    # ── .codex/config.toml — Codex MCP registration (cross-platform read path) ──
+    # Codex reads the same shared DB via the MCP server. Idempotent: create the
+    # file with our server block, or append the block to an existing config without
+    # touching the user's other settings (e.g. a `notify` they already configured).
+    codex_dir = project_path / ".codex"
+    codex_cfg_path = codex_dir / "config.toml"
+    codex_block = (
+        "[mcp_servers.cognikernel]\n"
+        f"command = '{python_exe}'\n"
+        "args = ['-m', 'memlora', 'mcp-serve']\n"
+    )
+    if not codex_cfg_path.exists():
+        codex_dir.mkdir(exist_ok=True)
+        codex_cfg_path.write_text(
+            "# CogniKernel — Codex MCP server registration (cross-platform memory).\n"
+            + codex_block,
+            encoding="utf-8",
+        )
+    else:
+        existing_codex = codex_cfg_path.read_text(encoding="utf-8")
+        if "mcp_servers.cognikernel" not in existing_codex:
+            codex_cfg_path.write_text(
+                existing_codex.rstrip() + "\n\n" + codex_block, encoding="utf-8"
+            )
+
+    # ── AGENTS.md — Codex read-side instruction (auto-loaded into Codex context) ─
+    # Codex has no SessionStart hook, so the reliable lever is AGENTS.md: instruct
+    # Codex to pull memory (codex-sync + get_session_state) at session start.
+    agents_md = project_path / "AGENTS.md"
+    agents_section = """\
+## Project memory (CogniKernel)
+
+This project uses **CogniKernel** for cross-session, cross-platform memory shared with Claude Code.
+
+At the **start of a session**: run `python -m memlora codex-sync .` to capture decisions from prior
+Codex/Claude work, then use the cognikernel `get_session_state` MCP tool (project_path = the repo
+root) as the canonical source of truth for this project's decisions, constraints, and rejected
+approaches — it supersedes your own recollection. For targeted lookups use the `recall` /
+`find_related` MCP tools before exploring files. Decisions are captured automatically; never
+hand-maintain them in this or any file.
+"""
+    if agents_md.exists():
+        existing_agents = agents_md.read_text(encoding="utf-8")
+        if "CogniKernel" not in existing_agents:
+            agents_md.write_text(agents_section + "\n" + existing_agents, encoding="utf-8")
+    else:
+        agents_md.write_text(agents_section, encoding="utf-8")
+
     # ── CLAUDE.md ─────────────────────────────────────────────────────────────
     claude_md = project_path / "CLAUDE.md"
     # Minimal, trust-heavy fallback. The full directive contract (re-read gate,
@@ -717,6 +765,8 @@ or any file.
     print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/UserPromptSubmit/SubagentStop, "
           f"PreTool [Read/Write/Edit/MultiEdit], PostTool [Write/Edit/Read/Grep])")
     print(f"  wrote: .mcp.json              (cognikernel MCP server)")
+    print(f"  wrote: .codex/config.toml     (Codex MCP server — cross-platform)")
+    print(f"  wrote: AGENTS.md              (Codex memory instruction)")
     print(f"  wrote: CLAUDE.md              (CogniKernel trust section)")
     print(f"  wrote: .memlora/config.toml   (hook_policy=strict)")
     print(f"  wrote: .claude/commands/ck-*.md       ({n_cmds} Claude Code slash commands)")

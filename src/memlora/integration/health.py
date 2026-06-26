@@ -104,6 +104,26 @@ def check_worker_queue(conn: sqlite3.Connection, project_id: str) -> HealthCheck
     )
 
 
+def check_codex(config: Config) -> HealthCheck:
+    """Cross-platform capture wiring (Sprint L). Codex is optional, so its absence
+    is HEALTHY (like embedding disabled) — this surfaces whether sync *can* run."""
+    if not config.codex_sync_enabled:
+        return HealthCheck("codex", True, "sync disabled by config")
+    try:
+        from memlora.extraction.codex_converter import codex_rollout_to_transcript  # noqa: F401
+        from memlora.integration.codex_sync import codex_sessions_root
+        root = codex_sessions_root(config)
+    except Exception as exc:
+        return HealthCheck("codex", False, f"codex_sync probe failed ({exc})")
+    if not root.is_dir():
+        return HealthCheck("codex", True, f"no Codex sessions at {root} — nothing to sync")
+    try:
+        n = sum(1 for _ in root.rglob("rollout-*.jsonl"))
+    except Exception:
+        n = -1
+    return HealthCheck("codex", True, f"sessions dir present ({n} rollouts) — cross-platform capture active")
+
+
 def run_health_checks(
     conn: sqlite3.Connection, project_id: str, config: Config
 ) -> list[HealthCheck]:
@@ -114,4 +134,5 @@ def run_health_checks(
         check_embedding(config),
         check_symbol_extraction(),
         check_worker_queue(conn, project_id),
+        check_codex(config),
     ]
