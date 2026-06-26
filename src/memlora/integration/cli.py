@@ -732,10 +732,14 @@ def _cmd_extract(args: argparse.Namespace) -> None:
 
     transcript = raw_input
     evidence_source_type = "transcript"
-    if getattr(args, "jsonl", False):
-        from memlora.extraction.jsonl_converter import jsonl_to_transcript
-        transcript = jsonl_to_transcript(raw_input)
+    if getattr(args, "codex", False):
+        from memlora.extraction.transcript import transcript_from_source
+        evidence_source_type = "codex_rollout"
+        transcript = transcript_from_source(evidence_source_type, raw_input)
+    elif getattr(args, "jsonl", False):
+        from memlora.extraction.transcript import transcript_from_source
         evidence_source_type = "jsonl_transcript"
+        transcript = transcript_from_source(evidence_source_type, raw_input)
 
     git_diff: str | None = None
     if getattr(args, "git_diff", None):

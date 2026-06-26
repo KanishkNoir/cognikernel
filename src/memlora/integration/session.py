@@ -372,7 +372,7 @@ def process_jobs(
     import os
     from memlora.delta.merge import execute_merge
     from memlora.extraction.pipeline import SessionMetadata, extract_session
-    from memlora.extraction.jsonl_converter import jsonl_to_transcript
+    from memlora.extraction.transcript import transcript_from_source
     from memlora.storage.cursors import get_cursor, save_cursor, slice_jsonl_for_extraction
     from memlora.storage.evidence import load_evidence, load_full_transcript
     from memlora.storage.jobs import (
@@ -476,10 +476,10 @@ def process_jobs(
                 extraction_slice, new_line_count, new_anchor = slice_jsonl_for_extraction(
                     raw, cursor
                 )
-                if evidence is not None and evidence.source_type == "jsonl_transcript":
-                    transcript = jsonl_to_transcript(extraction_slice)
-                else:
-                    transcript = extraction_slice  # plain-text transcript path
+                transcript = transcript_from_source(
+                    evidence.source_type if evidence is not None else None,
+                    extraction_slice,
+                )
 
                 now = int(time.time() * 1000)
                 session_meta = SessionMetadata(
@@ -584,10 +584,8 @@ def replay_job(
         replay_dead_letter(conn, job_id)
 
     raw = full_bytes.decode("utf-8", errors="replace")
-    transcript = raw
-    if evidence.source_type == "jsonl_transcript":
-        from memlora.extraction.jsonl_converter import jsonl_to_transcript
-        transcript = jsonl_to_transcript(raw)
+    from memlora.extraction.transcript import transcript_from_source
+    transcript = transcript_from_source(evidence.source_type, raw)
 
     return session_end(
         project_path=project_path,
@@ -811,10 +809,8 @@ def rebuild_from_raw(
             sidecar_conn.commit()
 
             raw = zlib.decompress(row["content_blob"]).decode("utf-8")
-            transcript = raw
-            if source_type == "jsonl_transcript":
-                from memlora.extraction.jsonl_converter import jsonl_to_transcript
-                transcript = jsonl_to_transcript(raw)
+            from memlora.extraction.transcript import transcript_from_source
+            transcript = transcript_from_source(source_type, raw)
 
             now = int(time.time() * 1000)
             session_meta = SessionMetadata(
