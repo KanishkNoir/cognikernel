@@ -5,7 +5,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-EXPECTED_SCHEMA_VERSION: int = 17
+EXPECTED_SCHEMA_VERSION: int = 18
 EXPECTED_PROJECTION_VERSION: int = 1
 
 VALID_HOOK_POLICIES = frozenset({"advisory", "strict"})
@@ -163,6 +163,17 @@ class Config:
     # overrides this for ops/tests. The encoder heads fail open to legacy when
     # their model artifacts are absent, so a non-legacy value is always safe.
     extractor: str = "legacy"
+
+    # Sprint L — cross-platform capture from Codex CLI rollouts. When enabled,
+    # Claude's SessionStart (and `memlora codex-sync`) scans ~/.codex/sessions for
+    # rollouts whose recorded cwd maps to this project and captures the delta, so a
+    # Codex session's decisions travel back into the shared store. Fail-open: if the
+    # dir is absent or this is off, sync is a no-op. codex_home overrides the root
+    # (else $CODEX_HOME or ~/.codex); the scan window bounds rescan cost.
+    codex_sync_enabled: bool = True
+    codex_home: Path | None = None
+    codex_scan_window_days: int = 30
+
     section_budgets: SectionBudgets = field(default_factory=SectionBudgets)
 
     @property

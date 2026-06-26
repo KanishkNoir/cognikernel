@@ -79,6 +79,23 @@ def _run_schema_migrations(conn: sqlite3.Connection) -> None:
     if current >= EXPECTED_SCHEMA_VERSION:
         return
 
+    # Migrations that rebuild a table with inbound foreign keys (e.g. widening a
+    # CHECK on a parent like raw_evidence) must run with FK enforcement OFF — with
+    # it ON, DROP TABLE on the parent performs an implicit cascading DELETE that
+    # wipes child rows. PRAGMA foreign_keys is a no-op inside a transaction, so it
+    # cannot live in the migration .sql; toggle it here, around the loop, while we
+    # are in autocommit. Connections normally run FK ON (connection.py); restore it.
+    fk_was_on = bool(conn.execute("PRAGMA foreign_keys").fetchone()[0])
+    if fk_was_on:
+        conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        _apply_pending(conn, current)
+    finally:
+        if fk_was_on:
+            conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _apply_pending(conn: sqlite3.Connection, current: int) -> None:
     for migration_file in sorted(_MIGRATIONS_DIR.glob("*.sql")):
         version = int(migration_file.stem.split("_")[0])
         if version <= current:
