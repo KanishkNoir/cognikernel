@@ -1,10 +1,11 @@
 # CogniKernel
 
-**Persistent, structured project memory for Claude Code.** CogniKernel watches a
-coding session through Claude Code's hook surfaces, extracts the *decisions,
+**Persistent, structured project memory for Claude Code — and Codex.** CogniKernel
+watches a coding session through its hook surfaces, extracts the *decisions,
 constraints, and abandoned approaches* worth keeping, consolidates them into an
 event-sourced store, and injects them back as a compact context block the next
-time you work — so the agent stops re-deciding what you already decided.
+time you work — so the agent stops re-deciding what you already decided. The store
+is keyed on the project path, so memory made in one tool travels to the other.
 
 It is **not** a vector-database wrapper. It is an event-sourced log of *typed*
 memory with lexical-primary retrieval, write-time consolidation, and a fail-open
@@ -113,6 +114,32 @@ The system is designed to degrade *legibly*, never silently:
 
 ---
 
+## Cross-platform (Codex)
+
+The store is platform-neutral — a SQLite DB keyed on `hash_project_path(cwd)`, so
+Claude Code and Codex working in the same directory share one memory. Codex reads
+it through the registered MCP server (`get_session_state` / `recall`); the
+capture direction is **pull-based**, because Codex has no `Stop`-hook equivalent:
+
+- **`memlora codex-sync <project>`** scans `~/.codex/sessions` for rollouts whose
+  recorded `cwd` maps to the project and captures the delta through the *same*
+  extraction pipeline (a rollout→transcript adapter is the only Codex-specific
+  code; delta/dedup/idempotency are shared and unchanged).
+- **Automatic at the handoff** — Claude's SessionStart drains pending Codex
+  rollouts before building the block; on the Codex side, `init` writes an
+  `AGENTS.md` instruction + a `ck-sync` skill so Codex pulls at session start.
+- **`init` provisions both** — `.mcp.json` (Claude) and `.codex/config.toml` +
+  `AGENTS.md` (Codex), idempotently and without clobbering existing settings.
+- **`memlora doctor`** reports a `codex` health line (sessions dir + rollout
+  count, or "nothing to sync" — Codex is optional, so its absence is healthy).
+
+So a decision made in Codex reaches the next Claude session's block, and vice
+versa. The action-point surfaces (CK-1, PreToolUse gate) are Claude-only — Codex
+has no per-prompt/per-tool hook — so on Codex the loop degrades to the shared
+block + MCP recall.
+
+---
+
 ## Interfaces
 
 **MCP tools** (the session block is injected automatically; these are for targeted use):
@@ -121,6 +148,7 @@ The system is designed to degrade *legibly*, never silently:
 **CLI:**
 - `memlora init <project>` — register the project and install the session hooks
 - `memlora doctor [--strict] <project>` — subsystem health report
+- `memlora codex-sync <project>` — capture Codex CLI sessions for this project (cross-platform)
 - `memlora install-heads` — install the ONNX encoder artifacts (salience + cross-encoder model bodies)
 - `memlora show <project>` / `memlora reset <project>` — inspect / clear stored memory
 
@@ -164,6 +192,6 @@ tests/
 
 ## Status
 
-Schema **v17**. Architecture contracts: 3 kept / 0 broken. CI gate green in its
-own (no-embedding-extra) environment. See `CONTRIBUTING.md` for the Definition of
-Done that gates every change.
+Schema **v18** (with Codex cross-platform capture). Architecture contracts: 3 kept
+/ 0 broken. CI gate green in its own (no-embedding-extra) environment. See
+`CONTRIBUTING.md` for the Definition of Done that gates every change.
