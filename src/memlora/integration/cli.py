@@ -96,6 +96,11 @@ def main() -> None:
         help="Treat transcript_file as a Claude Code JSONL session file and convert it",
     )
     p_extract.add_argument(
+        "--codex",
+        action="store_true",
+        help="Treat transcript_file as a Codex CLI rollout JSONL session and convert it",
+    )
+    p_extract.add_argument(
         "--git-diff",
         metavar="FILE",
         help="Optional path to a git-diff file to augment extraction",
@@ -232,6 +237,19 @@ def main() -> None:
     p_lookup.add_argument("project_path", help="Path to the project root")
     p_lookup.add_argument("file_path", help="File path to look up")
 
+    # ── codex-sync ──────────────────────────────────────────────────────────────
+    p_codex = sub.add_parser(
+        "codex-sync",
+        help="Capture Codex CLI rollouts for this project into the shared store "
+             "(cross-platform memory). Scans ~/.codex/sessions and matches by cwd.",
+    )
+    p_codex.add_argument("project_path", help="Path to the project root")
+    p_codex.add_argument("--scan-days", type=int, default=None, metavar="N",
+                         help="Only consider rollouts modified in the last N days "
+                              "(default: config codex_scan_window_days).")
+    p_codex.add_argument("--no-drain", action="store_true",
+                         help="Enqueue only; do not spawn the background extraction worker.")
+
     # ── warm ──────────────────────────────────────────────────────────────────
     sub.add_parser(
         "warm",
@@ -269,6 +287,8 @@ def main() -> None:
         _cmd_capture(args)
     elif args.command == "process-jobs":
         _cmd_process_jobs(args)
+    elif args.command == "codex-sync":
+        _cmd_codex_sync(args)
     elif args.command == "show":
         _cmd_show(args)
     elif args.command == "doctor":
@@ -346,6 +366,9 @@ def _cmd_warm() -> None:
 _AGENT_COMMANDS: list[tuple[str, str, str, bool, str]] = [
     ("ck-doctor", "cli", "doctor", False,
      "CogniKernel DB health: schema/projection version, job counts, telemetry, dead-letters."),
+    ("ck-sync", "cli", "codex-sync", False,
+     "Capture this Codex session's prior decisions into CogniKernel (cross-platform memory). "
+     "Run at session start so memory from earlier Codex/Claude work is available."),
     ("ck-show", "cli", "show", False,
      "Render the current CogniKernel session-context block on demand."),
     ("ck-failures", "cli", "failures", False,
@@ -653,6 +676,54 @@ def _cmd_init(args: argparse.Namespace) -> None:
             encoding="utf-8",
         )
 
+    # ── .codex/config.toml — Codex MCP registration (cross-platform read path) ──
+    # Codex reads the same shared DB via the MCP server. Idempotent: create the
+    # file with our server block, or append the block to an existing config without
+    # touching the user's other settings (e.g. a `notify` they already configured).
+    codex_dir = project_path / ".codex"
+    codex_cfg_path = codex_dir / "config.toml"
+    codex_block = (
+        "[mcp_servers.cognikernel]\n"
+        f"command = '{python_exe}'\n"
+        "args = ['-m', 'memlora', 'mcp-serve']\n"
+    )
+    if not codex_cfg_path.exists():
+        codex_dir.mkdir(exist_ok=True)
+        codex_cfg_path.write_text(
+            "# CogniKernel — Codex MCP server registration (cross-platform memory).\n"
+            + codex_block,
+            encoding="utf-8",
+        )
+    else:
+        existing_codex = codex_cfg_path.read_text(encoding="utf-8")
+        if "mcp_servers.cognikernel" not in existing_codex:
+            codex_cfg_path.write_text(
+                existing_codex.rstrip() + "\n\n" + codex_block, encoding="utf-8"
+            )
+
+    # ── AGENTS.md — Codex read-side instruction (auto-loaded into Codex context) ─
+    # Codex has no SessionStart hook, so the reliable lever is AGENTS.md: instruct
+    # Codex to pull memory (codex-sync + get_session_state) at session start.
+    agents_md = project_path / "AGENTS.md"
+    agents_section = """\
+## Project memory (CogniKernel)
+
+This project uses **CogniKernel** for cross-session, cross-platform memory shared with Claude Code.
+
+At the **start of a session**: run `python -m memlora codex-sync .` to capture decisions from prior
+Codex/Claude work, then use the cognikernel `get_session_state` MCP tool (project_path = the repo
+root) as the canonical source of truth for this project's decisions, constraints, and rejected
+approaches — it supersedes your own recollection. For targeted lookups use the `recall` /
+`find_related` MCP tools before exploring files. Decisions are captured automatically; never
+hand-maintain them in this or any file.
+"""
+    if agents_md.exists():
+        existing_agents = agents_md.read_text(encoding="utf-8")
+        if "CogniKernel" not in existing_agents:
+            agents_md.write_text(agents_section + "\n" + existing_agents, encoding="utf-8")
+    else:
+        agents_md.write_text(agents_section, encoding="utf-8")
+
     # ── CLAUDE.md ─────────────────────────────────────────────────────────────
     claude_md = project_path / "CLAUDE.md"
     # Minimal, trust-heavy fallback. The full directive contract (re-read gate,
@@ -694,6 +765,8 @@ or any file.
     print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/UserPromptSubmit/SubagentStop, "
           f"PreTool [Read/Write/Edit/MultiEdit], PostTool [Write/Edit/Read/Grep])")
     print(f"  wrote: .mcp.json              (cognikernel MCP server)")
+    print(f"  wrote: .codex/config.toml     (Codex MCP server — cross-platform)")
+    print(f"  wrote: AGENTS.md              (Codex memory instruction)")
     print(f"  wrote: CLAUDE.md              (CogniKernel trust section)")
     print(f"  wrote: .memlora/config.toml   (hook_policy=strict)")
     print(f"  wrote: .claude/commands/ck-*.md       ({n_cmds} Claude Code slash commands)")
@@ -732,10 +805,14 @@ def _cmd_extract(args: argparse.Namespace) -> None:
 
     transcript = raw_input
     evidence_source_type = "transcript"
-    if getattr(args, "jsonl", False):
-        from memlora.extraction.jsonl_converter import jsonl_to_transcript
-        transcript = jsonl_to_transcript(raw_input)
+    if getattr(args, "codex", False):
+        from memlora.extraction.transcript import transcript_from_source
+        evidence_source_type = "codex_rollout"
+        transcript = transcript_from_source(evidence_source_type, raw_input)
+    elif getattr(args, "jsonl", False):
+        from memlora.extraction.transcript import transcript_from_source
         evidence_source_type = "jsonl_transcript"
+        transcript = transcript_from_source(evidence_source_type, raw_input)
 
     git_diff: str | None = None
     if getattr(args, "git_diff", None):
@@ -785,6 +862,21 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     # the hook's Job Object at hook exit (and a doomed worker can orphan the
     # single-flight lock). The Stop hook runs a sync time-budgeted drain after
     # capture instead; --no-spawn is kept for CLI back-compat and is a no-op.
+
+
+def _cmd_codex_sync(args: argparse.Namespace) -> None:
+    """Capture Codex CLI rollouts for this project, then drain the queue.
+
+    A manual/terminal entry point (the SessionStart hook syncs automatically). As a
+    foreground command it may spawn the background worker to extract immediately.
+    """
+    from memlora.integration.codex_sync import sync_codex_rollouts
+    stats = sync_codex_rollouts(
+        args.project_path,
+        scan_window_days=getattr(args, "scan_days", None),
+        spawn_worker=not getattr(args, "no_drain", False),
+    )
+    print(json.dumps(stats))
 
 
 def _cmd_process_jobs(args: argparse.Namespace) -> None:

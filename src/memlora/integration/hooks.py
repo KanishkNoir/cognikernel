@@ -256,6 +256,18 @@ def session_start_main() -> None:
         cwd = payload.get("cwd", "")
         if not cwd:
             return
+
+        # Sprint L: the handoff boundary. Before building the block, capture any
+        # Codex CLI sessions for this project so a Claude session opened after Codex
+        # work carries those decisions. Enqueue-only (fast); extraction drains via
+        # the Stop hook / MCP background drainer, and the block's pending-notice +
+        # recall affordance cover anything not yet extracted. Fully fail-open.
+        try:
+            from memlora.integration.codex_sync import sync_codex_rollouts
+            sync_codex_rollouts(cwd)
+        except Exception as exc:
+            _log_swallowed("session_start.codex_sync", exc)
+
         from memlora.integration.session_start import handle_session_start
         context = handle_session_start(cwd, session_id=payload.get("session_id") or None)
         if not context:
