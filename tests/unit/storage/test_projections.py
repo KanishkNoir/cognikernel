@@ -112,12 +112,14 @@ class TestSaveProjection:
 # ── invalidate_projection ─────────────────────────────────────────────────────
 
 class TestInvalidateProjection:
-    def test_sets_high_water_to_zero(self, conn: sqlite3.Connection) -> None:
+    def test_sets_high_water_to_sentinel(self, conn: sqlite3.Connection) -> None:
         save_projection(conn, make_projection(event_id_high_water=99))
         invalidate_projection(conn, "proj1")
         loaded = load_projection(conn, "proj1")
         assert loaded is not None
-        assert loaded.event_id_high_water == 0
+        # -1 matches merge._invalidate_projection_inner and forces a rebuild
+        # even for a store whose events were all deleted.
+        assert loaded.event_id_high_water == -1
 
     def test_no_op_for_missing_project(self, conn: sqlite3.Connection) -> None:
         invalidate_projection(conn, "ghost")  # should not raise

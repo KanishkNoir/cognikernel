@@ -93,9 +93,13 @@ def save_projection(conn: sqlite3.Connection, projection: Projection) -> None:
 
 
 def invalidate_projection(conn: sqlite3.Connection, project_id: str) -> None:
-    """Force a full rebuild on the next load by resetting the high-water mark to 0."""
+    """Force a full rebuild on the next load by resetting the high-water mark.
+
+    -1 is the same sentinel merge._invalidate_projection_inner uses; unlike 0 it
+    also forces a rebuild for a store whose events were all deleted (max id 0).
+    """
     conn.execute(
-        "UPDATE state_projections SET event_id_high_water = 0 WHERE project_id = ?",
+        "UPDATE state_projections SET event_id_high_water = -1 WHERE project_id = ?",
         (project_id,),
     )
     conn.commit()

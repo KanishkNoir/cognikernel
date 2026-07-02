@@ -15,8 +15,12 @@ from __future__ import annotations
 
 import sqlite3
 
+# Single source of truth for the archive floor is storage.events; re-exported
+# here for the existing `from memlora.delta.decay import ARCHIVE_THRESHOLD`
+# call sites (delta.merge, delta.__init__).
+from memlora.storage.events import ARCHIVE_THRESHOLD  # noqa: F401  (re-export)
+
 DECAY_FACTOR: float = 0.92
-ARCHIVE_THRESHOLD: float = 0.05
 
 _PROTECTED_FROM_ARCHIVE: frozenset[str] = frozenset({
     "CONSTRAINT_HARD",
