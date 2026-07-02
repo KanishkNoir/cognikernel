@@ -918,7 +918,9 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     from memlora.storage.jobs import list_jobs
     from memlora.telemetry.ingest import get_cache_stats
 
-    config = Config.load()
+    # Project-aware load (H2): doctor must diagnose the same DB the hooks use,
+    # which a project-local memlora_dir override can relocate.
+    config = Config.load(project_path=args.project_path)
     project_id = hash_project_path(args.project_path)
     db_path = get_db_path(config, project_id)
 
@@ -1017,7 +1019,8 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     print("-- subsystem health -----------------------------------------")
     from memlora.integration.health import run_health_checks
     with get_connection(db_path) as conn:
-        checks = run_health_checks(conn, project_id, config)
+        checks = run_health_checks(conn, project_id, config,
+                                   project_path=args.project_path)
     for c in checks:
         mark = "OK" if c.ok else "!!"
         print(f"  [{mark}] {c.name:<12}: {c.detail}")
@@ -1060,7 +1063,9 @@ def _cmd_reset(args: argparse.Namespace) -> None:
     from memlora.storage.connection import get_connection, get_db_path, hash_project_path
     from memlora.storage.migrations import run_migrations
 
-    config = Config.load()
+    # Project-aware load (H2): reset must clear the DB the hooks write to, not
+    # the default-dir DB a project-local memlora_dir override moved away from.
+    config = Config.load(project_path=args.project_path)
     project_id = hash_project_path(args.project_path)
     db_path = get_db_path(config, project_id)
 
@@ -1095,7 +1100,7 @@ def _cmd_reset(args: argparse.Namespace) -> None:
         )
         conn.commit()
 
-    print(f"Reset complete for project {project_id} (all 16 data tables cleared).")
+    print(f"Reset complete for project {project_id} (all 17 data tables cleared).")
 
 
 def _cmd_failures(args: argparse.Namespace) -> None:
@@ -1106,7 +1111,7 @@ def _cmd_failures(args: argparse.Namespace) -> None:
     from memlora.storage.jobs import list_jobs
     from memlora.storage.migrations import run_migrations
 
-    config = Config.load()
+    config = Config.load(project_path=args.project_path)
     project_id = hash_project_path(args.project_path)
     db_path = get_db_path(config, project_id)
 
@@ -1167,7 +1172,7 @@ def _cmd_failures(args: argparse.Namespace) -> None:
 
 def _cmd_rebuild(args: argparse.Namespace) -> None:
     from memlora.integration.session import rebuild_from_raw
-    config = Config.load()
+    config = Config.load(project_path=args.project_path)
     stats = rebuild_from_raw(
         project_path=args.project_path,
         since_evidence_id=args.since,

@@ -1,10 +1,7 @@
 """Tests for Config.load() project-local overlay (Stage C1)."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
-
-import pytest
 
 from memlora.config import VALID_HOOK_POLICIES, Config
 
@@ -98,19 +95,97 @@ def test_project_config_can_override_memlora_dir(
     assert cfg.memlora_dir == Path(custom.as_posix())
 
 
-def test_invalid_hook_policy_raises(tmp_path: Path, monkeypatch) -> None:
+def test_invalid_hook_policy_falls_back_and_reports(tmp_path: Path, monkeypatch) -> None:
+    """H1: an invalid value must NOT raise — every hook wraps Config.load in a
+    fail-open try/except, so a raise silently disabled the whole memory system.
+    It degrades to the default and surfaces a doctor-visible issue instead."""
     monkeypatch.delenv("MEMLORA_DIR", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "noprofile")
 
     project = tmp_path / "myproj"
     (project / ".memlora").mkdir(parents=True)
     (project / ".memlora" / "config.toml").write_text(
-        'hook_policy = "yolo"\n',
+        'hook_policy = "yolo"\ntoken_budget = 2000\n',
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="invalid hook_policy"):
-        Config.load(project_path=project)
+    cfg, issues = Config.load_with_issues(project_path=project)
+    assert cfg.hook_policy == "advisory"     # default, not a crash
+    assert cfg.token_budget == 2000          # valid sibling keys still apply
+    assert len(issues) == 1 and "hook_policy" in issues[0]
+    # Plain load() shares the same fail-open behavior.
+    assert Config.load(project_path=project).hook_policy == "advisory"
+
+
+def test_invalid_extractor_falls_back_and_reports(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("MEMLORA_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "noprofile")
+
+    project = tmp_path / "myproj"
+    (project / ".memlora").mkdir(parents=True)
+    (project / ".memlora" / "config.toml").write_text(
+        'extractor = "sift.tuned.broad"\nhook_policy = "strict"\n',
+        encoding="utf-8",
+    )
+
+    cfg, issues = Config.load_with_issues(project_path=project)
+    assert cfg.extractor == "legacy"
+    assert cfg.hook_policy == "strict"
+    assert len(issues) == 1 and "extractor" in issues[0]
+
+
+def test_malformed_toml_layer_is_ignored_and_reported(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("MEMLORA_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "noprofile")
+
+    project = tmp_path / "myproj"
+    (project / ".memlora").mkdir(parents=True)
+    (project / ".memlora" / "config.toml").write_text(
+        "this is not toml [[[",
+        encoding="utf-8",
+    )
+
+    cfg, issues = Config.load_with_issues(project_path=project)
+    assert cfg.hook_policy == "advisory"     # defaults survive
+    assert len(issues) == 1 and "TOML" in issues[0]
+
+
+def test_valid_config_reports_no_issues(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("MEMLORA_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "noprofile")
+
+    project = tmp_path / "myproj"
+    (project / ".memlora").mkdir(parents=True)
+    (project / ".memlora" / "config.toml").write_text(
+        'hook_policy = "strict"\nextractor = "v2-broad"\n',
+        encoding="utf-8",
+    )
+
+    cfg, issues = Config.load_with_issues(project_path=project)
+    assert issues == []
+    assert cfg.hook_policy == "strict"
+    assert cfg.extractor == "v2-broad"
+
+
+def test_codex_keys_are_parsed(tmp_path: Path, monkeypatch) -> None:
+    """Sprint L keys were documented on the dataclass but never parsed from TOML."""
+    monkeypatch.delenv("MEMLORA_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "noprofile")
+
+    project = tmp_path / "myproj"
+    codex_home = tmp_path / "codexhome"
+    (project / ".memlora").mkdir(parents=True)
+    (project / ".memlora" / "config.toml").write_text(
+        f'codex_sync_enabled = false\ncodex_home = "{codex_home.as_posix()}"\n'
+        "codex_scan_window_days = 7\n",
+        encoding="utf-8",
+    )
+
+    cfg, issues = Config.load_with_issues(project_path=project)
+    assert issues == []
+    assert cfg.codex_sync_enabled is False
+    assert cfg.codex_home == Path(codex_home.as_posix())
+    assert cfg.codex_scan_window_days == 7
 
 
 def test_valid_hook_policies_set() -> None:

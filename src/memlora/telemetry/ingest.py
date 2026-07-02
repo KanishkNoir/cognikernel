@@ -219,7 +219,8 @@ def find_and_ingest_telemetry(
     from memlora.config import Config
     from memlora.storage.connection import get_connection, get_db_path, hash_project_path
 
-    config = config or Config.load()
+    # Project-aware load (H2): must resolve the same DB the hooks write to.
+    config = config or Config.load(project_path=project_path)
     project_id = hash_project_path(project_path)
     db_path = get_db_path(config, project_id)
 

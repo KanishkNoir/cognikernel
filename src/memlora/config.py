@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+_log = logging.getLogger("memlora.config")
 
 EXPECTED_SCHEMA_VERSION: int = 18
 EXPECTED_PROJECTION_VERSION: int = 1
@@ -191,7 +194,17 @@ class Config:
         *,
         project_path: str | Path | None = None,
     ) -> Config:
-        """Load config from disk.
+        """Load config from disk. Never raises on bad config — see load_with_issues."""
+        return cls.load_with_issues(config_path, project_path=project_path)[0]
+
+    @classmethod
+    def load_with_issues(
+        cls,
+        config_path: Path | None = None,
+        *,
+        project_path: str | Path | None = None,
+    ) -> tuple[Config, list[str]]:
+        """Load config from disk, returning (config, issues).
 
         Precedence (highest first):
           1. `<project_path>/.memlora/config.toml`  (when project_path is given)
@@ -202,7 +215,16 @@ class Config:
         per-project overrides only need to specify the keys that differ.
 
         The MEMLORA_DIR env var short-circuits everything for test/CI use.
+
+        FAIL-OPEN, per key: an invalid value (bad type, unknown hook_policy /
+        extractor, malformed TOML) degrades to the layer below / the built-in
+        default instead of raising. Every hook wraps Config.load in a fail-open
+        try/except, so a raise here used to silently disable the entire memory
+        system for the project — while `doctor`, loading only the global file,
+        still reported OK. `issues` carries one human-readable line per problem
+        so the config health check can surface them.
         """
+        issues: list[str] = []
         # MEMLORA_DIR env var lets tests (and CI) redirect the data directory
         # without touching ~/.memlora. It overrides memlora_dir specifically,
         # but project-local overlays still apply on top of it.
@@ -215,7 +237,7 @@ class Config:
         if env_dir:
             base = cls(memlora_dir=Path(env_dir))
         elif config_path.exists():
-            base = cls._load_from_file(config_path)
+            base = cls(**cls._read_toml_kwargs(config_path, issues))
         else:
             base = cls()
 
@@ -223,86 +245,99 @@ class Config:
         if project_path is not None:
             project_cfg_path = Path(project_path) / ".memlora" / "config.toml"
             if project_cfg_path.exists():
-                project_kwargs = cls._read_toml_kwargs(project_cfg_path)
+                project_kwargs = cls._read_toml_kwargs(project_cfg_path, issues)
                 # Replace only the fields the project file specifies.
                 # memlora_dir override from MEMLORA_DIR is preserved unless the
                 # project config explicitly sets a different memlora_dir.
                 from dataclasses import replace
                 base = replace(base, **project_kwargs)
 
-        return base
-
-    @classmethod
-    def _load_from_file(cls, config_path: Path) -> Config:
-        kwargs = cls._read_toml_kwargs(config_path)
-        return cls(**kwargs)
+        return base, issues
 
     @staticmethod
-    def _read_toml_kwargs(config_path: Path) -> dict:
-        with open(config_path, "rb") as f:
-            data = tomllib.load(f)
+    def _read_toml_kwargs(config_path: Path, issues: list[str] | None = None) -> dict:
+        """Parse one config file into Config kwargs. Fail-open per key.
+
+        An invalid value is skipped (the layer below / default applies), logged
+        at WARNING, and appended to `issues` for the doctor config check. Only
+        keys that parse cleanly land in the returned dict.
+        """
+        def _note(msg: str) -> None:
+            _log.warning("config.invalid: %s", msg)
+            if issues is not None:
+                issues.append(msg)
+
+        try:
+            with open(config_path, "rb") as f:
+                data = tomllib.load(f)
+        except Exception as exc:
+            _note(f"{config_path}: unreadable or malformed TOML ({exc}) — file ignored")
+            return {}
 
         kwargs: dict = {}
-        if "memlora_dir" in data:
-            kwargs["memlora_dir"] = Path(data["memlora_dir"])
-        if "token_budget" in data:
-            kwargs["token_budget"] = int(data["token_budget"])
-        if "skeleton_budget" in data:
-            kwargs["skeleton_budget"] = int(data["skeleton_budget"])
-        if "wal_warning_threshold_mb" in data:
-            kwargs["wal_warning_threshold_bytes"] = int(data["wal_warning_threshold_mb"]) * 1024 * 1024
-        if "grep_cache_enabled" in data:
-            kwargs["grep_cache_enabled"] = bool(data["grep_cache_enabled"])
-        if "ckl_mode" in data:
-            kwargs["ckl_mode"] = bool(data["ckl_mode"])
-        if "ckl_v2" in data:
-            kwargs["ckl_v2"] = bool(data["ckl_v2"])
-        if "hook_policy" in data:
-            policy = str(data["hook_policy"])
+
+        def _take(key: str, convert, dest: str | None = None) -> None:
+            if key not in data:
+                return
+            try:
+                kwargs[dest or key] = convert(data[key])
+            except Exception as exc:
+                _note(f"{config_path}: invalid {key} = {data[key]!r} ({exc}) — using default")
+
+        def _parse_hook_policy(v) -> str:
+            policy = str(v)
             if policy not in VALID_HOOK_POLICIES:
                 raise ValueError(
                     f"invalid hook_policy {policy!r}; expected one of {sorted(VALID_HOOK_POLICIES)}"
                 )
-            kwargs["hook_policy"] = policy
-        if "read_cache_ttl_hours" in data:
-            kwargs["read_cache_ttl_hours"] = int(data["read_cache_ttl_hours"])
-        if "deny_retry_window_seconds" in data:
-            kwargs["deny_retry_window_seconds"] = int(data["deny_retry_window_seconds"])
-        if "embedding_enabled" in data:
-            kwargs["embedding_enabled"] = bool(data["embedding_enabled"])
-        if "cross_encoder_supersession" in data:
-            kwargs["cross_encoder_supersession"] = bool(data["cross_encoder_supersession"])
-        if "extractor" in data:
-            extractor = str(data["extractor"]).lower()
+            return policy
+
+        def _parse_extractor(v) -> str:
+            extractor = str(v).lower()
             if extractor not in VALID_EXTRACTORS:
                 raise ValueError(
                     f"invalid extractor {extractor!r}; expected one of {sorted(VALID_EXTRACTORS)}"
                 )
-            kwargs["extractor"] = extractor
-        if "query_time_injection" in data:
-            kwargs["query_time_injection"] = bool(data["query_time_injection"])
-        if "query_injection_threshold" in data:
-            kwargs["query_injection_threshold"] = float(data["query_injection_threshold"])
-        if "query_injection_max_tokens" in data:
-            kwargs["query_injection_max_tokens"] = int(data["query_injection_max_tokens"])
+            return extractor
+
+        def _parse_section_budgets(v) -> SectionBudgets:
+            if not isinstance(v, dict):
+                raise ValueError("section_budgets must be a table")
+            return SectionBudgets(
+                **{k: int(x) for k, x in v.items() if k in SectionBudgets.__dataclass_fields__}
+            )
+
+        _take("memlora_dir", Path)
+        _take("token_budget", int)
+        _take("skeleton_budget", int)
+        _take("wal_warning_threshold_mb", lambda v: int(v) * 1024 * 1024,
+              dest="wal_warning_threshold_bytes")
+        _take("grep_cache_enabled", bool)
+        _take("ckl_mode", bool)
+        _take("ckl_v2", bool)
+        _take("hook_policy", _parse_hook_policy)
+        _take("read_cache_ttl_hours", int)
+        _take("deny_retry_window_seconds", int)
+        _take("embedding_enabled", bool)
+        _take("cross_encoder_supersession", bool)
+        _take("extractor", _parse_extractor)
+        _take("query_time_injection", bool)
+        _take("query_injection_threshold", float)
+        _take("query_injection_max_tokens", int)
         for _ck1_key in ("ck1_dense_rank_max", "ck1_bm25_rank_max",
                          "ck1_min_term_overlap", "ck1_dual_anchor_terms",
                          "ck1_max_events"):
-            if _ck1_key in data:
-                kwargs[_ck1_key] = int(data[_ck1_key])
-        if "pretool_prohibition_surface_enabled" in data:
-            kwargs["pretool_prohibition_surface_enabled"] = bool(
-                data["pretool_prohibition_surface_enabled"])
+            _take(_ck1_key, int)
+        _take("pretool_prohibition_surface_enabled", bool)
         for _pt_key in ("pretool_bm25_rank_max", "pretool_min_term_overlap",
                         "pretool_max_surface", "pretool_pool_size"):
-            if _pt_key in data:
-                kwargs[_pt_key] = int(data[_pt_key])
-        if "capture_subagents" in data:
-            kwargs["capture_subagents"] = bool(data["capture_subagents"])
-        if "section_budgets" in data and isinstance(data["section_budgets"], dict):
-            sb = data["section_budgets"]
-            kwargs["section_budgets"] = SectionBudgets(
-                **{k: int(v) for k, v in sb.items() if k in SectionBudgets.__dataclass_fields__}
-            )
+            _take(_pt_key, int)
+        _take("capture_subagents", bool)
+        # Sprint L keys — documented on the dataclass but previously never parsed,
+        # so codex_home / the scan window could not actually be configured.
+        _take("codex_sync_enabled", bool)
+        _take("codex_home", Path)
+        _take("codex_scan_window_days", int)
+        _take("section_budgets", _parse_section_budgets)
 
         return kwargs

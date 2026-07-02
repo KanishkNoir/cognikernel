@@ -26,6 +26,24 @@ class HealthCheck:
     detail: str
 
 
+def check_config(project_path: str | None) -> HealthCheck:
+    """Config files parse cleanly (global + project overlay).
+
+    Config.load is fail-open per key — an invalid value degrades to the default
+    with a WARNING that hooks swallow. Without this check, a typo'd
+    `.memlora/config.toml` silently downgrades behavior (e.g. hook_policy back
+    to advisory) with no visible signal anywhere.
+    """
+    from memlora.config import Config
+    try:
+        _, issues = Config.load_with_issues(project_path=project_path)
+    except Exception as exc:
+        return HealthCheck("config", False, f"config load failed ({exc})")
+    if issues:
+        return HealthCheck("config", False, "; ".join(issues))
+    return HealthCheck("config", True, "global + project config parse clean")
+
+
 def check_schema_version(conn: sqlite3.Connection) -> HealthCheck:
     try:
         v = int(conn.execute(
@@ -125,10 +143,14 @@ def check_codex(config: Config) -> HealthCheck:
 
 
 def run_health_checks(
-    conn: sqlite3.Connection, project_id: str, config: Config
+    conn: sqlite3.Connection,
+    project_id: str,
+    config: Config,
+    project_path: str | None = None,
 ) -> list[HealthCheck]:
     """Run every subsystem probe. Order: foundational first, optional last."""
     return [
+        check_config(project_path),
         check_schema_version(conn),
         check_fts(conn),
         check_embedding(config),
