@@ -114,7 +114,11 @@ The system is designed to degrade *legibly*, never silently:
 
 ---
 
-## Cross-platform (Codex)
+## Cross-platform (Codex) — in progress
+
+> **Status:** landing on a separate branch (`feat/codex-crossplatform`), not yet on
+> `main`. The store is already platform-neutral; the capture path below describes
+> what that branch adds.
 
 The store is platform-neutral — a SQLite DB keyed on `hash_project_path(cwd)`, so
 Claude Code and Codex working in the same directory share one memory. Codex reads
@@ -133,9 +137,9 @@ capture direction is **pull-based**, because Codex has no `Stop`-hook equivalent
 - **`memlora doctor`** reports a `codex` health line (sessions dir + rollout
   count, or "nothing to sync" — Codex is optional, so its absence is healthy).
 
-So a decision made in Codex reaches the next Claude session's block, and vice
-versa. The action-point surfaces (CK-1, PreToolUse gate) are Claude-only — Codex
-has no per-prompt/per-tool hook — so on Codex the loop degrades to the shared
+Once merged, a decision made in Codex reaches the next Claude session's block, and
+vice versa. The action-point surfaces (CK-1, PreToolUse gate) are Claude-only —
+Codex has no per-prompt/per-tool hook — so on Codex the loop degrades to the shared
 block + MCP recall.
 
 ---
@@ -148,7 +152,7 @@ block + MCP recall.
 **CLI:**
 - `memlora init <project>` — register the project and install the session hooks
 - `memlora doctor [--strict] <project>` — subsystem health report
-- `memlora codex-sync <project>` — capture Codex CLI sessions for this project (cross-platform)
+- `memlora codex-sync <project>` — capture Codex CLI sessions for this project (cross-platform; landing on `feat/codex-crossplatform`)
 - `memlora install-heads` — install the ONNX encoder artifacts (salience + cross-encoder model bodies)
 - `memlora show <project>` / `memlora reset <project>` — inspect / clear stored memory
 
@@ -192,6 +196,6 @@ tests/
 
 ## Status
 
-Schema **v18** (with Codex cross-platform capture). Architecture contracts: 3 kept
-/ 0 broken. CI gate green in its own (no-embedding-extra) environment. See
-`CONTRIBUTING.md` for the Definition of Done that gates every change.
+Schema **v17** (v18 with the in-progress Codex cross-platform capture). Architecture
+contracts: 3 kept / 0 broken. CI gate green in its own (no-embedding-extra)
+environment. See `CONTRIBUTING.md` for the Definition of Done that gates every change.
