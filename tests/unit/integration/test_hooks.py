@@ -109,6 +109,60 @@ def test_hook_pretool_denies_fresh_skeleton_read_e2e(tmp_path, monkeypatch) -> N
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def test_hook_pretool_partial_read_is_exempt_and_uncached(tmp_path, monkeypatch) -> None:
+    """L7: a Read with offset/limit targets a slice of the file. It is exempt
+    from the gate (the deny's 'content is in your context' premise is false for
+    a slice) and PostToolUse must not record it — a recorded slice would deny
+    the later read of the rest of a large file."""
+    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cli._cmd_init(argparse.Namespace(project_path=str(proj)))
+
+    (proj / "app").mkdir()
+    target = proj / "app" / "main.py"
+    target.write_text("def go():\n    return 1\n", encoding="utf-8")
+
+    from memlora.config import Config
+    from memlora.storage import symbol_files as sf
+    from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+
+    pid = hash_project_path(str(proj))
+    db = get_db_path(Config.load(project_path=str(proj)), pid)
+    with get_connection(db) as conn:
+        # A fresh+scanned+has-symbols row — a FULL read would be denied here.
+        sf.upsert(conn, pid, "app/main.py", freshness="fresh", scan_status="scanned",
+                  symbol_count=5, refreshed_at=int(time.time() * 1000) + 5000)
+
+    env = {**os.environ, "MEMLORA_DIR": str(tmp_path / "data")}
+    payload = json.dumps({
+        "hook_event_name": "PreToolUse", "tool_name": "Read",
+        "tool_input": {"file_path": str(target), "offset": 1, "limit": 100},
+        "session_id": "sess-partial", "cwd": str(proj),
+    })
+    r = subprocess.run(
+        [sys.executable, "-m", "memlora", "hook-pretool"],
+        input=payload, text=True, capture_output=True, timeout=60, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+    # PostToolUse:Read on the slice must not populate the read cache.
+    post_payload = json.dumps({
+        "hook_event_name": "PostToolUse", "tool_name": "Read",
+        "tool_input": {"file_path": str(target), "offset": 1, "limit": 100},
+        "session_id": "sess-partial", "cwd": str(proj),
+    })
+    r = subprocess.run(
+        [sys.executable, "-m", "memlora", "hook-posttool-read"],
+        input=post_payload, text=True, capture_output=True, timeout=60, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    with get_connection(db) as conn:
+        cached = conn.execute("SELECT COUNT(*) FROM read_session_cache").fetchone()[0]
+    assert cached == 0
+
+
 def test_hook_pretool_write_surfaces_prohibition_e2e(tmp_path, monkeypatch) -> None:
     """K2 end-to-end: `hook-pretool` on a Write that reintroduces a graveyarded
     approach ALLOWS but attaches the prohibition as additionalContext — the JIT
