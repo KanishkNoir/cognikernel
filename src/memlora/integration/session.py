@@ -142,8 +142,13 @@ def session_end(
                 output_ref=json_like_stats(stats),
             )
             # Advance cursor only after a successful merge — never on exception.
-            save_cursor(conn, project_id, session_id, new_line_count, new_anchor,
-                        last_evidence_id=evidence_id)
+            # Monotonic guard (F7, mirroring process_jobs): `failures --replay`
+            # re-enters here with an OLD reconstructed transcript; it must never
+            # rewind the cursor below what a newer run already committed.
+            latest = get_cursor(conn, project_id, session_id)
+            if latest is None or new_line_count >= latest.last_line_count:
+                save_cursor(conn, project_id, session_id, new_line_count, new_anchor,
+                            last_evidence_id=evidence_id)
             _update_symbol_graph(conn, project_id, str(project_path), git_diff, session_id=session_id)
             ack_stage(conn, job_id, "PROJECTED", output_ref="projection:invalidated")
             ack_stage(conn, job_id, "COMPLETED", output_ref="session_end")
