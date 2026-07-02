@@ -512,6 +512,35 @@ def _cmd_install_heads(args: argparse.Namespace) -> None:
           "(optional) cross_encoder_supersession = true.")
 
 
+def _is_ck_hook_group(group: dict) -> bool:
+    """True when every command in a settings.json hook group is CK-managed."""
+    hooks = group.get("hooks") if isinstance(group, dict) else None
+    if not isinstance(hooks, list) or not hooks:
+        return False
+    return all(
+        isinstance(h, dict) and "-m memlora hook-" in str(h.get("command", ""))
+        for h in hooks
+    )
+
+
+def _merge_hooks(existing: dict | None, ck_hooks: dict) -> dict:
+    """Merge CK hook groups into existing settings.json hooks without clobbering.
+
+    Per event: user groups (anything not entirely CK-managed) are kept in place,
+    stale CK groups are dropped, and the current CK groups are appended. Events
+    CK doesn't manage pass through untouched.
+    """
+    merged: dict = {}
+    existing = existing if isinstance(existing, dict) else {}
+    for event, groups in existing.items():
+        kept = [g for g in groups if not _is_ck_hook_group(g)] if isinstance(groups, list) else groups
+        if kept:
+            merged[event] = kept
+    for event, ck_groups in ck_hooks.items():
+        merged[event] = merged.get(event, []) + ck_groups
+    return merged
+
+
 def _cmd_init(args: argparse.Namespace) -> None:
     import shutil
 
@@ -542,7 +571,7 @@ def _cmd_init(args: argparse.Namespace) -> None:
 
     settings["enableAllProjectMcpServers"] = True
     settings["autoMemoryEnabled"] = False
-    settings["hooks"] = {
+    ck_hooks = {
         "SessionStart": [
             {
                 "hooks": [
@@ -624,6 +653,11 @@ def _cmd_init(args: argparse.Namespace) -> None:
             }
         ],
     }
+    # Merge, don't clobber: re-init rewrites the CK-managed entries (so template
+    # fixes propagate) but a user's own hooks — including on events CK doesn't
+    # manage — must survive. A CK entry is any group whose every command invokes
+    # `-m memlora hook-*`.
+    settings["hooks"] = _merge_hooks(settings.get("hooks"), ck_hooks)
     settings_path.write_text(
         json.dumps(settings, indent=2), encoding="utf-8"
     )

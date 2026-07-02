@@ -110,6 +110,47 @@ def test_init_preserves_existing_settings_keys(
     assert "Read" in {e["matcher"] for e in settings["hooks"]["PostToolUse"]}
 
 
+def test_init_preserves_user_hooks_and_rewrites_ck_hooks(
+    init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
+) -> None:
+    """M6: init merges hooks. A user's own hook groups survive re-init — both on
+    events CK manages (Stop) and events it doesn't (Notification) — while stale
+    CK-managed groups are replaced by the current templates."""
+    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "memlora_data"))
+
+    settings_dir = Path(init_args.project_path) / ".claude"
+    settings_dir.mkdir(parents=True)
+    settings_path = settings_dir / "settings.json"
+    user_stop = {"hooks": [{"type": "command", "command": "notify-send done"}]}
+    user_notification = {"hooks": [{"type": "command", "command": "afplay ding.wav"}]}
+    stale_ck = {"hooks": [{"type": "command", "command": "python -m memlora hook-stop --old-flag"}]}
+    settings_path.write_text(
+        json.dumps({"hooks": {
+            "Stop": [user_stop, stale_ck],
+            "Notification": [user_notification],
+        }}),
+        encoding="utf-8",
+    )
+
+    _cmd_init(init_args)
+
+    hooks = json.loads(settings_path.read_text(encoding="utf-8"))["hooks"]
+    stop_cmds = [h["command"] for g in hooks["Stop"] for h in g["hooks"]]
+    assert "notify-send done" in stop_cmds                      # user hook survives
+    assert "python -m memlora hook-stop --old-flag" not in stop_cmds  # stale CK replaced
+    assert any(c.endswith("-m memlora hook-stop") for c in stop_cmds)  # current CK present
+    assert hooks["Notification"] == [user_notification]          # unmanaged event untouched
+
+    # Re-init is stable: no duplicate CK groups accumulate.
+    _cmd_init(init_args)
+    hooks2 = json.loads(settings_path.read_text(encoding="utf-8"))["hooks"]
+    ck_stop_groups = [
+        g for g in hooks2["Stop"]
+        if all("-m memlora hook-" in h["command"] for h in g["hooks"])
+    ]
+    assert len(ck_stop_groups) == 1
+
+
 def test_init_idempotent_does_not_overwrite_existing_project_config(
     init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
 ) -> None:
