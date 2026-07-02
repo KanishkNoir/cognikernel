@@ -26,6 +26,12 @@ from memlora.storage.connection import hash_project_path
 
 _log = logging.getLogger("memlora.codex_sync")
 
+# Bytes-ish prefix read per rollout for the cwd check. The session_meta header is
+# normally line 1; 64K covers ordering tolerance without paying a full read of
+# every large rollout on every SessionStart just to discover it's another
+# project's session.
+_HEADER_PREFIX_CHARS = 64 * 1024
+
 
 def codex_sessions_root(config: Config | None = None) -> Path:
     """Resolve the Codex sessions directory: config override, $CODEX_HOME, else ~/.codex."""
@@ -91,14 +97,18 @@ def sync_codex_rollouts(
                 if cutoff and rollout.stat().st_mtime < cutoff:
                     continue
                 stats["scanned"] += 1
-                text = rollout.read_text(encoding="utf-8", errors="replace")
-                meta = _read_session_meta(text)
+                # Header check on a bounded prefix; the full (possibly large)
+                # rollout is read only once the cwd actually matches.
+                with open(rollout, encoding="utf-8", errors="replace") as f:
+                    head = f.read(_HEADER_PREFIX_CHARS)
+                meta = _read_session_meta(head)
                 if not meta:
                     continue
                 cwd = meta.get("cwd")
                 if not cwd or hash_project_path(cwd) != target_id:
                     continue
                 stats["matched"] += 1
+                text = rollout.read_text(encoding="utf-8", errors="replace")
                 session_id = str(meta.get("id") or rollout.stem)
                 result = session_capture(
                     project_path,
