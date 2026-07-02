@@ -21,6 +21,7 @@ discover the mapping via cognikernel://projects.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from memlora.config import Config
@@ -29,16 +30,24 @@ from memlora.storage.migrations import run_migrations
 
 _NOT_FOUND = "No CogniKernel data for this project. Run `memlora init <project_path>`."
 
+# project_id = SHA-256(resolved_path)[:16] — exactly 16 lowercase hex chars.
+_PROJECT_ID_RE = re.compile(r"[0-9a-f]{16}")
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _open(project_id: str, config: Config):
-    """Return (conn_cm, project_id) for a project DB identified by its hex id."""
+def _db_path(project_id: str, config: Config) -> Path | None:
+    """Validated DB path for a client-supplied project id, or None.
+
+    `project_id` arrives from an MCP resource URI, so format-validate it BEFORE
+    it becomes a filesystem path — otherwise `../` traverses out of projects_dir
+    and run_migrations would write schema into an arbitrary existing .db file.
+    """
+    if not _PROJECT_ID_RE.fullmatch(project_id):
+        return None
     db_path = config.projects_dir / f"{project_id}.db"
-    if not db_path.exists():
-        return None, None
-    return get_connection(db_path), db_path
+    return db_path if db_path.exists() else None
 
 
 def _events(conn, project_id: str, event_type: str, limit: int = 50) -> list:
@@ -116,8 +125,8 @@ def list_projects(config: Config | None = None) -> str:
 def render_constraints(project_id: str, config: Config | None = None) -> str:
     """CONSTRAINT_HARD events — decisions that must never be violated."""
     config = config or Config.load()
-    db_path = config.projects_dir / f"{project_id}.db"
-    if not db_path.exists():
+    db_path = _db_path(project_id, config)
+    if db_path is None:
         return _NOT_FOUND
     try:
         with get_connection(db_path) as conn:
@@ -136,8 +145,8 @@ def render_constraints(project_id: str, config: Config | None = None) -> str:
 def render_decisions(project_id: str, config: Config | None = None) -> str:
     """DECISION events ranked by weight — key architectural choices."""
     config = config or Config.load()
-    db_path = config.projects_dir / f"{project_id}.db"
-    if not db_path.exists():
+    db_path = _db_path(project_id, config)
+    if db_path is None:
         return _NOT_FOUND
     try:
         with get_connection(db_path) as conn:
@@ -156,8 +165,8 @@ def render_decisions(project_id: str, config: Config | None = None) -> str:
 def render_graveyard(project_id: str, config: Config | None = None) -> str:
     """APPROACH_ABANDONED_DO_NOT_RETRY — explicitly rejected, never revisit."""
     config = config or Config.load()
-    db_path = config.projects_dir / f"{project_id}.db"
-    if not db_path.exists():
+    db_path = _db_path(project_id, config)
+    if db_path is None:
         return _NOT_FOUND
     try:
         with get_connection(db_path) as conn:
@@ -176,8 +185,8 @@ def render_graveyard(project_id: str, config: Config | None = None) -> str:
 def render_threads(project_id: str, config: Config | None = None) -> str:
     """THREAD_OPEN events — active work items and open questions."""
     config = config or Config.load()
-    db_path = config.projects_dir / f"{project_id}.db"
-    if not db_path.exists():
+    db_path = _db_path(project_id, config)
+    if db_path is None:
         return _NOT_FOUND
     try:
         with get_connection(db_path) as conn:
@@ -209,8 +218,8 @@ def render_skeleton(
     read, never at store). Used by the `skeleton` MCP tool / /ck-skeleton.
     """
     config = config or Config.load()
-    db_path = config.projects_dir / f"{project_id}.db"
-    if not db_path.exists():
+    db_path = _db_path(project_id, config)
+    if db_path is None:
         return _NOT_FOUND
     try:
         with get_connection(db_path) as conn:
@@ -244,8 +253,8 @@ def render_skeleton(
 def render_state(project_id: str, config: Config | None = None) -> str:
     """Full session-start injection block for the project."""
     config = config or Config.load()
-    db_path = config.projects_dir / f"{project_id}.db"
-    if not db_path.exists():
+    db_path = _db_path(project_id, config)
+    if db_path is None:
         return _NOT_FOUND
     try:
         # Resolve project_path from meta so we can call the existing render_state.

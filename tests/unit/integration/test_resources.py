@@ -157,6 +157,23 @@ def test_render_section_unknown_returns_error(project) -> None:
     assert "Unknown section" in result
 
 
+def test_render_section_rejects_malformed_project_id(project, tmp_path: Path) -> None:
+    """L3: project_id arrives from a client-supplied resource URI. Anything but
+    16 lowercase hex chars is not-found — a `../` traversal must never become a
+    filesystem path (run_migrations would write schema into the target .db)."""
+    proj, pid, db, cfg = project
+    # An existing .db OUTSIDE projects_dir that a traversal id would reach.
+    outside = cfg.projects_dir.parent.parent / "outside.db"
+    outside.write_bytes(b"")
+    evil = "../../outside"
+    for section in ("constraints", "decisions", "graveyard", "threads", "skeleton", "state"):
+        out = render_section(evil, section, cfg)
+        assert "memlora init" in out.lower() or "no cognikernel" in out.lower()
+    assert outside.read_bytes() == b""  # never opened as SQLite, never migrated
+    # Well-formed but unknown ids still read as not-found, not as errors.
+    assert "memlora init" in render_section("0123456789abcdef", "state", cfg).lower()
+
+
 # ── MCP server registers resources ───────────────────────────────────────────
 
 def test_mcp_server_has_seven_resources() -> None:
