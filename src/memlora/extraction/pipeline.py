@@ -180,10 +180,17 @@ def _extract_session_impl(
         events.extend(mention_events)
         events.extend(schema_events)
     except Exception as exc:
+        # Propagate (M4): swallowing here acked the job through COMPLETED with
+        # zero events — a genuinely broken extractor silently lost every
+        # session's memory and the EXTRACTOR_BUG dead-letter class could never
+        # fire. The evidence is durable; callers fail_job() and the job becomes
+        # replayable once the bug is fixed. Git augmentation below stays
+        # fail-open — it is auxiliary signal, not the session's memory.
         _log.error(
             "transcript extraction failed",
             extra={"session_id": session_meta.session_id, "error": str(exc)},
         )
+        raise
 
     # ── Git augmentation ──────────────────────────────────────────────────────
     if git_diff:

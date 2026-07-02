@@ -110,6 +110,41 @@ class TestExtractSession:
         decision_events = [e for e in events if e.event_type == "DECISION"]
         assert len(decision_events) >= 1
 
+    def test_transcript_extraction_error_propagates(
+        self, meta: SessionMetadata, monkeypatch,
+    ) -> None:
+        """M4: a broken extractor must RAISE so callers fail_job → dead-letter.
+        Swallowing here acked the job through COMPLETED with zero events — a
+        silent loss of the whole session's memory, and the EXTRACTOR_BUG
+        failure class could never fire."""
+        import importlib
+        # importlib, not `import ... as`: the package __init__ re-exports the
+        # `tokenize` function, shadowing the submodule attribute of that name.
+        tokenize_mod = importlib.import_module("memlora.extraction.tokenize")
+
+        def _boom(_text: str):
+            raise RuntimeError("extractor bug")
+
+        monkeypatch.setattr(tokenize_mod, "tokenize", _boom)
+        with pytest.raises(RuntimeError, match="extractor bug"):
+            extract_session("Human: We decided to use SQLite.", meta)
+
+    def test_git_augmentation_failure_stays_fail_open(
+        self, meta: SessionMetadata, monkeypatch,
+    ) -> None:
+        """Git augmentation is auxiliary signal, not the session's memory — a
+        broken diff parser must not fail the job."""
+        import memlora.extraction.git_augment as git_mod
+
+        def _boom(*_a, **_k):
+            raise RuntimeError("diff parser bug")
+
+        monkeypatch.setattr(git_mod, "extract_git_events", _boom)
+        events = extract_session(
+            "Human: We decided to use SQLite.", meta, git_diff="--- a/x.py\n+++ b/x.py\n",
+        )
+        assert any(e.event_type == "DECISION" for e in events)
+
 
 # ── persist_events ────────────────────────────────────────────────────────────
 
