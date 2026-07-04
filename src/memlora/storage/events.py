@@ -16,7 +16,8 @@ WEIGHT_INCREMENT_ON_DEDUP: float = 0.15
 # Maximum weight any event can accumulate.
 MAX_EVENT_WEIGHT: float = 5.0
 
-# Weight below which events are archived during the decay pass.
+# Weight below which events are archived during the decay pass. Single source
+# of truth — delta.decay imports this (it previously carried its own copy).
 ARCHIVE_THRESHOLD: float = 0.05
 
 
@@ -116,39 +117,11 @@ def update_weight(conn: sqlite3.Connection, event_id: int, weight: float) -> Non
     conn.commit()
 
 
-def apply_weight_decay(
-    conn: sqlite3.Connection,
-    project_id: str,
-    factor: float,
-    exclude_session_id: str,
-    archive_threshold: float = ARCHIVE_THRESHOLD,
-) -> None:
-    """Multiply weight by factor for all non-archived events not in the current session.
-
-    Events whose weight falls below archive_threshold are then archived.
-    Called by Stage 5 (delta merge) at the end of each session.
-    """
-    conn.execute(
-        """
-        UPDATE events
-        SET weight = MAX(0.0, weight * ?)
-        WHERE project_id  = ?
-          AND session_id != ?
-          AND archived    = 0
-        """,
-        (factor, project_id, exclude_session_id),
-    )
-    conn.execute(
-        """
-        UPDATE events
-        SET archived = 1
-        WHERE project_id = ?
-          AND archived   = 0
-          AND weight     < ?
-        """,
-        (project_id, archive_threshold),
-    )
-    conn.commit()
+# NOTE: a legacy `apply_weight_decay` used to live here. It was exported but
+# never called in production, and — unlike the live decay paths
+# (delta.decay.apply_decay_pass / delta.merge._apply_decay_inner) — it archived
+# PROTECTED types (hard constraints, do-not-retry) too. Removed rather than
+# fixed: one decay implementation, one archive policy.
 
 
 def insert_extraction_failure(

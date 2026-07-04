@@ -512,6 +512,35 @@ def _cmd_install_heads(args: argparse.Namespace) -> None:
           "(optional) cross_encoder_supersession = true.")
 
 
+def _is_ck_hook_group(group: dict) -> bool:
+    """True when every command in a settings.json hook group is CK-managed."""
+    hooks = group.get("hooks") if isinstance(group, dict) else None
+    if not isinstance(hooks, list) or not hooks:
+        return False
+    return all(
+        isinstance(h, dict) and "-m memlora hook-" in str(h.get("command", ""))
+        for h in hooks
+    )
+
+
+def _merge_hooks(existing: dict | None, ck_hooks: dict) -> dict:
+    """Merge CK hook groups into existing settings.json hooks without clobbering.
+
+    Per event: user groups (anything not entirely CK-managed) are kept in place,
+    stale CK groups are dropped, and the current CK groups are appended. Events
+    CK doesn't manage pass through untouched.
+    """
+    merged: dict = {}
+    existing = existing if isinstance(existing, dict) else {}
+    for event, groups in existing.items():
+        kept = [g for g in groups if not _is_ck_hook_group(g)] if isinstance(groups, list) else groups
+        if kept:
+            merged[event] = kept
+    for event, ck_groups in ck_hooks.items():
+        merged[event] = merged.get(event, []) + ck_groups
+    return merged
+
+
 def _cmd_init(args: argparse.Namespace) -> None:
     import shutil
 
@@ -542,7 +571,7 @@ def _cmd_init(args: argparse.Namespace) -> None:
 
     settings["enableAllProjectMcpServers"] = True
     settings["autoMemoryEnabled"] = False
-    settings["hooks"] = {
+    ck_hooks = {
         "SessionStart": [
             {
                 "hooks": [
@@ -624,6 +653,11 @@ def _cmd_init(args: argparse.Namespace) -> None:
             }
         ],
     }
+    # Merge, don't clobber: re-init rewrites the CK-managed entries (so template
+    # fixes propagate) but a user's own hooks — including on events CK doesn't
+    # manage — must survive. A CK entry is any group whose every command invokes
+    # `-m memlora hook-*`.
+    settings["hooks"] = _merge_hooks(settings.get("hooks"), ck_hooks)
     settings_path.write_text(
         json.dumps(settings, indent=2), encoding="utf-8"
     )
@@ -918,7 +952,9 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     from memlora.storage.jobs import list_jobs
     from memlora.telemetry.ingest import get_cache_stats
 
-    config = Config.load()
+    # Project-aware load (H2): doctor must diagnose the same DB the hooks use,
+    # which a project-local memlora_dir override can relocate.
+    config = Config.load(project_path=args.project_path)
     project_id = hash_project_path(args.project_path)
     db_path = get_db_path(config, project_id)
 
@@ -1017,7 +1053,8 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     print("-- subsystem health -----------------------------------------")
     from memlora.integration.health import run_health_checks
     with get_connection(db_path) as conn:
-        checks = run_health_checks(conn, project_id, config)
+        checks = run_health_checks(conn, project_id, config,
+                                   project_path=args.project_path)
     for c in checks:
         mark = "OK" if c.ok else "!!"
         print(f"  [{mark}] {c.name:<12}: {c.detail}")
@@ -1060,7 +1097,9 @@ def _cmd_reset(args: argparse.Namespace) -> None:
     from memlora.storage.connection import get_connection, get_db_path, hash_project_path
     from memlora.storage.migrations import run_migrations
 
-    config = Config.load()
+    # Project-aware load (H2): reset must clear the DB the hooks write to, not
+    # the default-dir DB a project-local memlora_dir override moved away from.
+    config = Config.load(project_path=args.project_path)
     project_id = hash_project_path(args.project_path)
     db_path = get_db_path(config, project_id)
 
@@ -1095,7 +1134,7 @@ def _cmd_reset(args: argparse.Namespace) -> None:
         )
         conn.commit()
 
-    print(f"Reset complete for project {project_id} (all 16 data tables cleared).")
+    print(f"Reset complete for project {project_id} (all 17 data tables cleared).")
 
 
 def _cmd_failures(args: argparse.Namespace) -> None:
@@ -1106,7 +1145,7 @@ def _cmd_failures(args: argparse.Namespace) -> None:
     from memlora.storage.jobs import list_jobs
     from memlora.storage.migrations import run_migrations
 
-    config = Config.load()
+    config = Config.load(project_path=args.project_path)
     project_id = hash_project_path(args.project_path)
     db_path = get_db_path(config, project_id)
 
@@ -1167,7 +1206,7 @@ def _cmd_failures(args: argparse.Namespace) -> None:
 
 def _cmd_rebuild(args: argparse.Namespace) -> None:
     from memlora.integration.session import rebuild_from_raw
-    config = Config.load()
+    config = Config.load(project_path=args.project_path)
     stats = rebuild_from_raw(
         project_path=args.project_path,
         since_evidence_id=args.since,

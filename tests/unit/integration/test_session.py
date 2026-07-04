@@ -303,3 +303,34 @@ class TestReplayJob:
 
         with pytest.raises(ValueError, match="Unknown extraction job"):
             replay_job(project_path, 99999, config=cfg)
+
+
+# ── cursor monotonic guard (F7, manual replay path) ───────────────────────────
+
+class TestSessionEndCursorMonotonicGuard:
+    def test_old_transcript_does_not_rewind_cursor(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        """`failures --replay` re-enters session_end with an OLD reconstructed
+        transcript. The ingest cursor must never move backwards — process_jobs
+        already guards this; session_end must too."""
+        from memlora.storage.cursors import get_cursor
+
+        init_project(project_path, config=cfg)
+        project_id = hash_project_path(project_path)
+        db_path = get_db_path(cfg, project_id)
+
+        lines = [
+            json.dumps({"type": "user", "message": {"content": f"note {i}"}})
+            for i in range(30)
+        ]
+        session_end(project_path, "sess-guard", "\n".join(lines), config=cfg)
+        with get_connection(db_path) as conn:
+            cursor = get_cursor(conn, project_id, "sess-guard")
+        assert cursor is not None and cursor.last_line_count == 30
+
+        # Replay a shorter (older) transcript for the same session.
+        session_end(project_path, "sess-guard", "\n".join(lines[:10]), config=cfg)
+        with get_connection(db_path) as conn:
+            cursor = get_cursor(conn, project_id, "sess-guard")
+        assert cursor is not None and cursor.last_line_count == 30  # not rewound

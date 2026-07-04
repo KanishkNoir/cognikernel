@@ -13,6 +13,7 @@ import pytest
 
 from memlora.config import Config
 from memlora.integration.health import (
+    check_config,
     check_embedding,
     check_schema_version,
     check_worker_queue,
@@ -68,6 +69,30 @@ class TestHealthChecks:
         assert check.ok
         assert "disabled" in check.detail
 
+    def test_config_typo_is_unhealthy(self, tmp_path: Path, monkeypatch) -> None:
+        """H1: a typo'd project config degrades hooks silently (Config.load is
+        fail-open) — the config check is what makes that degradation visible."""
+        monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
+        proj = tmp_path / "proj"
+        (proj / ".memlora").mkdir(parents=True)
+        (proj / ".memlora" / "config.toml").write_text(
+            'hook_policy = "Strict"\n',  # case typo — not a valid policy
+            encoding="utf-8",
+        )
+        check = check_config(str(proj))
+        assert not check.ok
+        assert "hook_policy" in check.detail
+
+    def test_config_clean_is_healthy(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
+        proj = tmp_path / "proj"
+        (proj / ".memlora").mkdir(parents=True)
+        (proj / ".memlora" / "config.toml").write_text(
+            'hook_policy = "strict"\n', encoding="utf-8",
+        )
+        check = check_config(str(proj))
+        assert check.ok
+
 
 class TestDoctorStrict:
     def _init(self, tmp_path: Path, monkeypatch):
@@ -114,3 +139,19 @@ class TestDoctorStrict:
                 fail_job(conn, jid, "EXTRACTOR_BUG", "boom")
         # Default doctor is informational: reports DEGRADED but exits 0.
         _cmd_doctor(argparse.Namespace(project_path=str(proj), strict=False))
+
+    def test_strict_exits_nonzero_on_config_typo(self, tmp_path: Path, monkeypatch) -> None:
+        """The full H1 chain: a typo'd project config no longer kills the hooks
+        (fail-open per key) AND doctor --strict now sees it and fails."""
+        from memlora.integration.cli import _cmd_doctor
+
+        proj, _, _ = self._init(tmp_path, monkeypatch)
+        (proj / ".memlora").mkdir(exist_ok=True)
+        (proj / ".memlora" / "config.toml").write_text(
+            'extractor = "v3"\n',  # not a valid backend
+            encoding="utf-8",
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            _cmd_doctor(argparse.Namespace(project_path=str(proj), strict=True))
+        assert exc_info.value.code == 1

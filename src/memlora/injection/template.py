@@ -413,7 +413,9 @@ def generate_summary(ctx: InjectionContext) -> str:
 # ── token counting ────────────────────────────────────────────────────────────
 
 def count_tokens_accurate(text: str) -> int:
-    """Token count via the single canonical counter (tiktoken cl100k_base).
+    """Token count via the single canonical counter (len/4 heuristic by
+    default; exact tiktoken cl100k_base when the optional `tokens` extra is
+    installed).
 
     Delegates to `compression.token_count.count_tokens` so the renderer and
     `greedy_fill` share one counter (and one cached encoder) rather than two

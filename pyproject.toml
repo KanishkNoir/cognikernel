@@ -16,8 +16,13 @@ dependencies = [
 
 # Optional local semantic layer (config.embedding_enabled). Off by default;
 # supersession degrades to lexical matching when not installed.
+# `tokens`: exact cl100k_base token counting for the injection budgets; without
+# it the single canonical counter uses the len/4 heuristic (see
+# compression/token_count.py) — budgets are calibrated against the counter as
+# deployed either way.
 [project.optional-dependencies]
 embedding = ["fastembed>=0.3", "numpy>=1.24"]
+tokens = ["tiktoken>=0.5"]
 
 [project.scripts]
 memlora = "memlora.integration.cli:main"

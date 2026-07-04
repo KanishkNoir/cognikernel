@@ -1,10 +1,14 @@
 """Token counting — the single counter used by both selection and enforcement.
 
-`count_tokens` is the one canonical implementation (tiktoken `cl100k_base`, with a
-len/4 fallback if tiktoken is unavailable). The encoder is loaded once and cached.
-`greedy_fill` (via `estimate_tokens`) and the renderer (via
-`injection.template.count_tokens_accurate`, which delegates here) now agree on the
+`count_tokens` is the one canonical implementation. In a default install it is
+the len/4 heuristic: tiktoken is NOT a dependency (install the `tokens` extra —
+or tiktoken directly — to get exact `cl100k_base` counts; the encoder is then
+loaded once and cached). What matters for correctness is that `greedy_fill`
+(via `estimate_tokens`) and the renderer (via
+`injection.template.count_tokens_accurate`, which delegates here) agree on ONE
 unit — previously selection used len/4 while enforcement used tiktoken.
+Budgets (config.token_budget et al.) are calibrated against this counter as
+deployed, i.e. the heuristic unless tiktoken is present.
 """
 from __future__ import annotations
 

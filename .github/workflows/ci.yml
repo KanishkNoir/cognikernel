@@ -36,11 +36,19 @@ jobs:
         run: uv run lint-imports
 
   test:
-    runs-on: ubuntu-latest
+    # windows-latest is in the matrix because the platform-specific machinery
+    # (Job Object worker teardown, ctypes pid liveness, cp1252 console
+    # handling, path canonicalization) is exactly the code a linux-only matrix
+    # never exercises. One Windows leg (newest Python) keeps CI cost bounded.
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12"]
+        include:
+          - os: windows-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
       - name: Install uv

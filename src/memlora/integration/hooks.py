@@ -231,7 +231,9 @@ def posttool_grep_main() -> None:
         from memlora.storage.grep_cache import store_grep_result
         from memlora.storage.migrations import run_migrations
 
-        cfg = Config.load()
+        # Project-aware load (M5): grep_cache_enabled is documented as a
+        # per-project key; loading only the global file made the overlay dead.
+        cfg = Config.load(project_path=cwd)
         if not cfg.grep_cache_enabled:
             return
         project_id = hash_project_path(cwd)
@@ -307,7 +309,7 @@ def session_start_main() -> None:
         except Exception:
             pass
     except Exception as exc:
-        _log_swallowed("pretool", exc)  # never block Claude
+        _log_swallowed("session_start", exc)  # never block Claude
 
 
 # ── PreToolUse (Read gate + optional Grep cache) ──────────────────────────────
@@ -330,12 +332,26 @@ def pretool_main() -> None:
         _pretool("allow")
 
 
+def _is_partial_read(tool_input: dict) -> bool:
+    """True when a Read targets a slice (offset/limit), not the whole file.
+
+    Partial reads are exempt from the gate AND from read-cache recording: the
+    re-read denial's premise ("the content is in your context") does not hold
+    for a slice, and a recorded slice would wrongly deny the later read of the
+    rest of a large file.
+    """
+    return tool_input.get("offset") is not None or tool_input.get("limit") is not None
+
+
 def _pretool_read(payload: dict) -> None:
     tool_input = payload.get("tool_input", {})
     file_path = tool_input.get("file_path", "")
     session_id = payload.get("session_id", "")
     cwd = payload.get("cwd", "")
     if not file_path:
+        _pretool("allow")
+        return
+    if _is_partial_read(tool_input):
         _pretool("allow")
         return
     try:
@@ -454,7 +470,9 @@ def _pretool_grep(payload: dict) -> None:
         from memlora.storage.grep_cache import lookup_grep_result
         from memlora.storage.migrations import run_migrations
 
-        cfg = Config.load()
+        # Project-aware load (M5): must see the same overlay the PostToolUse
+        # storage path sees, or the cache is written but never served.
+        cfg = Config.load(project_path=cwd)
         if not cfg.grep_cache_enabled:
             _pretool("allow")
             return
@@ -541,6 +559,8 @@ def posttool_read_main() -> None:
     cwd = payload.get("cwd", "")
     if not file_path or not session_id:
         return
+    if _is_partial_read(tool_input):
+        return  # slices don't establish "this file is in context"
     try:
         from memlora.config import Config
         from memlora.integration.lookup import resolve_post_read_outcome

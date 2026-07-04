@@ -4,11 +4,9 @@ from typing import Any
 import pytest
 
 from memlora.storage.events import (
-    ARCHIVE_THRESHOLD,
     VALID_EVENT_TYPES,
     WEIGHT_INCREMENT_ON_DEDUP,
     Event,
-    apply_weight_decay,
     get_event_by_id,
     get_events_by_session,
     get_events_by_type,
@@ -165,55 +163,10 @@ class TestUpdateWeight:
         assert stored.weight == pytest.approx(0.0)
 
 
-# ── apply_weight_decay ────────────────────────────────────────────────────────
-
-class TestApplyWeightDecay:
-    def test_decays_other_session_events(self, conn: sqlite3.Connection) -> None:
-        e = make_event(session_id="old_sess", content_hash="h1", weight=1.0)
-        row_id = insert_event(conn, e)
-        apply_weight_decay(conn, "proj1", factor=0.92, exclude_session_id="new_sess")
-        stored = get_event_by_id(conn, row_id)
-        assert stored is not None
-        assert stored.weight == pytest.approx(0.92)
-
-    def test_does_not_decay_current_session(self, conn: sqlite3.Connection) -> None:
-        e = make_event(session_id="curr", content_hash="h1", weight=1.0)
-        row_id = insert_event(conn, e)
-        apply_weight_decay(conn, "proj1", factor=0.92, exclude_session_id="curr")
-        stored = get_event_by_id(conn, row_id)
-        assert stored is not None
-        assert stored.weight == pytest.approx(1.0)
-
-    def test_archives_below_threshold(self, conn: sqlite3.Connection) -> None:
-        e = make_event(session_id="old", content_hash="h1", weight=1.0)
-        row_id = insert_event(conn, e)
-        conn.execute("UPDATE events SET weight = 0.04 WHERE id = ?", (row_id,))
-        conn.commit()
-        apply_weight_decay(
-            conn, "proj1", factor=0.92,
-            exclude_session_id="new", archive_threshold=ARCHIVE_THRESHOLD,
-        )
-        stored = get_event_by_id(conn, row_id)
-        assert stored is not None
-        assert stored.archived is True
-
-    def test_does_not_archive_above_threshold(self, conn: sqlite3.Connection) -> None:
-        e = make_event(session_id="old", content_hash="h1", weight=1.0)
-        row_id = insert_event(conn, e)
-        apply_weight_decay(conn, "proj1", factor=0.92, exclude_session_id="new")
-        stored = get_event_by_id(conn, row_id)
-        assert stored is not None
-        assert stored.archived is False
-
-    def test_weight_never_goes_negative(self, conn: sqlite3.Connection) -> None:
-        e = make_event(session_id="old", content_hash="h1", weight=0.001)
-        row_id = insert_event(conn, e)
-        conn.execute("UPDATE events SET weight = 0.001 WHERE id = ?", (row_id,))
-        conn.commit()
-        apply_weight_decay(conn, "proj1", factor=0.0, exclude_session_id="new")
-        stored = get_event_by_id(conn, row_id)
-        assert stored is not None
-        assert stored.weight >= 0.0
+# NOTE: the legacy `apply_weight_decay` (and its tests) were removed — it was
+# uncalled in production and archived protected types. The live decay behavior
+# is covered by tests/unit/delta/test_decay.py (apply_decay_pass) and
+# tests/unit/delta/test_merge.py (_apply_decay_inner via execute_merge).
 
 
 # ── get_events_for_projection ─────────────────────────────────────────────────
