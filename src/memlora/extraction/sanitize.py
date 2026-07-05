@@ -20,6 +20,23 @@ _MAX_RATIONALE = 120
 # Block-level markdown patterns — applied per line, drop or strip the whole line.
 _TABLE_ROW = re.compile(r"^\s*\|.+\|\s*$")
 _TABLE_SEP  = re.compile(r"^\s*\|[-| :]+\|\s*$")
+
+# Windowed table debris: extraction windows straddle a markdown table boundary
+# and collapse header + separator + id cells onto the front of a content cell,
+# all on ONE line ending in prose — so _TABLE_ROW (which needs a trailing `|`)
+# never fires and the scaffolding leaks into the stored description
+# ("| # | Invariant | |---|---| | O1 | Every status transition logs …").
+# Signature: a separator run `|---|` OR `| |` empty-cell joints embedded mid-line.
+_TABLE_SEP_FRAGMENT = re.compile(r"\|\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?")
+_TABLE_DEBRIS_SIGNAL = re.compile(r"\|\s*:?-{2,}|\|\s*\|")
+# A scaffolding cell: empty, a bare id/enumerator (#, C1, S12, O3, D5), or a
+# short header word with no sentence content. NOT applied to substantive cells.
+_SCAFFOLD_CELL = re.compile(
+    r"^(?:#|[A-Z]{1,3}\d{1,3}|invariant|why|decision|rule|status|id|option|"
+    r"consequence|notes?|value|key|field|column|type)$",
+    re.IGNORECASE,
+)
+_CONTENT_WORD = re.compile(r"[A-Za-z0-9]{3,}")
 _CODE_FENCE = re.compile(r"^```.*$")
 _HEADING    = re.compile(r"^#{1,6}\s+")
 _BULLET     = re.compile(r"^[-*•]\s+")
@@ -155,6 +172,7 @@ def _clean(text: str) -> str:
             continue
         if _TABLE_ROW.match(line) or _TABLE_SEP.match(line):
             continue
+        line = _strip_table_scaffolding(line)
         line = _BLOCKQUOTE.sub("", line)
         line = _HEADING.sub("", line)
         line = _BULLET.sub("", line)
@@ -164,6 +182,39 @@ def _clean(text: str) -> str:
             kept.append(line)
 
     return " ".join(kept)
+
+
+def _strip_table_scaffolding(line: str) -> str:
+    """Strip collapsed markdown-table debris from a mixed table+prose line.
+
+    Only fires when the line carries an unambiguous table signal (a `|---|`
+    separator run or `| |` empty-cell joint) — plain prose that merely contains
+    a pipe (`str | None`, `A | B union`) has neither and is returned untouched.
+    When it fires: drop separator runs, split on `|`, discard scaffolding cells
+    (empty, bare ids like `S2`/`#`, short header words), and keep the
+    substantive cells (>= 4 content words, i.e. real facts), rejoined as prose.
+    """
+    if "|" not in line or not _TABLE_DEBRIS_SIGNAL.search(line):
+        return line
+    without_sep = _TABLE_SEP_FRAGMENT.sub("|", line)
+    cells = [c.strip() for c in without_sep.split("|")]
+    kept = [
+        c for c in cells
+        if c and not _SCAFFOLD_CELL.match(c)
+        and len(_CONTENT_WORD.findall(c)) >= _MIN_CONTENT_WORDS_TABLE
+    ]
+    if not kept:
+        # Nothing substantive survived (a pure scaffolding line the block guard
+        # missed) — drop to empty so the caller skips it.
+        return ""
+    joined = ". ".join(kept)
+    # Avoid doubled terminators when a cell already ended in punctuation.
+    return re.sub(r"([.!?])\.\s", r"\1 ", joined)
+
+
+# 4 content words = a real fact cell, matching the pipeline's _MIN_CONTENT_WORDS
+# floor; short id/header cells fall below it.
+_MIN_CONTENT_WORDS_TABLE = 4
 
 
 def _strip_inline_markdown(line: str) -> str:
