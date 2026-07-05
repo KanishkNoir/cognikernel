@@ -153,6 +153,35 @@ SENTENCE_CELLS = [
      "Chat-style user messages with NO durable project fact: reactions, small questions, banter, vague acks.",
      ["hmm ok what does that flag actually do",
       "looks good ship it", "wait why is that test failing now"]),
+    # ── ADVERSARIAL cells (Tier 3b) — the exact top confusions from the error
+    # audit. These CONTAIN decision-shaped content but are NOISE by frame, and
+    # isolated-sentence volume cannot teach the boundary; contrastive examples can.
+    ("NOISE", "meta_wrapped",
+     "A sentence that QUOTES or REFERENCES an existing decision inside memory/recall/"
+     "narration framing, rather than stating a new project fact. The wrapped content "
+     "looks like a decision but the sentence is meta-commentary about prior memory. "
+     "These are the model's highest-confidence errors — make them realistic.",
+     ["The recall surfaces the earlier decision to standardize on Postgres over SQLite.",
+      "As the session notes already record, we ruled out Celery — no need to revisit it.",
+      "Memory lists 'all monetary amounts are integer cents' as an established hard rule.",
+      "The prior context confirms the argon2id migration was locked in last session."]),
+    ("NOISE", "instruction_factish",
+     "A USER directive/request that mentions decision-shaped nouns but is an imperative "
+     "ASK for work, not a stated decision. Must read as a task request, not a fact.",
+     ["List every hard constraint and operational invariant we should lock in now.",
+      "Propose the schema and note which columns must be UUID primary keys.",
+      "Walk through the retry policy and confirm where max_attempts actually lives."]),
+    ("NOISE", "description_present_tense",
+     "Present-tense prose DESCRIBING how the system currently behaves — explanatory, "
+     "NOT a decree. Same topics as hard rules but stated as description of behavior.",
+     ["Groups are tier-isolated, so a request to the frontier group falls through to the cheap group only when every frontier target is down.",
+      "The limiter reads the configured caps at startup and caches them in-process, so no Redis lookup happens on the hot path."]),
+    ("CONSTRAINT_HARD", "rule_present_tense",
+     "The DECREED-rule twin of description_present_tense: same topic/vocabulary but "
+     "an inviolable rule (must/never/always). Pairs adversarially with the description "
+     "cell so the model learns decree-vs-description, not topic.",
+     ["A request must never fall through from the frontier group to the cheap group — explicit tier selection fails loudly instead.",
+      "The rate limiter must read its caps from Redis on every window, never from an in-process cache that drifts across instances."]),
 ]
 
 PAIR_CELLS = [

@@ -243,12 +243,16 @@ def build_salience() -> list[dict]:
         add(text, label, register, "curated", "seed")
 
     # Manual tier BEFORE mining: add() dedups by text, and a hand-assigned label
-    # must win over a gold/register auto-label for the same sentence.
+    # must win over a gold/register auto-label for the same sentence. Text is
+    # re-run through the CURRENT sanitizer so the eval reflects what the pipeline
+    # produces today — manual_labels.jsonl was captured before the table-
+    # scaffolding fix, so its table_row items still carry raw debris otherwise.
     manual = OUT_DIR / "manual_labels.jsonl"
     if manual.exists():
         for line in manual.read_text(encoding="utf-8").splitlines():
             it = json.loads(line)
-            add(it["text"], it["label"], it["register"], it.get("source", "manual"), "manual")
+            clean = sanitize_description(it["text"]) or it["text"]
+            add(clean, it["label"], it["register"], it.get("source", "manual"), "manual")
 
     per_bucket_cap = 25
     bucket_counts: dict[tuple, int] = {}

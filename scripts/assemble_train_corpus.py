@@ -72,6 +72,15 @@ def signature(text: str) -> frozenset:
 
 
 def main() -> None:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--suffix", default="",
+                    help="write train_sentences<suffix>.jsonl / train_pairs<suffix>.jsonl "
+                         "instead of the default names — lets an adversarial corpus be "
+                         "assembled WITHOUT overwriting a corpus a running sweep depends on.")
+    args = ap.parse_args()
+    sfx = args.suffix
+
     eval_sets = eval_token_sets()
     print(f"eval texts loaded for decontamination: {len(eval_sets)}")
 
@@ -114,10 +123,10 @@ def main() -> None:
         seen_pair.add(key)
         out_p.append(it)
 
-    with open(CORPUS / "train_sentences.jsonl", "w", encoding="utf-8") as f:
+    with open(CORPUS / f"train_sentences{sfx}.jsonl", "w", encoding="utf-8") as f:
         for it in out_s:
             f.write(json.dumps(it, ensure_ascii=False) + "\n")
-    with open(CORPUS / "train_pairs.jsonl", "w", encoding="utf-8") as f:
+    with open(CORPUS / f"train_pairs{sfx}.jsonl", "w", encoding="utf-8") as f:
         for it in out_p:
             f.write(json.dumps(it, ensure_ascii=False) + "\n")
 

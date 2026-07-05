@@ -67,6 +67,13 @@ def main() -> int:
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--no-twins", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--extra-corpus", action="append", default=[], metavar="JSONL",
+                    help="additional {text,label} JSONL corpora (e.g. "
+                         "research/train_corpus/train_sentences.jsonl — the "
+                         "universal ADR+synthetic corpus). Joins the TRAIN split "
+                         "only; the fixed held-out stays untouched for "
+                         "comparability, and the real gate is the frozen "
+                         "research/model_eval suite (never trained on).")
     args = ap.parse_args()
 
     import numpy as np
@@ -79,15 +86,21 @@ def main() -> int:
 
     orig = _load(FIX / "salience_seed.jsonl") + _load(FIX / "salience_train_generated.jsonl")
     twins = [] if args.no_twins else _load(FIX / "salience_twins_generated.jsonl")
+    extra = []
+    for p in args.extra_corpus:
+        rows = _load(Path(p))
+        print(f"extra corpus {p}: {len(rows)} rows")
+        extra += rows
 
     # FIXED original-distribution held-out (identical to _b1_twin_ab.py) for comparability.
     rng = np.random.default_rng(0)
     idx = rng.permutation(len(orig))
     n_hold = int(len(orig) * 0.2)
     hold, train = idx[:n_hold].tolist(), idx[n_hold:].tolist()
-    train_rows = [orig[i] for i in train] + twins
+    train_rows = [orig[i] for i in train] + twins + extra
     hold_rows = [orig[i] for i in hold]
-    print(f"orig={len(orig)} twins={len(twins)} | train={len(train_rows)} held-out={len(hold_rows)}")
+    print(f"orig={len(orig)} twins={len(twins)} extra={len(extra)} | "
+          f"train={len(train_rows)} held-out={len(hold_rows)}")
 
     ds_train = Dataset.from_dict({"text": [t for t, _ in train_rows],
                                   "label": [l for _, l in train_rows]})

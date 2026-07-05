@@ -96,6 +96,23 @@ def _load_corpus():
     return rows
 
 
+def _load_extra(path: Path):
+    """Load a {new_text, old_text, label} corpus (research/train_corpus schema).
+
+    Direction convention matches the runtime predicate prob_supersedes(new, old):
+    a = the newer statement, b = the older one it may supersede.
+    """
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        r = json.loads(line)
+        if r.get("new_text") and r.get("old_text") and r.get("label") in (0, 1):
+            rows.append((r["new_text"], r["old_text"], int(r["label"])))
+    return rows
+
+
 def _gold_pairs():
     gold = json.loads(_GOLD.read_text(encoding="utf-8"))
     rel = gold["relations"]
@@ -137,6 +154,13 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--val", type=float, default=0.15)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--extra-corpus", action="append", default=[], metavar="JSONL",
+                    help="additional {new_text,old_text,label} pair corpora (e.g. "
+                         "research/train_corpus/train_pairs.jsonl). Joins BEFORE "
+                         "the train/val split so the precision-biased threshold "
+                         "is chosen on the full mixed distribution (restatement "
+                         "negatives included). The frozen research/model_eval "
+                         "suite stays the untrained-on gate.")
     args = ap.parse_args()
 
     import numpy as np
@@ -148,6 +172,10 @@ def main() -> int:
     np.random.seed(args.seed)
 
     rows = _load_corpus()
+    for p in args.extra_corpus:
+        extra = _load_extra(Path(p))
+        print(f"extra corpus {p}: {len(extra)} pairs")
+        rows += extra
     rng = np.random.default_rng(args.seed)
     idx = rng.permutation(len(rows))
     n_val = int(len(rows) * args.val)

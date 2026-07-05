@@ -80,6 +80,26 @@ def eval_salience(items: list[dict], head, head_name: str) -> dict:
             reg[0] += 1
     n = len(y_true)
     acc = sum(t == p for t, p in zip(y_true, y_pred)) / n if n else 0.0
+
+    # Deployment view (Tier 4): what actually costs us downstream is not the
+    # 6-way accuracy but two binary quantities —
+    #   capture_recall  : of all real signal (non-NOISE gold), how much did we
+    #                     KEEP (predict any non-NOISE)? A HARD->DECISION mistype
+    #                     still captures the fact; only signal->NOISE loses it.
+    #   false_capture   : of all NOISE gold, how much did we wrongly capture as
+    #                     signal (the weight machinery must then suppress it)?
+    #   typing_accuracy : among captured signal, fraction typed correctly.
+    sig_total = sum(1 for t in y_true if t != "NOISE")
+    sig_captured = sum(1 for t, p in zip(y_true, y_pred) if t != "NOISE" and p != "NOISE")
+    sig_typed_ok = sum(1 for t, p in zip(y_true, y_pred) if t != "NOISE" and p == t)
+    noise_total = sum(1 for t in y_true if t == "NOISE")
+    noise_captured = sum(1 for t, p in zip(y_true, y_pred) if t == "NOISE" and p != "NOISE")
+    deployment = {
+        "capture_recall": round(sig_captured / sig_total, 3) if sig_total else 0.0,
+        "false_capture_rate": round(noise_captured / noise_total, 3) if noise_total else 0.0,
+        "typing_accuracy_of_captured": round(sig_typed_ok / sig_captured, 3) if sig_captured else 0.0,
+        "signal_n": sig_total, "noise_n": noise_total,
+    }
     per_label = {}
     f1s = []
     for lab in LABELS:
@@ -101,6 +121,7 @@ def eval_salience(items: list[dict], head, head_name: str) -> dict:
         "accuracy": round(acc, 3),
         "macro_f1": round(sum(f1s) / len(f1s), 3) if f1s else 0.0,
         "mean_confidence": round(sum(confs) / n, 3) if n else 0.0,
+        "deployment_view": deployment,
         "per_label": per_label,
         "per_register_accuracy": {
             r: {"acc": round(c / t, 3), "n": t} for r, (c, t) in sorted(per_register.items())
@@ -236,6 +257,11 @@ def main() -> None:
             continue
         print(f"\n{name}: acc={r['accuracy']} macro_f1={r['macro_f1']} "
               f"(n={r['n_scored']}, none={r['none_returns']})")
+        dv = r.get("deployment_view", {})
+        if dv:
+            print(f"    deployment: capture_recall={dv['capture_recall']} "
+                  f"false_capture={dv['false_capture_rate']} "
+                  f"typing_acc={dv['typing_accuracy_of_captured']}")
         for lab, m in r["per_label"].items():
             print(f"    {lab:34} P={m['precision']:.2f} R={m['recall']:.2f} F1={m['f1']:.2f} n={m['support']}")
     sup = report["supersession"]
