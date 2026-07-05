@@ -57,7 +57,7 @@ def main() -> None:
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        args.base, torch_dtype=torch.float32, trust_remote_code=True)
+        args.base, dtype=torch.float32, trust_remote_code=True)
 
     ds = load_dataset("json", data_files=args.data, split="train")
 
@@ -79,6 +79,8 @@ def main() -> None:
         learning_rate=args.lr, max_length=args.max_seq, logging_steps=20,
         save_strategy="no", report_to="none", seed=args.seed,
         completion_only_loss=True,  # loss on the <thought><action> completion only
+        use_cpu=True, bf16=False, fp16=False,  # CPU training (no GPU here)
+        dataloader_num_workers=0,  # avoid Windows multiprocessing teardown noise
     )
     trainer = SFTTrainer(model=model, args=cfg, train_dataset=ds, peft_config=lora)
     trainer.train()
