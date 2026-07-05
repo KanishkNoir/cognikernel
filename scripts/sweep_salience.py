@@ -43,6 +43,7 @@ EXPORT_DEPS = TRAIN_DEPS + ["--with", "onnx", "--with", "onnxruntime"]
 
 _BASE = ["--extra-corpus", "research/train_corpus/train_sentences.jsonl"]
 _ADV = ["--extra-corpus", "research/train_corpus/train_sentences_adv.jsonl"]
+_HUM = ["--extra-corpus", "research/train_corpus/train_sentences_hum.jsonl"]
 
 # name -> FULL train args (recipe + corpus). Recipe configs vary one axis at a
 # time on the base corpus; `adv*` configs hold the recipe and swap in the
@@ -55,6 +56,8 @@ ALL_CONFIGS = {
     "s4000_b16": ["--max-steps", "4000", "--batch", "16", *_BASE],
     # adversarial-data experiment at the better-balanced 800-step recipe.
     "adv800":    ["--max-steps", "800", "--batch", "16", *_ADV],
+    # humanized-data experiment (Spike A1) at the same 800-step recipe.
+    "hum800":    ["--max-steps", "800", "--batch", "16", *_HUM],
 }
 
 

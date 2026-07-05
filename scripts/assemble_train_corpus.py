@@ -78,6 +78,9 @@ def main() -> None:
                     help="write train_sentences<suffix>.jsonl / train_pairs<suffix>.jsonl "
                          "instead of the default names — lets an adversarial corpus be "
                          "assembled WITHOUT overwriting a corpus a running sweep depends on.")
+    ap.add_argument("--include-humanized", action="store_true",
+                    help="fold humanized_sentences.jsonl (messy real-developer register) "
+                         "into the sentence sources (Spike A1).")
     args = ap.parse_args()
     sfx = args.suffix
 
@@ -86,6 +89,10 @@ def main() -> None:
 
     # ── sentences ────────────────────────────────────────────────────────────
     sents = load("mined_adr_sentences.jsonl") + load("synth_sentences.jsonl")
+    if args.include_humanized:
+        hum = load("humanized_sentences.jsonl")
+        print(f"including {len(hum)} humanized sentences")
+        sents += hum
     out_s: list[dict] = []
     seen_sigs: set[frozenset] = set()
     dropped = Counter()
@@ -95,7 +102,13 @@ def main() -> None:
             dropped["too_short"] += 1
             continue
         sig = signature(text)
-        if not sig or sig in seen_sigs:
+        # A humanized item shares content tokens with its clean original by
+        # design (same fact, messy register), so it near-dups it. That is
+        # legitimate augmentation — keep BOTH — so humanized items are exempt
+        # from the near-dup drop (still deduped against OTHER humanized items via
+        # exact-text, and still eval-decontaminated).
+        is_hum = str(it.get("source", "")).startswith("humanized:")
+        if not sig or (sig in seen_sigs and not is_hum):
             dropped["near_dup"] += 1
             continue
         if contaminated(text, eval_sets):
