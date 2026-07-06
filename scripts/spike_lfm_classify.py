@@ -52,20 +52,36 @@ _ALIAS = {
 }
 
 
-def _norm(raw: str) -> str:
-    up = raw.strip().upper()
-    for lab in LABELS:  # longest/explicit match first
+import re as _re
+_ACTION_RE = _re.compile(r"<action>\s*(.*?)\s*</action>", _re.I | _re.S)
+
+
+def _norm(raw: str, cot: bool = False) -> str:
+    # CoT models emit "<thought>…</thought><action>LABEL</action>" — parse the
+    # ACTION tag, never scan the whole string (the <thought> text mentions other
+    # label words and a naive scan collapses everything to the first match).
+    if cot:
+        m = _ACTION_RE.search(raw)
+        seg = m.group(1) if m else raw.split("</thought>")[-1]
+        up = seg.strip().upper()
+    else:
+        up = raw.strip().upper()
+    for lab in LABELS:
         if lab in up:
             return lab
     tok = up.split()[0].replace(",", "").replace(".", "") if up.split() else ""
     tok = _ALIAS.get(tok, tok)
-    return tok if tok in LABELS else "NOISE"  # unparseable -> NOISE (conservative)
+    return tok if tok in LABELS else "NOISE"
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-dir", default="models/lfm2.5-230m-genai")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--cot", action="store_true",
+                    help="model was CoT-instruction-tuned: prompt with the bare "
+                         "'Sentence: X' (training format, no system) and parse "
+                         "<action>LABEL</action> from the thought/action output.")
     args = ap.parse_args()
 
     import onnxruntime_genai as og
@@ -73,17 +89,24 @@ def main() -> None:
     tok = og.Tokenizer(model)
 
     def classify(text: str) -> str:
-        prompt = (f"<|startoftext|><|im_start|>system\n{_SYSTEM}<|im_end|>\n"
-                  f"<|im_start|>user\nSentence: {text}<|im_end|>\n<|im_start|>assistant\n")
+        if args.cot:
+            # Exactly the shape cot_sft.jsonl trained on: user-only, no system.
+            prompt = (f"<|startoftext|><|im_start|>user\nSentence: {text}<|im_end|>\n"
+                      f"<|im_start|>assistant\n")
+            extra = 80  # room for <thought>… + <action>LABEL</action>
+        else:
+            prompt = (f"<|startoftext|><|im_start|>system\n{_SYSTEM}<|im_end|>\n"
+                      f"<|im_start|>user\nSentence: {text}<|im_end|>\n<|im_start|>assistant\n")
+            extra = 24
         ids = tok.encode(prompt)
         params = og.GeneratorParams(model)
-        params.set_search_options(max_length=len(ids) + 24, do_sample=False)
+        params.set_search_options(max_length=len(ids) + extra, do_sample=False)
         gen = og.Generator(model, params)
         gen.append_tokens(ids)
         while not gen.is_done():
             gen.generate_next_token()
         out = gen.get_sequence(0)[len(ids):]
-        return _norm(tok.decode(out))
+        return _norm(tok.decode(out), cot=args.cot)
 
     items = [json.loads(l) for l in DATA.read_text(encoding="utf-8").splitlines()]
     if args.limit:
