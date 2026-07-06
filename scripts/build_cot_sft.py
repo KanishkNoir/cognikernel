@@ -103,7 +103,23 @@ def main() -> None:
     ap.add_argument("--corpus", default="research/train_corpus/train_sentences_hum.jsonl")
     ap.add_argument("--per-label", type=int, default=200)
     ap.add_argument("--per-batch", type=int, default=8)
+    ap.add_argument("--realistic", action="store_true",
+                    help="sample the DEPLOYMENT class prior (NOISE-heavy) instead of "
+                         "balanced — fixes the over-capture from balanced training "
+                         "(NOISE recall 0.32 / false_capture 0.68). Writes cot_sft_real.jsonl.")
     args = ap.parse_args()
+
+    # Deployment prior is NOISE-heavy (~62% in the eval). Balanced training made
+    # the model over-capture; this preset matches reality while keeping enough
+    # minority examples to still learn the rare classes.
+    REALISTIC_CAPS = {
+        "NOISE": 450, "DECISION": 160, "CONSTRAINT_HARD": 160,
+        "CONSTRAINT_SOFT": 80, "APPROACH_ABANDONED_DO_NOT_RETRY": 80, "THREAD": 80,
+    }
+    out_name = "cot_sft_real.jsonl" if args.realistic else "cot_sft.jsonl"
+
+    def cap_for(lab: str) -> int:
+        return REALISTIC_CAPS[lab] if args.realistic else args.per_label
 
     rows = [json.loads(l) for l in Path(args.corpus).read_text(encoding="utf-8").splitlines()]
     by_label: dict[str, list] = defaultdict(list)
@@ -114,11 +130,11 @@ def main() -> None:
     for lab in LABELS:
         texts = by_label[lab]
         random.shuffle(texts)
-        for t in texts[: args.per_label]:
+        for t in texts[: cap_for(lab)]:
             sample.append((t, lab))
     random.shuffle(sample)
     print(f"building CoT for {len(sample)} examples "
-          f"({ {l: min(len(by_label[l]), args.per_label) for l in LABELS} })")
+          f"({ {l: min(len(by_label[l]), cap_for(l)) for l in LABELS} })")
 
     out = []
     calls = 0
@@ -141,10 +157,10 @@ def main() -> None:
         if (i // args.per_batch) % 20 == 0:
             print(f"  {i+len(batch)}/{len(sample)}", flush=True)
 
-    with open(CORPUS / "cot_sft.jsonl", "w", encoding="utf-8") as f:
+    with open(CORPUS / out_name, "w", encoding="utf-8") as f:
         for it in out:
             f.write(json.dumps(it, ensure_ascii=False) + "\n")
-    print(f"\nwrote {len(out)} CoT SFT examples ({calls} teacher calls) -> cot_sft.jsonl")
+    print(f"\nwrote {len(out)} CoT SFT examples ({calls} teacher calls) -> {out_name}")
     print("sample:", out[0]["messages"][1]["content"][:160])
 
 
