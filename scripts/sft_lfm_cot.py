@@ -38,10 +38,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default=BASE)
     ap.add_argument("--data", default=DATA)
-    ap.add_argument("--epochs", type=float, default=3.0)
-    ap.add_argument("--batch", type=int, default=8)
+    ap.add_argument("--epochs", type=float, default=2.0)
+    ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--lr", type=float, default=2e-4)
-    ap.add_argument("--max-seq", type=int, default=256)
+    ap.add_argument("--max-seq", type=int, default=160)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -56,8 +56,16 @@ def main() -> None:
     tok = AutoTokenizer.from_pretrained(args.base, trust_remote_code=True)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
+    # low_cpu_mem_usage avoids the transient weight-doubling on load that hit the
+    # Windows page-file limit (os error 1455) on the re-run.
     model = AutoModelForCausalLM.from_pretrained(
-        args.base, dtype=torch.float32, trust_remote_code=True)
+        args.base, dtype=torch.float32, trust_remote_code=True,
+        low_cpu_mem_usage=True)
+    # gradient checkpointing is incompatible with KV cache, and with a frozen
+    # LoRA base the inputs must be made to require grad or backprop finds nothing.
+    model.config.use_cache = False
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
 
     ds = load_dataset("json", data_files=args.data, split="train")
 
@@ -75,15 +83,23 @@ def main() -> None:
     )
     cfg = SFTConfig(
         output_dir=OUT_ADAPTER, num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch, gradient_accumulation_steps=2,
+        per_device_train_batch_size=args.batch, gradient_accumulation_steps=4,
         learning_rate=args.lr, max_length=args.max_seq, logging_steps=20,
-        save_strategy="no", report_to="none", seed=args.seed,
+        report_to="none", seed=args.seed,
         completion_only_loss=True,  # loss on the <thought><action> completion only
         use_cpu=True, bf16=False, fp16=False,  # CPU training (no GPU here)
         dataloader_num_workers=0,  # avoid Windows multiprocessing teardown noise
+        # Memory-constrained CPU box (os error 1455): checkpoint activations, and
+        # save periodically so an interrupt doesn't lose the whole run.
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        save_strategy="steps", save_steps=40, save_total_limit=1,
     )
     trainer = SFTTrainer(model=model, args=cfg, train_dataset=ds, peft_config=lora)
-    trainer.train()
+    # Resume from the last checkpoint if a prior run was interrupted (the box is
+    # memory-fragile), else start fresh.
+    ckpts = list(Path(OUT_ADAPTER).glob("checkpoint-*")) if Path(OUT_ADAPTER).exists() else []
+    trainer.train(resume_from_checkpoint=bool(ckpts))
 
     trainer.save_model(OUT_ADAPTER)
     print(f"saved LoRA adapter -> {OUT_ADAPTER}")
