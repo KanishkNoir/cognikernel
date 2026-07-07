@@ -220,6 +220,10 @@ def eval_supersession(pairs: list[dict]) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", default="run")
+    ap.add_argument("--eval-file", default="salience_eval.jsonl",
+                    help="salience eval JSONL under research/model_eval (P2 uses "
+                         "salience_eval_p2.jsonl / _p2ctx.jsonl).")
+    ap.add_argument("--skip-supersession", action="store_true")
     args = ap.parse_args()
 
     import os
@@ -228,8 +232,8 @@ def main() -> None:
     import memlora.extraction.salience as head_v1
     import memlora.extraction.salience_v2 as head_v2
 
-    sal_items = load_jsonl("salience_eval.jsonl")
-    sup_pairs = load_jsonl("supersession_eval.jsonl")
+    sal_items = load_jsonl(args.eval_file)
+    sup_pairs = [] if args.skip_supersession else load_jsonl("supersession_eval.jsonl")
 
     report = {
         "tag": args.tag,

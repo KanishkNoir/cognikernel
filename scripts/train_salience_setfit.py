@@ -66,6 +66,11 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--no-twins", action="store_true")
+    ap.add_argument("--no-fixtures", action="store_true",
+                    help="train ONLY on --extra-corpus (skip the bare-text fixtures) — "
+                         "for P2, where the fixtures would be the wrong input format "
+                         "(bare vs role+context-composed). The extra corpus must then "
+                         "carry a held-out-comparable eval itself.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--extra-corpus", action="append", default=[], metavar="JSONL",
                     help="additional {text,label} JSONL corpora (e.g. "
@@ -84,13 +89,19 @@ def main() -> int:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    orig = _load(FIX / "salience_seed.jsonl") + _load(FIX / "salience_train_generated.jsonl")
-    twins = [] if args.no_twins else _load(FIX / "salience_twins_generated.jsonl")
     extra = []
     for p in args.extra_corpus:
         rows = _load(Path(p))
         print(f"extra corpus {p}: {len(rows)} rows")
         extra += rows
+    if args.no_fixtures:
+        # P2: the extra corpus is already the full, correctly-composed training set
+        # (role+context pre-baked into the text). Route it through the SAME split
+        # flow as orig so the training/held-out logic below is unchanged.
+        orig, twins, extra = extra, [], []
+    else:
+        orig = _load(FIX / "salience_seed.jsonl") + _load(FIX / "salience_train_generated.jsonl")
+        twins = [] if args.no_twins else _load(FIX / "salience_twins_generated.jsonl")
 
     # FIXED original-distribution held-out (identical to _b1_twin_ab.py) for comparability.
     rng = np.random.default_rng(0)
