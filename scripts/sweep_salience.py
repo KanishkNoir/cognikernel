@@ -44,6 +44,7 @@ EXPORT_DEPS = TRAIN_DEPS + ["--with", "onnx", "--with", "onnxruntime"]
 _BASE = ["--extra-corpus", "research/train_corpus/train_sentences.jsonl"]
 _ADV = ["--extra-corpus", "research/train_corpus/train_sentences_adv.jsonl"]
 _HUM = ["--extra-corpus", "research/train_corpus/train_sentences_hum.jsonl"]
+_BOOST = ["--extra-corpus", "research/train_corpus/train_sentences_boost.jsonl"]
 
 # name -> FULL train args (recipe + corpus). Recipe configs vary one axis at a
 # time on the base corpus; `adv*` configs hold the recipe and swap in the
@@ -58,6 +59,9 @@ ALL_CONFIGS = {
     "adv800":    ["--max-steps", "800", "--batch", "16", *_ADV],
     # humanized-data experiment (Spike A1) at the same 800-step recipe.
     "hum800":    ["--max-steps", "800", "--batch", "16", *_HUM],
+    # P0-driven: thin-class boost (THREAD/ABANDONED/SOFT) — targets the biggest
+    # measured model-vs-ceiling gap (THREAD recall 0.08 vs 0.96).
+    "boost800":  ["--max-steps", "800", "--batch", "16", *_BOOST],
 }
 
 

@@ -182,6 +182,34 @@ SENTENCE_CELLS = [
      "cell so the model learns decree-vs-description, not topic.",
      ["A request must never fall through from the frontier group to the cheap group — explicit tier selection fails loudly instead.",
       "The rate limiter must read its caps from Redis on every window, never from an in-process cache that drifts across instances."]),
+    # ── THIN-CLASS BOOST (P0) — THREAD recall is 0.08 vs a 0.96 annotator ceiling.
+    # Emphasize what separates these from NOISE: THREAD = concrete UNFINISHED work
+    # with a state/next-step; not narration or a question.
+    ("THREAD", "open_work",
+     "An OPEN work item: something concretely unfinished with its state — 'X is done, "
+     "Y still remains', 'next session: Z', 'half-built', 'not yet wired'. Must name the "
+     "actual pending work, not narrate or ask a question.",
+     ["Auth models and hashing are in; the login endpoint and refresh flow are the pending pieces for next session.",
+      "The outbox relay is stubbed but the SELECT FOR UPDATE SKIP LOCKED claim loop isn't wired yet.",
+      "Next session: implement route() for the non-streaming path, then extend to streaming.",
+      "Schema migration is written; the data backfill script still needs doing."]),
+    ("THREAD", "open_work_casual",
+     "Chat-style open-work note from the user — informal but names concrete pending work.",
+     ["signup + jwt work now, still gotta do email verification and the reset flow next time",
+      "got the worker claiming jobs, outbox sender is the half i havent built yet",
+      "ok migrations are in, need to wire the backfill next session"]),
+    ("APPROACH_ABANDONED_DO_NOT_RETRY", "explicit_reject",
+     "An approach explicitly RULED OUT with the reason, phrased so it's clearly a "
+     "rejection to not revisit (not a neutral comparison or a current decision).",
+     ["LangChain is rejected for the request path — wrong abstraction layer, we hand-write thin per-provider adapters instead.",
+      "We ruled out sticky-session rate limiting: instance death resets the counter and load skews. Do not revisit.",
+      "Client-side field encryption is abandoned — it made substring search impossible."]),
+    ("CONSTRAINT_SOFT", "convention_distinct",
+     "A clear style/convention PREFERENCE (not a hard must-rule, not a description of "
+     "behavior) — how the team prefers to write/organize code.",
+     ["Prefer keeping all SQL for a module in one queries.py rather than inline in handlers.",
+      "Group imports stdlib / third-party / local with a blank line between blocks.",
+      "Route handlers stay thin — validation and orchestration only, logic in services."]),
 ]
 
 PAIR_CELLS = [
