@@ -82,6 +82,11 @@ def is_available() -> bool:
     return _load_head() and ensure_ready(timeout=180)
 
 
+def expects_context() -> bool:
+    """v1 (frozen head) is never trained on role+context-composed input."""
+    return False
+
+
 def classify_scored(text: str) -> Optional[tuple[str, float]]:
     """Return (label, confidence) or None if the head/model is unavailable.
 

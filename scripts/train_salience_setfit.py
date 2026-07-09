@@ -167,8 +167,13 @@ def main() -> int:
         order = [list(classes).index(i) for i in range(len(LABELS))]
         W = np.vstack([coef[order].T, intercept[order][None, :]]).astype("float32")  # (385, C)
         _HEAD_OUT.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(_HEAD_OUT, labels=np.array(LABELS), W=W)
-        print(f"exported head -> {_HEAD_OUT.relative_to(_ROOT)}  (W {W.shape})")
+        # P2: stamp whether this head was trained on role+context-composed input
+        # (--no-fixtures is the P2 mode) so inference knows to compose. A bare head
+        # writes context_input=False and the pipeline feeds it the sentence alone.
+        np.savez(_HEAD_OUT, labels=np.array(LABELS), W=W,
+                 context_input=np.array([bool(args.no_fixtures)]))
+        print(f"exported head -> {_HEAD_OUT.relative_to(_ROOT)}  (W {W.shape}, "
+              f"context_input={bool(args.no_fixtures)})")
     except Exception as exc:  # noqa: BLE001
         print(f"head export skipped ({type(exc).__name__}: {exc}); body+head saved in model dir")
     print("\nNote: runtime body-ONNX export + re-embed wiring is WS-D2.")

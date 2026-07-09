@@ -309,14 +309,19 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
         head = _head_module()
     from memlora.extraction.authority import default_authority_for_role
     from memlora.extraction.hashing import compute_content_hash
+    from memlora.extraction.head_input import compose_head_input
     from memlora.extraction.normalize import normalize_description
     from memlora.extraction.sanitize import is_context_dependent_fragment, sanitize_description
     from memlora.extraction.triple import augment_with_triple
     from memlora.extraction.windowing import _is_structural_label
 
+    # P2: a context-trained head is fed "[role] prev || current"; a bare head gets
+    # the sentence alone. The head declares its format so the two can't be mixed.
+    use_context = getattr(head, "expects_context", lambda: False)()
     provenance = f"salience_{_extractor_mode()}".replace("-", "_")
     events: list[Event] = []
     seen: set[str] = set()
+    prev_desc = ""  # previous prose sentence, for context composition
     for s in sentences:
         if s.is_code_block:
             continue
@@ -326,7 +331,11 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
         desc = sanitize_description(raw_text)
         if not desc or len(_CONTENT_WORD_RE.findall(desc.lower())) < _MIN_CONTENT_WORDS:
             continue
-        scored = head.classify_scored(desc)
+        # content_hash and the stored description stay BARE (desc); only the
+        # CLASSIFICATION input is composed, so event identity is unchanged.
+        head_input = compose_head_input(desc, s.role, prev_desc) if use_context else desc
+        prev_desc = desc  # for the next sentence
+        scored = head.classify_scored(head_input)
         if scored is None:
             return None
         label, conf = scored
@@ -383,11 +392,17 @@ def _filter_and_retype_with_head(events: list[Event], head=None) -> list[Event] 
     """
     if head is None:
         head = _head_module()
+    from memlora.extraction.head_input import compose_head_input
+    # Filter mode has no ordered prev sentence (it scores curated candidates), so a
+    # context head gets role-only composition — the same "[role] text" shape the
+    # frozen eval used, which is consistent with its training.
+    use_context = getattr(head, "expects_context", lambda: False)()
 
     kept: list[Event] = []
     for e in events:
         desc = e.payload.get("description", "")
-        scored = head.classify_scored(desc)
+        head_input = compose_head_input(desc, e.payload.get("source_role", ""), "") if use_context else desc
+        scored = head.classify_scored(head_input)
         if scored is None:
             return None  # model dropped out — signal legacy fallback
         label, conf = scored
