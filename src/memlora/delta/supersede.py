@@ -353,6 +353,11 @@ def find_superseded(
             from memlora.delta import supersede_xenc
 
             if supersede_xenc.is_available():
+                # Operating point: a shipped, re-validated deployed_min from the
+                # model's threshold.json wins; else the store-validated constant.
+                # (threshold.json's raw val-calibrated `threshold` is NEVER used
+                # here — val calibration doesn't transfer to real stores.)
+                xenc_min = supersede_xenc.deployed_min() or _XENC_SUPERSEDE_MIN
                 by_id = {r["id"]: r for r in rows if r["event_type"] == new_event.event_type}
                 ranked = sorted(
                     (cid for cid in by_id if cid in cand_cos),
@@ -364,7 +369,7 @@ def find_superseded(
                     p = supersede_xenc.prob_supersedes(new_desc, cd)
                     # HYBRID: high cross-encoder score AND a lexical co-fire (filters the
                     # topical false positives the cross-encoder produces alone).
-                    if (p is not None and p >= _XENC_SUPERSEDE_MIN
+                    if (p is not None and p >= xenc_min
                             and jaccard_similarity(new_desc, cd) >= _XENC_JAC_MIN):
                         xenc_matches.add(cid)
         except Exception:

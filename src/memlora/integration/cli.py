@@ -495,7 +495,15 @@ def _cmd_install_heads(args: argparse.Namespace) -> None:
             continue
         dest = models_root / dest_name
         dest.mkdir(parents=True, exist_ok=True)
-        for f in needed:
+        # threshold.json (calibration + optional re-validated deployed_min) rides
+        # along when present — the runtime reads it next to the body (xenc).
+        to_copy = list(needed)
+        for opt in ("threshold.json",):
+            if (src / opt).exists() or (src.parent / opt).exists():
+                opt_src = (src / opt) if (src / opt).exists() else (src.parent / opt)
+                shutil.copy2(opt_src, dest / opt)
+                print(f"  installed [{label}]: {dest / opt}")
+        for f in to_copy:
             target = dest / f
             if target.exists() and not args.force:
                 print(f"  exists (skip): {target}  — use --force to overwrite")

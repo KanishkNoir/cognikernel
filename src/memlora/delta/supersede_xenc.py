@@ -33,6 +33,7 @@ _loaded = False
 _sess = None
 _tok = None
 _threshold = _DEFAULT_THRESHOLD
+_deployed_min: Optional[float] = None
 
 
 def _body_dir() -> Path:
@@ -46,7 +47,7 @@ def _body_dir() -> Path:
 
 
 def _load() -> bool:
-    global _loaded, _sess, _tok, _threshold
+    global _loaded, _sess, _tok, _threshold, _deployed_min
     with _lock:
         if _loaded:
             return _sess is not None
@@ -63,7 +64,10 @@ def _load() -> bool:
             _tok = Tokenizer.from_file(str(tok_path))
             for cand in (bd / "threshold.json", bd.parent / "threshold.json"):
                 if cand.exists():
-                    _threshold = float(json.loads(cand.read_text())["threshold"])
+                    data = json.loads(cand.read_text())
+                    _threshold = float(data["threshold"])
+                    if "deployed_min" in data:
+                        _deployed_min = float(data["deployed_min"])
                     break
             return True
         except Exception:
@@ -78,6 +82,20 @@ def is_available() -> bool:
 def threshold() -> float:
     _load()
     return _threshold
+
+
+def deployed_min() -> Optional[float]:
+    """The model's re-validated DEPLOYED operating point, if it ships one.
+
+    threshold.json's `threshold` is the VAL-calibrated point (target-precision on
+    the training distribution) — it historically does NOT transfer to real stores
+    (baseline: val says 0.136; the real-store bleed-stop is 0.97). So the merge
+    gate only trusts an explicit `deployed_min` field, which a model earns by
+    re-validation on the frozen real-store eval. Absent -> caller falls back to
+    the hardcoded, store-validated constant.
+    """
+    _load()
+    return _deployed_min
 
 
 def prob_supersedes(new_desc: str, old_desc: str) -> Optional[float]:

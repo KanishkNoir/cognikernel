@@ -332,7 +332,12 @@ def build_supersession() -> list[dict]:
         except Exception:
             continue
         by_id = {e["id"]: e for e in evs}
-        # real links (filtered), restatement negatives
+        # real links (filtered), restatement negatives. RE-AUDIT (xenc rollback
+        # finding): real_link positives inherit the LEXICAL predicate's judgment —
+        # moderate-overlap links (0.6 <= j < 0.85) are frequently recitation-created
+        # rather than genuine evolution, so they get their own kind
+        # (real_link_lex) and per-kind reporting stops punishing a model that
+        # correctly declines to supersede a restatement.
         n_links = 0
         for e in evs:
             if e["sup_by"] and e["sup_by"] in by_id and n_links < 20:
@@ -342,6 +347,9 @@ def build_supersession() -> list[dict]:
                 j = jaccard_similarity(new, old)
                 if j >= 0.85:
                     add(new, old, 0, "restatement", pid)   # echo, not evolution (R3)
+                elif j >= 0.6:
+                    add(new, old, 1, "real_link_lex", pid)  # label kept, kind honest
+                    n_links += 1
                 else:
                     add(new, old, 1, "real_link", pid)
                     n_links += 1
