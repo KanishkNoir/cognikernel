@@ -11,6 +11,16 @@ It is **not** a vector-database wrapper. It is an event-sourced log of *typed*
 memory with lexical-primary retrieval, write-time consolidation, and a fail-open
 reliability spine designed never to break your session.
 
+**And there is no LLM in the loop.** Most memory tools work by sending your
+transcripts to a generative model to "summarize what mattered" — another API
+key, per-session token cost, added latency, and your session content leaving
+the machine. CogniKernel treats extraction as *classification, not generation*:
+a deterministic sanitize → classify → consolidate pipeline, with two small
+fine-tuned encoder models (~130 MB ONNX, run locally on CPU in milliseconds)
+scoring salience and detecting when a new decision supersedes an old one. No
+API calls, no tokens billed, nothing leaves your machine. The only LLM involved
+is the coding agent you already run — CogniKernel makes it remember.
+
 > **Naming:** CogniKernel is the project; `memlora` (package `memlora-edge`) is
 > the Python module and CLI it ships as — the working name the code grew up
 > under. One project, two names: `memlora init`, `memlora doctor`, etc.
@@ -101,6 +111,31 @@ Lexical-primary, with dense as a fused signal — never pure vector:
   surface what a change touches (the semantic axis needs the `embedding` extra)
 - **Golden-record consolidation at read** — latest-wins reconciliation so recall
   returns one coherent answer, not a pile of revisions
+
+---
+
+## What it saves you
+
+Benchmarked in a three-arm comparison — CogniKernel vs flat curated notes vs no
+memory — with real agent sessions across four multi-session projects:
+
+- **File reads: the universal win.** The CogniKernel arm made the fewest file
+  reads in *every* project — typically **2–4× fewer** (23 vs 63, 16 vs 47/53,
+  40 vs 89/83), and in the best case **3 reads vs 29** because the injected
+  block + AST skeleton carried the whole repo's shape. Fewer reads means fewer
+  tool round-trips and more of the context window left for actual work — your
+  session gets *longer* before compaction, not just cheaper.
+- **Tokens: up to ~20% cheaper where memory matters.** Price-weighted token
+  cost (cache-write 1.25×, cache-read 0.1×, output 5×) came out **18–23% lower**
+  on projects with evolving decisions and cross-file dependencies — and roughly
+  a wash on small implementation-heavy projects where the code itself is cheap
+  to re-read. We publish the honest number, not the raw-token one (raw sums
+  look ~30–40% better, but ~95% of any session's bill is discounted cache-read).
+- **Recall instead of re-derivation.** Where memory earns its keep is projects
+  whose state is too large, too evolving, or too long-lived to re-derive
+  cheaply: the agent starts already knowing the decisions, constraints, and
+  dead ends, instead of spending the first quarter of the session rediscovering
+  them.
 
 ---
 
