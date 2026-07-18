@@ -276,6 +276,10 @@ def main() -> None:
     p_install.add_argument(
         "--force", action="store_true", help="Overwrite artifacts already installed",
     )
+    p_install.add_argument(
+        "--no-download", action="store_true",
+        help="Never fetch from the GitHub release; install only from a local source",
+    )
 
     args = parser.parse_args()
 
@@ -465,11 +469,81 @@ def _write_agent_commands(project_path: Path) -> None:
         _write_codex_skill(skills_dir, *spec)
 
 
-def _cmd_install_heads(args: argparse.Namespace) -> None:
-    """Copy the trained encoder ONNX bodies + tokenizers into the canonical install paths.
+# Published encoder artifacts (memlora install-heads). Each entry is
+# (release asset name, installed filename, sha256). Bump the tag + hashes
+# together when a new head generation is released.
+_HEADS_RELEASE_URL = "https://github.com/KanishkNoir/cognikernel/releases/download/heads-v1"
+_HEADS_RELEASE_ASSETS: dict[str, list[tuple[str, str, str]]] = {
+    "salience_v2": [
+        ("salience_v2-body.onnx", "body.onnx",
+         "551dff21e4bef79a7cc6f7f196d6f8a836a9752cce49617e20cdced93907f7a8"),
+        ("salience_v2-tokenizer.json", "tokenizer.json",
+         "de2a1b8d1aee816739bc3ca0125a473a080bf05311c640f63bc22099527b1c6b"),
+    ],
+    "supersession_xenc": [
+        ("supersession_xenc-body.onnx", "body.onnx",
+         "0eed82dbda0c3da3fcb64e1c6175602df106a92479ec0e06aef8f79553378ef6"),
+        ("supersession_xenc-tokenizer.json", "tokenizer.json",
+         "851ca67100d372ca3ae031a6abd168f53489eebfd7d89523f35c5c9b4d372c3c"),
+        ("supersession_xenc-threshold.json", "threshold.json",
+         "cc6087b344be54772989e8b6264800f7d2dc09d944080ee74fd5c58f0911dc9d"),
+    ],
+}
 
-    The 133 MB body.onnx files are gitignored (regenerable), so they are not shipped. This
-    places them at <MEMLORA_DIR>/models/{salience_v2, supersession_xenc}/ — the locations
+
+def _repo_models_dir() -> Path:
+    """The repo-checkout models/ dir (the developer path; absent in installs)."""
+    return Path(__file__).resolve().parents[3] / "models"
+
+
+def _download_head_asset(url: str, target: Path, sha256: str) -> None:
+    """Stream *url* to *target*, verifying the pinned sha256. Atomic via .part."""
+    import hashlib
+    import urllib.request
+
+    part = target.with_suffix(target.suffix + ".part")
+    digest = hashlib.sha256()
+    req = urllib.request.Request(url, headers={"User-Agent": "memlora-install-heads"})
+    with urllib.request.urlopen(req, timeout=60) as resp, open(part, "wb") as out:
+        while chunk := resp.read(1 << 20):
+            digest.update(chunk)
+            out.write(chunk)
+    if digest.hexdigest() != sha256:
+        part.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"checksum mismatch for {url}: got {digest.hexdigest()}, expected {sha256}"
+        )
+    os.replace(part, target)
+
+
+def _install_head_from_release(label: str, dest: Path, assets: list[tuple[str, str, str]],
+                               force: bool) -> bool:
+    """Download one head's assets from the GitHub release. True on success."""
+    dest.mkdir(parents=True, exist_ok=True)
+    for asset_name, dest_file, sha in assets:
+        target = dest / dest_file
+        if target.exists() and not force:
+            print(f"  exists (skip): {target}  — use --force to overwrite")
+            continue
+        url = f"{_HEADS_RELEASE_URL}/{asset_name}"
+        print(f"  downloading [{label}]: {asset_name} ...")
+        try:
+            _download_head_asset(url, target, sha)
+        except Exception as exc:
+            print(f"  download failed [{label}]: {exc}", file=sys.stderr)
+            return False
+        print(f"  installed [{label}]: {target}  ({target.stat().st_size / 1e6:.1f} MB)")
+    return True
+
+
+def _cmd_install_heads(args: argparse.Namespace) -> None:
+    """Install the trained encoder ONNX bodies + tokenizers into the canonical paths.
+
+    The 133 MB body.onnx files are gitignored (regenerable), so they are not in the
+    repo; they are published as GitHub release assets. A local repo export (models/…)
+    is preferred when present — the developer path; otherwise the assets are
+    downloaded and sha256-verified. This places them at
+    <MEMLORA_DIR>/models/{salience_v2, supersession_xenc}/ — the locations
     extraction.salience_v2 and delta.supersede_xenc resolve — so v2 extraction AND the
     cross-encoder supersession axis work outside a repo checkout (else they fail open to
     legacy / lexical). Each head is independent: a missing source is skipped, not fatal.
@@ -477,7 +551,7 @@ def _cmd_install_heads(args: argparse.Namespace) -> None:
     import os
     import shutil
 
-    repo_models = Path(__file__).resolve().parents[3] / "models"
+    repo_models = _repo_models_dir()
     models_root = Path(os.environ.get("MEMLORA_DIR") or (Path.home() / ".memlora")) / "models"
     heads = [
         ("v2 salience head", repo_models / "salience_setfit" / "onnx", "salience_v2"),
@@ -489,11 +563,17 @@ def _cmd_install_heads(args: argparse.Namespace) -> None:
     needed = ["body.onnx", "tokenizer.json"]
     installed_any = False
     for label, src, dest_name in heads:
-        if not all((src / f).exists() for f in needed):
-            print(f"  skip [{label}]: source missing in {src} "
-                  "(export via scripts/export_setfit_onnx.py / export_xenc_onnx.py)")
-            continue
         dest = models_root / dest_name
+        if not all((src / f).exists() for f in needed):
+            if args.source or getattr(args, "no_download", False):
+                print(f"  skip [{label}]: source missing in {src} "
+                      "(export via scripts/export_setfit_onnx.py / export_xenc_onnx.py)")
+                continue
+            if _install_head_from_release(
+                label, dest, _HEADS_RELEASE_ASSETS[dest_name], args.force
+            ):
+                installed_any = True
+            continue
         dest.mkdir(parents=True, exist_ok=True)
         # threshold.json (calibration + optional re-validated deployed_min) rides
         # along when present — the runtime reads it next to the body (xenc).
