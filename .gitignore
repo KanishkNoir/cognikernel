@@ -6,6 +6,20 @@ Architecture_Plan/
 ARCHITECTURE.md
 COGNIKERNEL_MCP.md
 transcript.txt
+architecture_blueprint.svg
+
+# One-off scratch/debug scripts (underscore prefix = never shipped)
+scripts/_*.py
+
+# Local analysis workspaces and benchmark residue
+analysis_*/
+.pytmp/
+.codex/
+.superpowers/
+.agents/
+.uv-cache/
+.import_linter_cache/
+*.npz.*-baseline
 
 # Architecture doc subdirs embedded inside src/ modules
 src/**/*_architecture/

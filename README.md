@@ -11,6 +11,10 @@ It is **not** a vector-database wrapper. It is an event-sourced log of *typed*
 memory with lexical-primary retrieval, write-time consolidation, and a fail-open
 reliability spine designed never to break your session.
 
+> **Naming:** CogniKernel is the project; `memlora` (package `memlora-edge`) is
+> the Python module and CLI it ships as — the working name the code grew up
+> under. One project, two names: `memlora init`, `memlora doctor`, etc.
+
 ---
 
 ## The memory loop
