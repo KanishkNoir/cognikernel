@@ -5,7 +5,20 @@ build-backend = "hatchling.build"
 [project]
 name = "memlora-edge"
 version = "0.1.0"
-description = "Structured session-state memory layer for AI coding assistants"
+description = "CogniKernel — persistent, structured project memory for Claude Code and Codex"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Kanishk Singh" }]
+keywords = ["claude-code", "codex", "mcp", "memory", "ai-agents", "context", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development",
+]
 requires-python = ">=3.11"
 dependencies = [
     "pyahocorasick>=2.0",
@@ -23,6 +36,12 @@ dependencies = [
 [project.optional-dependencies]
 embedding = ["fastembed>=0.3", "numpy>=1.24"]
 tokens = ["tiktoken>=0.5"]
+
+[project.urls]
+Homepage = "https://github.com/KanishkNoir/cognikernel"
+Repository = "https://github.com/KanishkNoir/cognikernel"
+Issues = "https://github.com/KanishkNoir/cognikernel/issues"
+Changelog = "https://github.com/KanishkNoir/cognikernel/releases"
 
 [project.scripts]
 memlora = "memlora.integration.cli:main"
