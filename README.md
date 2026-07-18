@@ -114,30 +114,33 @@ The system is designed to degrade *legibly*, never silently:
 
 ---
 
-## Cross-platform (Codex) — in progress
+## Cross-platform (Codex)
 
-> **Status:** landing on a separate branch (`feat/codex-crossplatform`), not yet on
-> `main`. The store is already platform-neutral; the capture path below describes
-> what that branch adds.
-
-The store is platform-neutral — a SQLite DB keyed on `hash_project_path(cwd)`, so
-Claude Code and Codex working in the same directory share one memory. Codex reads
-it through the registered MCP server (`get_session_state` / `recall`); the
-capture direction is **pull-based**, because Codex has no `Stop`-hook equivalent:
+The store is platform-neutral — one SQLite DB per logical project, so Claude Code
+and Codex working in the same directory share one memory. Project resolution is
+**alias-aware**: `C:\repo` and `/mnt/c/repo` resolve to the same store, so memory
+follows the checkout across Windows, WSL, and native mounts; for genuinely
+different checkout paths, an opt-in `project_identity` key in
+`.memlora/config.toml` pins them to one shared store. Codex reads memory through
+the registered MCP server (`get_session_state` / `recall`); the capture direction
+is **pull-based**, because Codex has no `Stop`-hook equivalent:
 
 - **`memlora codex-sync <project>`** scans `~/.codex/sessions` for rollouts whose
   recorded `cwd` maps to the project and captures the delta through the *same*
   extraction pipeline (a rollout→transcript adapter is the only Codex-specific
   code; delta/dedup/idempotency are shared and unchanged).
 - **Automatic at the handoff** — Claude's SessionStart drains pending Codex
-  rollouts before building the block; on the Codex side, `init` writes an
+  rollouts before building the block, and the MCP server's queue drainer pulls
+  new rollouts each cycle, so a live Claude session picks up Codex-side decisions
+  without waiting for the next session; on the Codex side, `init` writes an
   `AGENTS.md` instruction + a `ck-sync` skill so Codex pulls at session start.
-- **`init` provisions both** — `.mcp.json` (Claude) and `.codex/config.toml` +
-  `AGENTS.md` (Codex), idempotently and without clobbering existing settings.
+- **`init` provisions both** — `.mcp.json` (Claude) and `.codex/config.toml`
+  (with the server's `cwd` + project env pinned) + `AGENTS.md` (Codex),
+  idempotently and without clobbering existing settings.
 - **`memlora doctor`** reports a `codex` health line (sessions dir + rollout
   count, or "nothing to sync" — Codex is optional, so its absence is healthy).
 
-Once merged, a decision made in Codex reaches the next Claude session's block, and
+A decision made in Codex reaches the next Claude session's block, and
 vice versa. The action-point surfaces (CK-1, PreToolUse gate) are Claude-only —
 Codex has no per-prompt/per-tool hook — so on Codex the loop degrades to the shared
 block + MCP recall.
@@ -152,7 +155,7 @@ block + MCP recall.
 **CLI:**
 - `memlora init <project>` — register the project and install the session hooks
 - `memlora doctor [--strict] <project>` — subsystem health report
-- `memlora codex-sync <project>` — capture Codex CLI sessions for this project (cross-platform; landing on `feat/codex-crossplatform`)
+- `memlora codex-sync <project>` — capture Codex CLI sessions for this project
 - `memlora install-heads` — install the ONNX encoder artifacts (salience + cross-encoder model bodies)
 - `memlora show <project>` / `memlora reset <project>` — inspect / clear stored memory
 
@@ -196,6 +199,6 @@ tests/
 
 ## Status
 
-Schema **v17** (v18 with the in-progress Codex cross-platform capture). Architecture
-contracts: 3 kept / 0 broken. CI gate green in its own (no-embedding-extra)
-environment. See `CONTRIBUTING.md` for the Definition of Done that gates every change.
+Schema **v18** (includes the Codex cross-platform capture). Architecture
+contracts: 3 kept / 0 broken. CI gate: lint + full suite on Ubuntu (3.11/3.12) and
+Windows. See `CONTRIBUTING.md` for the Definition of Done that gates every change.
