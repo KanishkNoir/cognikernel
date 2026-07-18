@@ -188,5 +188,21 @@ def test_codex_keys_are_parsed(tmp_path: Path, monkeypatch) -> None:
     assert cfg.codex_scan_window_days == 7
 
 
+def test_project_identity_is_parsed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("MEMLORA_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "noprofile")
+
+    project = tmp_path / "myproj"
+    (project / ".memlora").mkdir(parents=True)
+    (project / ".memlora" / "config.toml").write_text(
+        'project_identity = "acme-api"\n',
+        encoding="utf-8",
+    )
+
+    cfg, issues = Config.load_with_issues(project_path=project)
+    assert issues == []
+    assert cfg.project_identity == "acme-api"
+
+
 def test_valid_hook_policies_set() -> None:
     assert VALID_HOOK_POLICIES == frozenset({"advisory", "strict"})

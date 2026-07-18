@@ -27,6 +27,9 @@ class TestInitProvisionsCodex:
         codex_cfg = (project / ".codex" / "config.toml").read_text(encoding="utf-8")
         assert "[mcp_servers.cognikernel]" in codex_cfg
         assert "mcp-serve" in codex_cfg
+        assert "cwd =" in codex_cfg
+        assert "[mcp_servers.cognikernel.env]" in codex_cfg
+        assert "MEMLORA_PROJECT_PATH" in codex_cfg
         agents = (project / "AGENTS.md").read_text(encoding="utf-8")
         assert "CogniKernel" in agents and "codex-sync" in agents and "get_session_state" in agents
 
@@ -46,6 +49,23 @@ class TestInitProvisionsCodex:
         _cmd_init(argparse.Namespace(project_path=str(project)))  # second run
         cfg = (project / ".codex" / "config.toml").read_text(encoding="utf-8")
         assert cfg.count("[mcp_servers.cognikernel]") == 1   # not duplicated
+
+    def test_rewrites_existing_managed_codex_block(self, project: Path):
+        codex_dir = project / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text(
+            'notify = ["keep-me"]\n'
+            "\n"
+            "[mcp_servers.cognikernel]\n"
+            'command = "python"\n'
+            'args = ["-m", "memlora", "mcp-serve"]\n',
+            encoding="utf-8",
+        )
+        _cmd_init(argparse.Namespace(project_path=str(project)))
+        cfg = (codex_dir / "config.toml").read_text(encoding="utf-8")
+        assert cfg.count("[mcp_servers.cognikernel]") == 1
+        assert "cwd =" in cfg and "MEMLORA_PROJECT_PATH" in cfg
+        assert "keep-me" in cfg
 
     def test_preserves_existing_agents_md(self, project: Path):
         (project / "AGENTS.md").write_text("# My agent rules\nDo the thing.\n", encoding="utf-8")

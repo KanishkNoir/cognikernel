@@ -176,6 +176,10 @@ class Config:
     codex_sync_enabled: bool = True
     codex_home: Path | None = None
     codex_scan_window_days: int = 30
+    # Optional stable identity shared by multiple checkouts or OS-specific mount
+    # paths for the same logical project. When set to the same value in each
+    # checkout's .memlora/config.toml, all clients resolve to the same project DB.
+    project_identity: str | None = None
 
     section_budgets: SectionBudgets = field(default_factory=SectionBudgets)
 
@@ -338,6 +342,7 @@ class Config:
         _take("codex_sync_enabled", bool)
         _take("codex_home", Path)
         _take("codex_scan_window_days", int)
+        _take("project_identity", lambda v: str(v).strip() or None)
         _take("section_budgets", _parse_section_budgets)
 
         return kwargs

@@ -177,3 +177,57 @@ def test_disabled_by_config(tmp_path: Path, monkeypatch) -> None:
     object.__setattr__(cfg, "pretool_prohibition_surface_enabled", False)
     diff = "self._counter = 0  # in-process rate limit counter budget"
     assert surface_prohibitions_for_edit(proj, diff, config=cfg) == ""
+
+
+# ── probe-replay fixes: stem-folded floor + dense rescue ─────────────────────
+
+def test_stem_folded_overlap_clears_floor(tmp_path: Path, monkeypatch) -> None:
+    """One morpheme must not hide a bind: 're-implement' in the diff has to
+    count against 'never re-implemented' in the prohibition (replay: toolbelt-A9)."""
+    proj, pid, db = _project(tmp_path, monkeypatch)
+    _insert(db, pid, "Retry helpers come from toolbelt.retry — never re-implemented inline.",
+            "APPROACH_ABANDONED_DO_NOT_RETRY")
+    # raw shared terms: {retry, toolbelt} = 2 (< floor 3); stem-folded adds
+    # implement(ed) and helper(s) -> 4.
+    diff = "helper to re-implement retry with backoff for the toolbelt gateway"
+    out = surface_prohibitions_for_edit(proj, diff)
+    assert "re-implemented" in out
+
+
+def test_dense_rescue_surfaces_thin_prohibition(tmp_path: Path, monkeypatch) -> None:
+    """A thin-but-on-topic prohibition below the lexical floor is rescued when
+    the dense axis strongly agrees AND a shared content term anchors it
+    (replay: relay-D5/D16 — the graveyard text was 2 terms wide)."""
+    proj, pid, db = _project(tmp_path, monkeypatch)
+    _insert(db, pid, "In-process counters are out — each instance sees only its slice.",
+            "APPROACH_ABANDONED_DO_NOT_RETRY")
+    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: True)
+    monkeypatch.setattr("memlora.embedding.model.embed_text", lambda text: [1.0])
+    monkeypatch.setattr("memlora.embedding.store.load_embeddings",
+                        lambda conn, ids, ver: {})
+    diff = "use a process-local dict for rate limit counters"  # shared: {process, counters} = 2
+    out = surface_prohibitions_for_edit(proj, diff)
+    assert "In-process counters" in out
+
+
+def test_dense_rescue_requires_lexical_anchor(tmp_path: Path, monkeypatch) -> None:
+    """Cosine agreement alone never surfaces: zero shared content terms means
+    zero rescue, even with a perfect similarity score (precision guard)."""
+    proj, pid, db = _project(tmp_path, monkeypatch)
+    _insert(db, pid, "In-process counters are out — each instance sees only its slice.",
+            "APPROACH_ABANDONED_DO_NOT_RETRY")
+    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: True)
+    monkeypatch.setattr("memlora.embedding.model.embed_text", lambda text: [1.0])
+    monkeypatch.setattr("memlora.embedding.store.load_embeddings",
+                        lambda conn, ids, ver: {})
+    assert surface_prohibitions_for_edit(proj, "add a docstring to the config loader") == ""
+
+
+def test_dense_rescue_cold_model_stays_lexical(tmp_path: Path, monkeypatch) -> None:
+    """With the model cold (is_ready False, the _project default) a below-floor
+    candidate stays silent — the rescue never blocks or loads."""
+    proj, pid, db = _project(tmp_path, monkeypatch)
+    _insert(db, pid, "In-process counters are out — each instance sees only its slice.",
+            "APPROACH_ABANDONED_DO_NOT_RETRY")
+    diff = "use a process-local dict for rate limit counters"
+    assert surface_prohibitions_for_edit(proj, diff) == ""

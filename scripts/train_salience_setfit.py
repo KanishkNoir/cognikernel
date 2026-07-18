@@ -66,7 +66,19 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--no-twins", action="store_true")
+    ap.add_argument("--no-fixtures", action="store_true",
+                    help="train ONLY on --extra-corpus (skip the bare-text fixtures) — "
+                         "for P2, where the fixtures would be the wrong input format "
+                         "(bare vs role+context-composed). The extra corpus must then "
+                         "carry a held-out-comparable eval itself.")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--extra-corpus", action="append", default=[], metavar="JSONL",
+                    help="additional {text,label} JSONL corpora (e.g. "
+                         "research/train_corpus/train_sentences.jsonl — the "
+                         "universal ADR+synthetic corpus). Joins the TRAIN split "
+                         "only; the fixed held-out stays untouched for "
+                         "comparability, and the real gate is the frozen "
+                         "research/model_eval suite (never trained on).")
     args = ap.parse_args()
 
     import numpy as np
@@ -77,17 +89,29 @@ def main() -> int:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    orig = _load(FIX / "salience_seed.jsonl") + _load(FIX / "salience_train_generated.jsonl")
-    twins = [] if args.no_twins else _load(FIX / "salience_twins_generated.jsonl")
+    extra = []
+    for p in args.extra_corpus:
+        rows = _load(Path(p))
+        print(f"extra corpus {p}: {len(rows)} rows")
+        extra += rows
+    if args.no_fixtures:
+        # P2: the extra corpus is already the full, correctly-composed training set
+        # (role+context pre-baked into the text). Route it through the SAME split
+        # flow as orig so the training/held-out logic below is unchanged.
+        orig, twins, extra = extra, [], []
+    else:
+        orig = _load(FIX / "salience_seed.jsonl") + _load(FIX / "salience_train_generated.jsonl")
+        twins = [] if args.no_twins else _load(FIX / "salience_twins_generated.jsonl")
 
     # FIXED original-distribution held-out (identical to _b1_twin_ab.py) for comparability.
     rng = np.random.default_rng(0)
     idx = rng.permutation(len(orig))
     n_hold = int(len(orig) * 0.2)
     hold, train = idx[:n_hold].tolist(), idx[n_hold:].tolist()
-    train_rows = [orig[i] for i in train] + twins
+    train_rows = [orig[i] for i in train] + twins + extra
     hold_rows = [orig[i] for i in hold]
-    print(f"orig={len(orig)} twins={len(twins)} | train={len(train_rows)} held-out={len(hold_rows)}")
+    print(f"orig={len(orig)} twins={len(twins)} extra={len(extra)} | "
+          f"train={len(train_rows)} held-out={len(hold_rows)}")
 
     ds_train = Dataset.from_dict({"text": [t for t, _ in train_rows],
                                   "label": [l for _, l in train_rows]})
@@ -143,8 +167,13 @@ def main() -> int:
         order = [list(classes).index(i) for i in range(len(LABELS))]
         W = np.vstack([coef[order].T, intercept[order][None, :]]).astype("float32")  # (385, C)
         _HEAD_OUT.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(_HEAD_OUT, labels=np.array(LABELS), W=W)
-        print(f"exported head -> {_HEAD_OUT.relative_to(_ROOT)}  (W {W.shape})")
+        # P2: stamp whether this head was trained on role+context-composed input
+        # (--no-fixtures is the P2 mode) so inference knows to compose. A bare head
+        # writes context_input=False and the pipeline feeds it the sentence alone.
+        np.savez(_HEAD_OUT, labels=np.array(LABELS), W=W,
+                 context_input=np.array([bool(args.no_fixtures)]))
+        print(f"exported head -> {_HEAD_OUT.relative_to(_ROOT)}  (W {W.shape}, "
+              f"context_input={bool(args.no_fixtures)})")
     except Exception as exc:  # noqa: BLE001
         print(f"head export skipped ({type(exc).__name__}: {exc}); body+head saved in model dir")
     print("\nNote: runtime body-ONNX export + re-embed wiring is WS-D2.")

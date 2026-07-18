@@ -170,3 +170,34 @@ class TestContextDependentFragment:
     ])
     def test_fragment_negative(self, desc: str) -> None:
         assert not is_context_dependent_fragment(desc)
+
+
+class TestTableScaffoldingStrip:
+    """Windowed table debris (header+separator+id cells collapsed onto a content
+    cell, ending in prose so _TABLE_ROW misses it) must be reduced to the fact."""
+
+    def test_header_separator_id_prefix_stripped(self) -> None:
+        line = ("| # | Invariant | |---|-----------| | O1 | Every status "
+                "transition logs event_id and worker_id to a structured log.")
+        out = sanitize_description(line)
+        assert out.startswith("Every status transition logs")
+        assert "|" not in out and "Invariant" not in out and "O1" not in out
+
+    def test_trailing_table_cell_merged_into_prose(self) -> None:
+        line = ("Never two separate commits. | | S6 | events.status = NOTIFIED "
+                "is set only by the relay, never by the enrichment worker.")
+        out = sanitize_description(line)
+        assert "Never two separate commits" in out
+        assert "events.status = NOTIFIED is set only by the relay" in out
+        assert "S6" not in out and "|" not in out
+
+    def test_prose_with_pipe_is_untouched(self) -> None:
+        # No separator/empty-cell signal → not a table → must not be altered.
+        for prose in (
+            "The field type is str | None for optional values.",
+            "Use A | B union syntax rather than Optional[A].",
+        ):
+            assert sanitize_description(prose) == prose.rstrip()
+
+    def test_pure_scaffolding_line_drops_empty(self) -> None:
+        assert sanitize_description("| # | Invariant | |---|---| | S1 |") == ""

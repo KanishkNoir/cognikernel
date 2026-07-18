@@ -227,7 +227,7 @@ def posttool_grep_main() -> None:
         result_text = json.dumps(result_text)
     try:
         from memlora.config import Config
-        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+        from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
         from memlora.storage.grep_cache import store_grep_result
         from memlora.storage.migrations import run_migrations
 
@@ -236,7 +236,7 @@ def posttool_grep_main() -> None:
         cfg = Config.load(project_path=cwd)
         if not cfg.grep_cache_enabled:
             return
-        project_id = hash_project_path(cwd)
+        project_id = resolve_project_id(cwd, cfg)
         db_path = get_db_path(cfg, project_id)
         if not db_path.exists():
             return
@@ -296,11 +296,11 @@ def session_start_main() -> None:
                 from memlora.storage.connection import (
                     get_connection as _gc,
                     get_db_path as _gd,
-                    hash_project_path as _hp,
+                    resolve_project_id as _rpid,
                 )
                 from memlora.storage.migrations import run_migrations as _rm
                 _cfg = _Cfg.load(project_path=cwd)
-                _pid = _hp(cwd)
+                _pid = _rpid(cwd, _cfg)
                 _db = _gd(_cfg, _pid)
                 if _db.exists():
                     with _gc(_db) as _conn:
@@ -357,7 +357,7 @@ def _pretool_read(payload: dict) -> None:
     try:
         from memlora.config import Config
         from memlora.integration.lookup import decide_pretool_read
-        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+        from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
         from memlora.storage.migrations import run_migrations
 
         project_root = _find_project_root(Path(file_path))
@@ -365,7 +365,7 @@ def _pretool_read(payload: dict) -> None:
             project_root = Path(cwd) if cwd else Path(file_path).parent
 
         config = Config.load(project_path=project_root)
-        project_id = hash_project_path(str(project_root))
+        project_id = resolve_project_id(str(project_root), config)
         db_path = get_db_path(config, project_id)
         if not db_path.exists():
             _pretool("allow")
@@ -466,7 +466,7 @@ def _pretool_grep(payload: dict) -> None:
     glob_filter = tool_input.get("glob", "") or ""
     try:
         from memlora.config import Config
-        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+        from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
         from memlora.storage.grep_cache import lookup_grep_result
         from memlora.storage.migrations import run_migrations
 
@@ -476,7 +476,7 @@ def _pretool_grep(payload: dict) -> None:
         if not cfg.grep_cache_enabled:
             _pretool("allow")
             return
-        project_id = hash_project_path(cwd)
+        project_id = resolve_project_id(cwd, cfg)
         db_path = get_db_path(cfg, project_id)
         if not db_path.exists():
             _pretool("allow")
@@ -518,13 +518,13 @@ def posttool_main() -> None:
     try:
         from memlora.config import Config
         from memlora.extraction.git_augment import FileChange
-        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+        from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
         from memlora.storage.migrations import run_migrations
         from memlora.symbols.extractor import build_symbol_update
         from memlora.symbols.store import apply_symbol_update
 
         config = Config.load(project_path=project_path)
-        project_id = hash_project_path(project_path)
+        project_id = resolve_project_id(project_path, config)
         db_path = get_db_path(config, project_id)
         if not db_path.exists():
             return
@@ -565,7 +565,7 @@ def posttool_read_main() -> None:
         from memlora.config import Config
         from memlora.integration.lookup import resolve_post_read_outcome
         from memlora.storage import read_cache as rc
-        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+        from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
         from memlora.storage.migrations import run_migrations
         from memlora.utils.paths import canonicalize_path
 
@@ -573,7 +573,7 @@ def posttool_read_main() -> None:
         if project_root is None:
             project_root = Path(cwd) if cwd else Path(file_path).parent
         config = Config.load(project_path=project_root)
-        project_id = hash_project_path(str(project_root))
+        project_id = resolve_project_id(str(project_root), config)
         db_path = get_db_path(config, project_id)
         if not db_path.exists():
             return

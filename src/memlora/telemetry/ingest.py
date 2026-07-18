@@ -217,11 +217,11 @@ def find_and_ingest_telemetry(
     Returns a summary: {"ingested": N, "skipped": M, "total_sessions_known": K}
     """
     from memlora.config import Config
-    from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+    from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
 
     # Project-aware load (H2): must resolve the same DB the hooks write to.
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 
     if not db_path.exists():

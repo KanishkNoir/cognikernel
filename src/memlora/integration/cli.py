@@ -495,7 +495,15 @@ def _cmd_install_heads(args: argparse.Namespace) -> None:
             continue
         dest = models_root / dest_name
         dest.mkdir(parents=True, exist_ok=True)
-        for f in needed:
+        # threshold.json (calibration + optional re-validated deployed_min) rides
+        # along when present — the runtime reads it next to the body (xenc).
+        to_copy = list(needed)
+        for opt in ("threshold.json",):
+            if (src / opt).exists() or (src.parent / opt).exists():
+                opt_src = (src / opt) if (src / opt).exists() else (src.parent / opt)
+                shutil.copy2(opt_src, dest / opt)
+                print(f"  installed [{label}]: {dest / opt}")
+        for f in to_copy:
             target = dest / f
             if target.exists() and not args.force:
                 print(f"  exists (skip): {target}  — use --force to overwrite")
@@ -541,6 +549,29 @@ def _merge_hooks(existing: dict | None, ck_hooks: dict) -> dict:
     return merged
 
 
+def _merge_codex_config(existing: str, codex_block: str) -> str:
+    """Replace CK's managed Codex MCP block while preserving user settings."""
+    lines = existing.splitlines()
+    kept: list[str] = []
+    skipping = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "[mcp_servers.cognikernel]":
+            skipping = True
+            continue
+        if skipping:
+            if stripped == "[mcp_servers.cognikernel.env]":
+                continue
+            if stripped.startswith("[") and stripped.endswith("]"):
+                skipping = False
+                kept.append(line)
+            continue
+        kept.append(line)
+
+    prefix = "\n".join(kept).rstrip()
+    return (prefix + "\n\n" if prefix else "") + codex_block
+
+
 def _cmd_init(args: argparse.Namespace) -> None:
     import shutil
 
@@ -556,6 +587,9 @@ def _cmd_init(args: argparse.Namespace) -> None:
         # rather than an absolute script path, so moving the repo or reinstalling
         # never breaks the registered hooks (CK-6a). Requires `memlora` importable.
         return f"{python_exe} -m memlora {subcommand}"
+
+    def _toml_string(value: str | Path) -> str:
+        return json.dumps(str(value))
 
     # ── .claude/settings.json ─────────────────────────────────────────────────
     claude_dir = project_path / ".claude"
@@ -718,8 +752,11 @@ def _cmd_init(args: argparse.Namespace) -> None:
     codex_cfg_path = codex_dir / "config.toml"
     codex_block = (
         "[mcp_servers.cognikernel]\n"
-        f"command = '{python_exe}'\n"
-        "args = ['-m', 'memlora', 'mcp-serve']\n"
+        f"command = {_toml_string(python_exe)}\n"
+        'args = ["-m", "memlora", "mcp-serve"]\n'
+        f"cwd = {_toml_string(project_path)}\n"
+        "[mcp_servers.cognikernel.env]\n"
+        f"MEMLORA_PROJECT_PATH = {_toml_string(project_path)}\n"
     )
     if not codex_cfg_path.exists():
         codex_dir.mkdir(exist_ok=True)
@@ -730,10 +767,9 @@ def _cmd_init(args: argparse.Namespace) -> None:
         )
     else:
         existing_codex = codex_cfg_path.read_text(encoding="utf-8")
-        if "mcp_servers.cognikernel" not in existing_codex:
-            codex_cfg_path.write_text(
-                existing_codex.rstrip() + "\n\n" + codex_block, encoding="utf-8"
-            )
+        merged_codex = _merge_codex_config(existing_codex, codex_block)
+        if merged_codex != existing_codex:
+            codex_cfg_path.write_text(merged_codex, encoding="utf-8")
 
     # ── AGENTS.md — Codex read-side instruction (auto-loaded into Codex context) ─
     # Codex has no SessionStart hook, so the reliable lever is AGENTS.md: instruct
@@ -946,7 +982,7 @@ def _cmd_show(args: argparse.Namespace) -> None:
 
 
 def _cmd_doctor(args: argparse.Namespace) -> None:
-    from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+    from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
     from memlora.storage.migrations import run_migrations
     from memlora.storage.evidence import get_evidence_summary
     from memlora.storage.jobs import list_jobs
@@ -955,7 +991,7 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     # Project-aware load (H2): doctor must diagnose the same DB the hooks use,
     # which a project-local memlora_dir override can relocate.
     config = Config.load(project_path=args.project_path)
-    project_id = hash_project_path(args.project_path)
+    project_id = resolve_project_id(args.project_path, config)
     db_path = get_db_path(config, project_id)
 
     if not db_path.exists():
@@ -1094,13 +1130,13 @@ def _cmd_reset(args: argparse.Namespace) -> None:
             print("Aborted.")
             return
 
-    from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+    from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
     from memlora.storage.migrations import run_migrations
 
     # Project-aware load (H2): reset must clear the DB the hooks write to, not
     # the default-dir DB a project-local memlora_dir override moved away from.
     config = Config.load(project_path=args.project_path)
-    project_id = hash_project_path(args.project_path)
+    project_id = resolve_project_id(args.project_path, config)
     db_path = get_db_path(config, project_id)
 
     with get_connection(db_path) as conn:
@@ -1140,13 +1176,13 @@ def _cmd_reset(args: argparse.Namespace) -> None:
 def _cmd_failures(args: argparse.Namespace) -> None:
     import datetime
     from memlora.integration.session import replay_job
-    from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+    from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
     from memlora.storage.events import get_extraction_failures
     from memlora.storage.jobs import list_jobs
     from memlora.storage.migrations import run_migrations
 
     config = Config.load(project_path=args.project_path)
-    project_id = hash_project_path(args.project_path)
+    project_id = resolve_project_id(args.project_path, config)
     db_path = get_db_path(config, project_id)
 
     if not db_path.exists():

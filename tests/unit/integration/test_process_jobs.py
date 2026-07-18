@@ -229,8 +229,15 @@ class TestCrashAndReplay:
 # ── session_capture speed ─────────────────────────────────────────────────────
 
 class TestCaptureSpeed:
-    def test_session_capture_is_fast(self, tmp_path):
-        """session_capture must complete well under 500ms — it's the hook fast path."""
+    def test_session_capture_is_fast(self, tmp_path, monkeypatch):
+        """session_capture must complete well under 500ms — it's the hook fast path.
+
+        MEMLORA_DIR is isolated so the timing measures capture itself, not the
+        machine's real store population (resolve_project_id's alias scan on a
+        new project walks projects_dir; against a populated real ~/.memlora
+        that is machine-state-dependent noise, not capture cost).
+        """
+        monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
         project_path = _make_project(tmp_path)
         from memlora.integration.session import session_capture
 

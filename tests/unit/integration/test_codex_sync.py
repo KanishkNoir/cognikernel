@@ -68,6 +68,21 @@ class TestCodexSync:
         stats = sync_codex_rollouts(str(project), cfg)
         assert stats["scanned"] == 1 and stats["matched"] == 0 and stats["captured"] == 0
 
+    def test_matching_project_identity_is_captured_across_checkout_paths(self, codex_env):
+        project, sessions, cfg = codex_env
+        cfg = __import__("dataclasses").replace(cfg, project_identity="shared-project")
+        other_checkout = project.parent / "other-checkout"
+        (other_checkout / ".memlora").mkdir(parents=True)
+        (other_checkout / ".memlora" / "config.toml").write_text(
+            'project_identity = "shared-project"\n',
+            encoding="utf-8",
+        )
+
+        _write_rollout(sessions, "rollout-shared.jsonl",
+                       _rollout(str(other_checkout), "sid-shared", "Use SQLite.", "ok"))
+        stats = sync_codex_rollouts(str(project), cfg)
+        assert stats["matched"] == 1 and stats["captured"] == 1
+
     def test_missing_sessions_dir_is_failopen(self, codex_env, tmp_path):
         project, _, cfg = codex_env
         cfg = __import__("dataclasses").replace(cfg, codex_home=tmp_path / "nonexistent")

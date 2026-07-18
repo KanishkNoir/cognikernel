@@ -42,6 +42,7 @@ _sess = None
 _tok = None
 _W = None
 _labels: tuple[str, ...] | None = None
+_context_input: bool = False
 
 
 def _body_dir() -> Path:
@@ -56,7 +57,7 @@ def _body_dir() -> Path:
 
 
 def _load() -> bool:
-    global _loaded, _sess, _tok, _W, _labels
+    global _loaded, _sess, _tok, _W, _labels, _context_input
     with _lock:
         if _loaded:
             return _sess is not None and _W is not None
@@ -73,6 +74,10 @@ def _load() -> bool:
             data = np.load(_HEAD_PATH, allow_pickle=False)
             _labels = tuple(str(x) for x in data["labels"])
             _W = data["W"].astype("float32")
+            # P2: the head declares whether it was trained on role+context-composed
+            # input. The pipeline composes iff this is set, so a bare (v2) head and a
+            # context (P2) head can never be fed the wrong format (the CoT lesson).
+            _context_input = bool(data["context_input"][0]) if "context_input" in data else False
             _sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
             _tok = Tokenizer.from_file(str(tok_path))
             return True
@@ -84,6 +89,13 @@ def _load() -> bool:
 def is_available() -> bool:
     """True if the v2 head + ONNX body + tokenizer all load."""
     return _load()
+
+
+def expects_context() -> bool:
+    """True if the loaded head was trained on role+prev-context-composed input
+    (P2). The pipeline gates compose_head_input on this so format never drifts."""
+    _load()
+    return _context_input
 
 
 def _embed(text: str):

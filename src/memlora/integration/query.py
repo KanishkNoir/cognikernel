@@ -16,7 +16,7 @@ import sqlite3
 from pathlib import Path
 
 from memlora.config import Config
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
 from memlora.storage.migrations import run_migrations
 
 _MAX_DESC = 140
@@ -61,9 +61,77 @@ def _prohibition_priority(h: dict) -> float:
     return pri
 
 
+# K2 floor fix #1 (probe replay 2026-07): fold inflectional suffixes when counting
+# shared terms, LOCALLY — never in normalize_for_overlap itself, which would
+# silently shift every calibrated Jaccard threshold in supersession/CK-1/echo.
+# The replay's Toolbelt miss was one morpheme wide: a diff saying "re-implement"
+# shares no token with a prohibition saying "never re-implemented".
+_STEM_FOLDS = (("ations", "ate"), ("ation", "ate"), ("ments", "ment"),
+               ("ings", "ing"), ("ing", ""), ("edly", ""), ("ies", "y"),
+               ("ed", ""), ("es", ""), ("s", ""))
+
+
+def _fold_stems(tokens: set[str]) -> set[str]:
+    out = set()
+    for t in tokens:
+        if len(t) > 4:
+            for suf, rep in _STEM_FOLDS:
+                if t.endswith(suf) and len(t) - len(suf) + len(rep) >= 4:
+                    t = t[: len(t) - len(suf)] + rep
+                    break
+        out.add(t)
+    return out
+
+
+# K2 floor fix #2 (probe replay 2026-07): dense rescue for THIN prohibitions.
+# The Relay graveyard entry ("In-process counters are out — each instance sees
+# only its slice of traffic") is on-topic for an in-process-counters diff but its
+# stored text is so short it lands at 2 shared terms, under the floor. When the
+# embedding model is resident, a candidate that fails the lexical floor is
+# rescued iff cosine agrees strongly AND at least one shared content term anchors
+# it (mirrors CK-1's dense-only arm: absolute floors, never rank-free semantics).
+# Advisory-only surface + typed/marker-filtered pool keep this precision-safe.
+_K2_DENSE_RESCUE_COS = 0.60
+_K2_RESCUE_MIN_ANCHOR = 1
+
+
+def _dense_rescue_scores(conn, diff_text: str, candidates: list[dict]) -> dict[int, float]:
+    """cosine(diff, candidate) for each candidate id — {} when the model is cold.
+
+    Stored event vectors are used when present; missing ones are embedded on the
+    fly (pool is bounded by pretool_pool_size). Fail-open: any error -> {}.
+    """
+    try:
+        from memlora.embedding.input import embedding_input
+        from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text, is_ready
+        from memlora.embedding.store import load_embeddings
+
+        if not is_ready():
+            return {}
+        import numpy as np
+
+        dv = embed_text(diff_text)
+        if dv is None:
+            return {}
+        dv = np.asarray(dv, dtype="float32")
+        stored = load_embeddings(conn, [h["id"] for h in candidates], EMBEDDING_MODEL_VERSION)
+        scores: dict[int, float] = {}
+        for h in candidates:
+            vec = stored.get(h["id"])
+            if vec is None:
+                vec = embed_text(embedding_input(
+                    {"description": h.get("description", ""), "subject": h.get("subject", "")},
+                    h.get("event_type", "DECISION")))
+            if vec is not None:
+                scores[h["id"]] = float(dv @ np.asarray(vec, dtype="float32"))
+        return scores
+    except Exception:
+        return {}
+
+
 def _resolve(project_path: str, config: Config | None) -> tuple[str, Path]:
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     return project_id, get_db_path(config, project_id)
 
 
@@ -315,7 +383,7 @@ def surface_prohibitions_for_edit(
                 from memlora.storage.render_ledger import rendered_event_ids
 
                 seen = rendered_event_ids(conn, project_id, session_id)
-            cand: list[tuple[float, int, dict]] = []
+            eligible: list[tuple[dict, int]] = []
             for h in hits:
                 if h["id"] in seen:
                     continue
@@ -329,14 +397,36 @@ def surface_prohibitions_for_edit(
                 p_toks = normalize_for_overlap(
                     f"{h.get('subject', '')} {h.get('description', '')}"
                 )
-                ov = len(diff_toks & p_toks)
-                if ov < config.pretool_min_term_overlap:
-                    continue
-                cand.append((_prohibition_priority(h), ov, h))
+                # Stem-folded overlap so one morpheme ("re-implement" vs
+                # "re-implemented") can't hide a genuine bind.
+                ov = len(_fold_stems(diff_toks) & _fold_stems(p_toks))
+                eligible.append((h, ov))
+
+            # Two tiers, floor first: a dense-rescued candidate is weaker evidence
+            # than one clearing the lexical floor and must NEVER outrank it — the
+            # first replay iteration let a rescued, arch-marker-boosted candidate
+            # steal the cap-1 slot from the canonical prohibition.
+            cand: list[tuple[float, int, dict]] = []
+            rescued: list[tuple[float, int, dict]] = []
+            below_floor = [(h, ov) for h, ov in eligible
+                           if _K2_RESCUE_MIN_ANCHOR <= ov < config.pretool_min_term_overlap]
+            rescue_scores = (
+                _dense_rescue_scores(conn, diff_text, [h for h, _ in below_floor])
+                if below_floor else {}
+            )
+            for h, ov in eligible:
+                if ov >= config.pretool_min_term_overlap:
+                    cand.append((_prohibition_priority(h), ov, h))
+                elif (ov >= _K2_RESCUE_MIN_ANCHOR
+                      and rescue_scores.get(h["id"], 0.0) >= _K2_DENSE_RESCUE_COS):
+                    rescued.append((_prohibition_priority(h), ov, h))
             # Highest authority first, then strongest term overlap. A high-
             # authority architecture prohibition now beats a token-dense
-            # impl-detail one even when BM25 ranked the latter first.
+            # impl-detail one even when BM25 ranked the latter first. Rescued
+            # candidates trail the whole floor tier regardless of priority.
             cand.sort(key=lambda t: (t[0], t[1]), reverse=True)
+            rescued.sort(key=lambda t: (t[0], t[1]), reverse=True)
+            cand = cand + rescued
             passed: list[dict] = []
             seen_topics: set[str] = set()
             for _pri, _ov, h in cand:
