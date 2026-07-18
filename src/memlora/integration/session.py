@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from memlora.config import Config
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
 from memlora.storage.migrations import run_migrations
 from memlora.storage.projections import Projection, load_or_rebuild
 
@@ -20,7 +20,7 @@ def init_project(
 ) -> str:
     """Create and migrate the DB for a project. Idempotent. Returns project_id."""
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
     with get_connection(db_path) as conn:
         run_migrations(conn)
@@ -60,7 +60,7 @@ def session_end(
     from memlora.storage.jobs import ack_stage, enqueue_extraction, fail_job, recover_stuck_running_jobs
 
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 
     # I2: delta extraction — process only new JSONL lines since last firing.
@@ -206,7 +206,7 @@ def session_capture(
     from memlora.storage.jobs import enqueue_extraction, recover_stuck_running_jobs
 
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 
     with get_connection(db_path) as conn:
@@ -387,7 +387,7 @@ def process_jobs(
     )
 
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
     claimant = f"worker-{os.getpid()}"
     processed = failed = replayed = 0
@@ -565,7 +565,7 @@ def replay_job(
     from memlora.storage.jobs import get_job, replay_dead_letter
 
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 
     with get_connection(db_path) as conn:
@@ -609,7 +609,7 @@ def get_projection(
 ) -> Projection:
     """Return the current (possibly rebuilt) Projection for *project_path*."""
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
     with get_connection(db_path) as conn:
         run_migrations(conn)
@@ -637,7 +637,7 @@ def render_state(
     from memlora.symbols.projection import compress_to_skeleton
 
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 
     with get_connection(db_path) as conn:
@@ -731,7 +731,7 @@ def rebuild_from_raw(
     from memlora.delta.merge import execute_merge
 
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 
     with get_connection(db_path) as source_conn:

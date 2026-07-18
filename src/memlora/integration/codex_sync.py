@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from memlora.config import Config
-from memlora.storage.connection import hash_project_path
+from memlora.storage.connection import project_paths_equivalent, resolve_project_id
 
 _log = logging.getLogger("memlora.codex_sync")
 
@@ -86,7 +86,7 @@ def sync_codex_rollouts(
 
         window_days = scan_window_days if scan_window_days is not None else config.codex_scan_window_days
         cutoff = time.time() - window_days * 86400 if window_days and window_days > 0 else 0.0
-        target_id = hash_project_path(project_path)
+        target_id = resolve_project_id(project_path, config)
 
         # Imported lazily: session_capture lives in the integration layer alongside
         # us, but keeping the import local avoids a heavy import at module load.
@@ -105,7 +105,7 @@ def sync_codex_rollouts(
                 if not meta:
                     continue
                 cwd = meta.get("cwd")
-                if not cwd or hash_project_path(cwd) != target_id:
+                if not cwd or not _cwd_matches_project(cwd, project_path, config, target_id):
                     continue
                 stats["matched"] += 1
                 text = rollout.read_text(encoding="utf-8", errors="replace")
@@ -149,3 +149,23 @@ def _spawn_worker(project_path: str | Path) -> None:
         )
     except Exception as exc:
         _log.warning("codex_sync.spawn_failed", extra={"error": repr(exc)})
+
+
+def _cwd_matches_project(
+    cwd: str,
+    project_path: str | Path,
+    config: Config,
+    target_id: str,
+) -> bool:
+    if project_paths_equivalent(cwd, project_path):
+        return True
+    if config.project_identity:
+        try:
+            cwd_config = Config.load(project_path=cwd)
+            return (
+                cwd_config.project_identity == config.project_identity
+                and resolve_project_id(cwd, cwd_config) == target_id
+            )
+        except Exception:
+            return False
+    return False

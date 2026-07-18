@@ -16,7 +16,7 @@ import sqlite3
 from pathlib import Path
 
 from memlora.config import Config
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
 from memlora.storage.migrations import run_migrations
 
 _MAX_DESC = 140
@@ -131,7 +131,7 @@ def _dense_rescue_scores(conn, diff_text: str, candidates: list[dict]) -> dict[i
 
 def _resolve(project_path: str, config: Config | None) -> tuple[str, Path]:
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     return project_id, get_db_path(config, project_id)
 
 

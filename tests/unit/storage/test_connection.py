@@ -3,7 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+from memlora.storage.connection import (
+    get_connection,
+    get_db_path,
+    hash_project_identity,
+    hash_project_path,
+    normalized_project_path_key,
+    project_paths_equivalent,
+    resolve_project_id,
+)
 from memlora.config import Config
 
 
@@ -79,6 +87,34 @@ class TestHashProjectPath:
     def test_hash_length(self) -> None:
         h = hash_project_path("/some/path")
         assert len(h) == 16
+
+    def test_windows_and_wsl_mount_paths_compare_equivalent(self) -> None:
+        win = "C:\\Users\\Admin\\repo"
+        wsl = "/mnt/c/Users/Admin/repo"
+        assert project_paths_equivalent(win, wsl)
+        assert normalized_project_path_key(win) == normalized_project_path_key(wsl)
+
+    def test_explicit_identity_has_stable_hash(self) -> None:
+        assert hash_project_identity("acme-api") == hash_project_identity("acme-api")
+        assert hash_project_identity("acme-api") != hash_project_identity("other")
+
+    def test_resolve_uses_explicit_identity(self, tmp_path: Path) -> None:
+        cfg = Config(memlora_dir=tmp_path / "memlora", project_identity="acme-api")
+        assert resolve_project_id("/any/checkout", cfg) == hash_project_identity("acme-api")
+
+    def test_resolve_finds_existing_db_by_path_alias(self, tmp_path: Path) -> None:
+        cfg = Config(memlora_dir=tmp_path / "memlora")
+        cfg.projects_dir.mkdir(parents=True)
+        db_path = cfg.projects_dir / "existing12345678.db"
+        with get_connection(db_path) as conn:
+            conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('project_path', ?)",
+                ("C:\\Users\\Admin\\repo",),
+            )
+            conn.commit()
+
+        assert resolve_project_id("/mnt/c/Users/Admin/repo", cfg) == "existing12345678"
 
 
 class TestGetDbPath:

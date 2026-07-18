@@ -85,6 +85,27 @@ _MEMORY_SECTIONS = (
     "### Key decisions",
 )
 
+# The structural / retrieval channel. Toggled OFF (whole sections removed) for
+# the skeleton-ablation: comparing honor with vs without these decomposes total
+# memory lift into event-lift (rationale/chains, from _MEMORY_SECTIONS) and
+# structural-lift (contracts/signatures, from the skeleton). A "zero event-lift"
+# fact that DROPS when the skeleton is removed was carried by CK's structural
+# channel, not by the model's prior.
+_STRUCTURAL_HEADERS = ("### Codebase skeleton", "### Most active files")
+
+
+def strip_skeleton(block: str) -> str:
+    """Remove the structural-memory sections (skeleton + most-active-files)
+    entirely — from each matching header to the next '### '/'## ' or EOF."""
+    out: list[str] = []
+    dropping = False
+    for line in block.splitlines():
+        if line.startswith("### ") or line.startswith("## "):
+            dropping = any(line.strip().startswith(h) for h in _STRUCTURAL_HEADERS)
+        if not dropping:
+            out.append(line)
+    return "\n".join(out)
+
 
 def delete_fact_lines(block: str, patterns: list[str],
                       all_memory: bool = False) -> tuple[str, int]:
@@ -360,6 +381,9 @@ def main() -> None:
     ap.add_argument("--out", default=str(RESULTS_PATH))
     ap.add_argument("--dry-run", action="store_true", help="show block surgery, no agent calls")
     ap.add_argument("--resume", action="store_true", help="skip cells already in the results file")
+    ap.add_argument("--no-skeleton", action="store_true",
+                    help="skeleton-ablation: strip the structural/retrieval sections from every "
+                         "block, isolating the event channel (compare vs a normal run to get structural-lift)")
     ap.add_argument("--judge-pass", action="store_true",
                     help="tier-2: judge the audit queue in an existing results file (no agent calls)")
     ap.add_argument("--judge-model", default=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"))
@@ -453,6 +477,9 @@ def main() -> None:
             if path not in blocks:
                 blocks[path] = render_state(path)
             block = blocks[path]
+
+        if args.no_skeleton:
+            block = strip_skeleton(block)
 
         for condition in args.conditions:
             cond_block, meta = build_condition_block(block, probe, condition)

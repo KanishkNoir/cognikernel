@@ -264,12 +264,12 @@ def lookup_file(
     as an admin/debugging utility. It runs the C1 strict-mode tree with a
     synthetic session_id ("__cli__") so re-read protection never fires.
     """
-    from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+    from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
 
     # Project-aware load (H2): the debug shim must evaluate the same policy and
     # DB the live PreToolUse hook does, or its verdict is misleading.
     config = config or Config.load(project_path=project_path)
-    project_id = hash_project_path(project_path)
+    project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 
     if not db_path.exists():

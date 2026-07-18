@@ -108,8 +108,10 @@ def find_related(project_path: str, query: str, limit: int = 8) -> str:
 )
 def skeleton(project_path: str, file_path: str = "") -> str:
     from memlora.integration.resources import render_skeleton
-    from memlora.storage.connection import hash_project_path
-    return render_skeleton(hash_project_path(project_path), path_filter=file_path)
+    from memlora.config import Config
+    from memlora.storage.connection import resolve_project_id
+    config = Config.load(project_path=project_path)
+    return render_skeleton(resolve_project_id(project_path, config), path_filter=file_path)
 
 
 # ── Resources (CK-5) ──────────────────────────────────────────────────────────
@@ -219,14 +221,22 @@ def _start_queue_drainer() -> None:
 
     def _loop() -> None:
         from memlora.config import Config
+        from memlora.integration.codex_sync import sync_codex_rollouts
         from memlora.integration.session import _worker_log, process_jobs
-        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
-        project_id = hash_project_path(project_path)
+        from memlora.storage.connection import get_connection, get_db_path, resolve_project_id
+        config = Config.load(project_path=project_path)
+        project_id = resolve_project_id(project_path, config)
         _worker_log(project_id, f"mcp-drainer started (cwd={project_path})")
+        try:
+            sync_codex_rollouts(project_path, config=config, spawn_worker=False)
+        except Exception as exc:
+            _worker_log(project_id, f"mcp-drainer codex-sync error: {exc}")
         _time.sleep(10.0)  # let session start settle before first drain
         while True:
             try:
                 config = Config.load(project_path=project_path)
+                project_id = resolve_project_id(project_path, config)
+                sync_codex_rollouts(project_path, config=config, spawn_worker=False)
                 db_path = get_db_path(config, project_id)
                 if db_path.exists():
                     with get_connection(db_path) as conn:
