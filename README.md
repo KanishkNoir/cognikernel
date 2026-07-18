@@ -156,7 +156,7 @@ block + MCP recall.
 - `memlora init <project>` — register the project and install the session hooks
 - `memlora doctor [--strict] <project>` — subsystem health report
 - `memlora codex-sync <project>` — capture Codex CLI sessions for this project
-- `memlora install-heads` — install the ONNX encoder artifacts (salience + cross-encoder model bodies)
+- `memlora install-heads` — install the trained encoder artifacts (salience + cross-encoder ONNX bodies): downloaded from the [`heads-v1` release](https://github.com/KanishkNoir/cognikernel/releases/tag/heads-v1) and sha256-verified, or copied from a local `models/` export when present
 - `memlora show <project>` / `memlora reset <project>` — inspect / clear stored memory
 
 ---
@@ -167,8 +167,12 @@ block + MCP recall.
 uv sync                      # core (lexical-only)
 uv sync --extra embedding    # + dense retrieval (fastembed + numpy)
 
-uv run memlora init .        # register this project + install hooks
-uv run memlora doctor .      # subsystem health
+uv run memlora init .            # register this project + install hooks
+uv run memlora doctor .          # subsystem health
+
+uv run memlora install-heads     # optional: trained encoder heads (~270 MB download);
+                                 # without them extraction/supersession fall back to
+                                 # the legacy/lexical path — everything still works
 ```
 
 Then start a Claude Code session in the project — the memory block appears
