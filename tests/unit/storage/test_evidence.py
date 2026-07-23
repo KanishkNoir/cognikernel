@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import sqlite3
 
-from memlora.storage.evidence import (
+from cognikernel.storage.evidence import (
     get_evidence_summary,
     link_event_provenance,
     load_evidence,
     store_evidence,
 )
-from memlora.storage.events import Event, get_event_by_id, insert_event
+from cognikernel.storage.events import Event, get_event_by_id, insert_event
 
 
 def test_store_evidence_compresses_and_round_trips(conn: sqlite3.Connection) -> None:

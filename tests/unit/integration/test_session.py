@@ -1,4 +1,4 @@
-"""Tests for memlora.integration.session."""
+"""Tests for cognikernel.integration.session."""
 from __future__ import annotations
 
 import json
@@ -6,22 +6,22 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.session import (
+from cognikernel.config import Config
+from cognikernel.integration.session import (
     get_projection,
     init_project,
     render_state,
     replay_job,
     session_end,
 )
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def cfg(tmp_path: Path) -> Config:
-    return Config(memlora_dir=tmp_path / "memlora")
+    return Config(cognikernel_dir=tmp_path / "cognikernel")
 
 
 @pytest.fixture
@@ -148,7 +148,7 @@ class TestSessionEnd:
 
 class TestGetProjection:
     def test_returns_projection_object(self, project_path: Path, cfg: Config) -> None:
-        from memlora.storage.projections import Projection
+        from cognikernel.storage.projections import Projection
         init_project(project_path, config=cfg)
         proj = get_projection(project_path, config=cfg)
         assert isinstance(proj, Projection)
@@ -214,8 +214,8 @@ class TestReplayJob:
     def _seed_dead_lettered_job(
         self, project_path: Path, cfg: Config, session_id: str = "sess_poison"
     ) -> tuple[int, int]:
-        from memlora.storage.evidence import store_evidence
-        from memlora.storage.jobs import enqueue_extraction, fail_job
+        from cognikernel.storage.evidence import store_evidence
+        from cognikernel.storage.jobs import enqueue_extraction, fail_job
 
         init_project(project_path, config=cfg)
         project_id = hash_project_path(project_path)
@@ -237,7 +237,7 @@ class TestReplayJob:
     def test_replay_advances_job_to_completed(
         self, project_path: Path, cfg: Config
     ) -> None:
-        from memlora.storage.jobs import get_job
+        from cognikernel.storage.jobs import get_job
 
         evidence_id, job_id = self._seed_dead_lettered_job(project_path, cfg)
         stats = replay_job(project_path, job_id, config=cfg)
@@ -314,7 +314,7 @@ class TestSessionEndCursorMonotonicGuard:
         """`failures --replay` re-enters session_end with an OLD reconstructed
         transcript. The ingest cursor must never move backwards — process_jobs
         already guards this; session_end must too."""
-        from memlora.storage.cursors import get_cursor
+        from cognikernel.storage.cursors import get_cursor
 
         init_project(project_path, config=cfg)
         project_id = hash_project_path(project_path)

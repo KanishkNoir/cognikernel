@@ -1,5 +1,5 @@
 """Tests for content hashing and normalization."""
-from memlora.extraction.hashing import compute_content_hash, normalize_for_hash
+from cognikernel.extraction.hashing import compute_content_hash, normalize_for_hash
 
 
 class TestNormalizeForHash:

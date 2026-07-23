@@ -1,4 +1,4 @@
-"""Tests for memlora.delta.supersede."""
+"""Tests for cognikernel.delta.supersede."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from memlora.delta.supersede import (
+from cognikernel.delta.supersede import (
     JACCARD_THRESHOLD,
     LEVENSHTEIN_THRESHOLD,
     apply_supersession,
@@ -23,9 +23,9 @@ from memlora.delta.supersede import (
     subject_supersedes,
     supersedes,
 )
-from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text, is_available
-from memlora.embedding.store import upsert_embedding
-from memlora.storage.events import Event
+from cognikernel.embedding.model import EMBEDDING_MODEL_VERSION, embed_text, is_available
+from cognikernel.embedding.store import upsert_embedding
+from cognikernel.storage.events import Event
 
 
 class TestFindSuperseded:
@@ -117,7 +117,7 @@ class TestFindSuperseded:
             content_hash="h_new", created_at=2000,
             payload={"description": "Use SQLite for local storage"},
         )
-        with patch("memlora.embedding.model.embed_text") as mock_embed:
+        with patch("cognikernel.embedding.model.embed_text") as mock_embed:
             result = find_superseded(conn, new, use_embeddings=False)
             mock_embed.assert_not_called()
         assert old_id in result

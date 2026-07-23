@@ -32,7 +32,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, "src")
 random.seed(1106)
 
-from memlora.extraction.head_input import compose_head_input, role_for_register
+from cognikernel.extraction.head_input import compose_head_input, role_for_register
 
 CORPUS = Path("research/train_corpus")
 EVAL = Path("research/model_eval")

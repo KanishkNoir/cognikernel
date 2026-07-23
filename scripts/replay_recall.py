@@ -88,22 +88,22 @@ def main() -> None:
 
     conn = sqlite3.connect(args.db)
     conn.row_factory = sqlite3.Row
-    from memlora.storage.migrations import run_migrations
+    from cognikernel.storage.migrations import run_migrations
     run_migrations(conn)  # creates + backfills FTS on the copy
 
     pid = conn.execute(
         "SELECT DISTINCT project_id FROM events LIMIT 1").fetchone()[0]
 
     if not args.cold:
-        from memlora.embedding.model import ensure_ready
+        from cognikernel.embedding.model import ensure_ready
         ready = ensure_ready(timeout=90.0)
         print(f"dense axis: {'warm' if ready else 'COLD (bm25 only)'}")
     else:
-        import memlora.embedding.model as m
+        import cognikernel.embedding.model as m
         m.is_ready = lambda: False  # type: ignore[assignment]
         print("dense axis: forced cold")
 
-    from memlora.retrieval.hybrid import hybrid_recall
+    from cognikernel.retrieval.hybrid import hybrid_recall
 
     actives = [
         (r["id"], r["d"] or "") for r in conn.execute(

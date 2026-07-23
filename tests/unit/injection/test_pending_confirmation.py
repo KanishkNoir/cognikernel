@@ -3,18 +3,18 @@ from __future__ import annotations
 
 import pytest
 
-from memlora.extraction.authority import (
+from cognikernel.extraction.authority import (
     ASSISTANT_ANSWER_TO_QUESTION,
     ASSISTANT_DECIDED,
     USER_STATED,
 )
-from memlora.injection.ordering import partition_events
-from memlora.injection.template import (
+from cognikernel.injection.ordering import partition_events
+from cognikernel.injection.template import (
     InjectionContext,
     _render_pending_confirmation,
     render_injection,
 )
-from memlora.storage.events import Event
+from cognikernel.storage.events import Event
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

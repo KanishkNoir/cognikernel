@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from memlora.embedding import model as M
+from cognikernel.embedding import model as M
 
 
 @pytest.fixture(autouse=True)
@@ -58,8 +58,8 @@ def test_ensure_ready_times_out_without_blocking(monkeypatch):
 
 
 def test_warm_is_suppressed_by_auto_warm_guard(monkeypatch):
-    """conftest sets MEMLORA_DISABLE_AUTO_WARM=1 — warm() must not start a load."""
-    assert os.environ.get("MEMLORA_DISABLE_AUTO_WARM") == "1"
+    """conftest sets COGNIKERNEL_DISABLE_AUTO_WARM=1 — warm() must not start a load."""
+    assert os.environ.get("COGNIKERNEL_DISABLE_AUTO_WARM") == "1"
 
     called = {"load": False}
 

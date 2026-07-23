@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.codex_sync import codex_sessions_root, sync_codex_rollouts
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.config import Config
+from cognikernel.integration.codex_sync import codex_sessions_root, sync_codex_rollouts
+from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
 
 
 def _rollout(cwd: str, sid: str, user: str, assistant: str) -> str:
@@ -30,8 +30,8 @@ def _write_rollout(sessions_root: Path, name: str, body: str) -> None:
 
 @pytest.fixture
 def codex_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("MEMLORA_DISABLE_AUTO_WARM", "1")
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("COGNIKERNEL_DISABLE_AUTO_WARM", "1")
     codex_home = tmp_path / "codex"
     (codex_home / "sessions").mkdir(parents=True)
     project = tmp_path / "proj"
@@ -72,8 +72,8 @@ class TestCodexSync:
         project, sessions, cfg = codex_env
         cfg = __import__("dataclasses").replace(cfg, project_identity="shared-project")
         other_checkout = project.parent / "other-checkout"
-        (other_checkout / ".memlora").mkdir(parents=True)
-        (other_checkout / ".memlora" / "config.toml").write_text(
+        (other_checkout / ".cognikernel").mkdir(parents=True)
+        (other_checkout / ".cognikernel" / "config.toml").write_text(
             'project_identity = "shared-project"\n',
             encoding="utf-8",
         )
@@ -98,7 +98,7 @@ class TestCodexSync:
         assert stats["enabled"] is False and stats["captured"] == 0
 
     def test_resync_is_idempotent(self, codex_env):
-        from memlora.integration.session import process_jobs
+        from cognikernel.integration.session import process_jobs
 
         project, sessions, cfg = codex_env
         _write_rollout(sessions, "rollout-a.jsonl",

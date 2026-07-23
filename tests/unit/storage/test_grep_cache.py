@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.session import init_project
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
-from memlora.storage.grep_cache import (
+from cognikernel.config import Config
+from cognikernel.integration.session import init_project
+from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.storage.grep_cache import (
     cache_key,
     invalidate_project_cache,
     lookup_grep_result,
@@ -19,7 +19,7 @@ from memlora.storage.grep_cache import (
 
 @pytest.fixture
 def db_conn(tmp_path: Path):
-    cfg = Config(memlora_dir=tmp_path / "memlora")
+    cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
     project_path = tmp_path / "proj"
     project_path.mkdir()
     init_project(project_path, config=cfg)

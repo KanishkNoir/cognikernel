@@ -1,7 +1,7 @@
 """Tests for the embedding input composer (E1) — pure, no model."""
 from __future__ import annotations
 
-from memlora.embedding.input import embedding_input
+from cognikernel.embedding.input import embedding_input
 
 
 class TestEmbeddingInput:

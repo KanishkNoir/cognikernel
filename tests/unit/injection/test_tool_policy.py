@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from memlora.injection.template import (
+from cognikernel.injection.template import (
     InjectionContext,
     _render_tool_policy,
     render_injection,
@@ -88,7 +88,7 @@ class TestSectionAppearsInFullInjection:
     def test_tool_policy_appears_before_hard_constraints(self) -> None:
         """Positioning matters: Tool Policy must come BEFORE the first deny
         message Claude is likely to see, which is right after the header."""
-        from memlora.storage.events import Event
+        from cognikernel.storage.events import Event
 
         ctx = _ctx(
             hook_policy="strict",

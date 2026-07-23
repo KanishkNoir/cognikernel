@@ -99,10 +99,10 @@ def _db_for(project: str | None, db: str | None, bench: str, project_id: str | N
     if db:
         return Path(db)
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-    from memlora.config import Config
-    from memlora.storage.connection import get_db_path
+    from cognikernel.config import Config
+    from cognikernel.storage.connection import get_db_path
     if project:
-        from memlora.storage.connection import hash_project_path
+        from cognikernel.storage.connection import hash_project_path
         return get_db_path(Config.load(), hash_project_path(project))
     pid = project_id or BENCHMARKS[bench]["project_id"]
     return get_db_path(Config.load(), pid)

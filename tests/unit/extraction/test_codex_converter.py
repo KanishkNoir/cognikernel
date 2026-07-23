@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from memlora.extraction.codex_converter import codex_rollout_to_transcript
-from memlora.extraction.transcript import transcript_from_source
+from cognikernel.extraction.codex_converter import codex_rollout_to_transcript
+from cognikernel.extraction.transcript import transcript_from_source
 
 FIXTURE = Path(__file__).parents[2] / "fixtures" / "codex_rollout_sample.jsonl"
 

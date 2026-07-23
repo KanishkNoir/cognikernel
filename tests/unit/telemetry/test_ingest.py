@@ -1,4 +1,4 @@
-"""Tests for memlora.telemetry.ingest — JSONL usage ingestion."""
+"""Tests for cognikernel.telemetry.ingest — JSONL usage ingestion."""
 from __future__ import annotations
 
 import json
@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.session import init_project, session_end
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
-from memlora.telemetry.ingest import (
+from cognikernel.config import Config
+from cognikernel.integration.session import init_project, session_end
+from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.telemetry.ingest import (
     whole_session_rollup,
     ingest_session_jsonl,
     store_telemetry,
@@ -49,7 +49,7 @@ def _make_jsonl(tmp_path: Path, name: str, lines: list[str]) -> Path:
 
 @pytest.fixture
 def cfg(tmp_path: Path) -> Config:
-    return Config(memlora_dir=tmp_path / "memlora")
+    return Config(cognikernel_dir=tmp_path / "cognikernel")
 
 
 @pytest.fixture
@@ -283,8 +283,8 @@ class TestFindAndIngestTelemetry:
         session_id: str,
     ) -> None:
         """Insert a minimal event row so session_id appears in the events table."""
-        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
-        from memlora.storage.events import Event, insert_event
+        from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+        from cognikernel.storage.events import Event, insert_event
 
         project_id = hash_project_path(project_path)
         db_path = get_db_path(cfg, project_id)
@@ -298,7 +298,7 @@ class TestFindAndIngestTelemetry:
             ))
 
     def test_db_does_not_exist_returns_zeros(self, tmp_path: Path) -> None:
-        cfg = Config(memlora_dir=tmp_path / "memlora")
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         project_path = tmp_path / "proj"
         project_path.mkdir()
         # DB never initialised — should return zeros, not raise
@@ -306,7 +306,7 @@ class TestFindAndIngestTelemetry:
         assert result == {"ingested": 0, "skipped": 0, "total_sessions_known": 0}
 
     def test_no_events_returns_zeros(self, tmp_path: Path) -> None:
-        cfg = Config(memlora_dir=tmp_path / "memlora")
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         project_path = tmp_path / "proj"
         project_path.mkdir()
         init_project(project_path, config=cfg)
@@ -315,7 +315,7 @@ class TestFindAndIngestTelemetry:
         assert result == {"ingested": 0, "skipped": 0, "total_sessions_known": 0}
 
     def test_claude_projects_dir_missing_all_skipped(self, tmp_path: Path) -> None:
-        cfg = Config(memlora_dir=tmp_path / "memlora")
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         project_path = tmp_path / "proj"
         project_path.mkdir()
         init_project(project_path, config=cfg)
@@ -330,7 +330,7 @@ class TestFindAndIngestTelemetry:
         assert result["skipped"] == 1
 
     def test_matching_jsonl_is_ingested(self, tmp_path: Path) -> None:
-        cfg = Config(memlora_dir=tmp_path / "memlora")
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         project_path = tmp_path / "proj"
         project_path.mkdir()
         init_project(project_path, config=cfg)
@@ -354,7 +354,7 @@ class TestFindAndIngestTelemetry:
         assert result["skipped"] == 0
 
         # Verify data was written to the DB
-        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+        from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
         project_id = hash_project_path(project_path)
         db_path = get_db_path(cfg, project_id)
         with get_connection(db_path) as conn:
@@ -367,7 +367,7 @@ class TestFindAndIngestTelemetry:
         assert row["cache_read_tokens"] == 1000  # 800 + 200
 
     def test_mixed_some_match_some_skip(self, tmp_path: Path) -> None:
-        cfg = Config(memlora_dir=tmp_path / "memlora")
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         project_path = tmp_path / "proj"
         project_path.mkdir()
         init_project(project_path, config=cfg)
@@ -389,7 +389,7 @@ class TestFindAndIngestTelemetry:
         assert result["skipped"] == 1
 
     def test_idempotent_reingest(self, tmp_path: Path) -> None:
-        cfg = Config(memlora_dir=tmp_path / "memlora")
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         project_path = tmp_path / "proj"
         project_path.mkdir()
         init_project(project_path, config=cfg)
@@ -406,7 +406,7 @@ class TestFindAndIngestTelemetry:
         find_and_ingest_telemetry(project_path, **kwargs)
         find_and_ingest_telemetry(project_path, **kwargs)  # second call
 
-        from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+        from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
         project_id = hash_project_path(project_path)
         db_path = get_db_path(cfg, project_id)
         with get_connection(db_path) as conn:

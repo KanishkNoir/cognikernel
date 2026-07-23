@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from memlora.extraction.pipeline import (
+from cognikernel.extraction.pipeline import (
     SessionMetadata,
     _FOREGROUND_BYTES,
     _HARD_CAP_BYTES,
     extract_session,
     persist_events,
 )
-from memlora.storage.events import (
+from cognikernel.storage.events import (
     Event,
     get_events_by_session,
     insert_extraction_failure,
@@ -120,7 +120,7 @@ class TestExtractSession:
         import importlib
         # importlib, not `import ... as`: the package __init__ re-exports the
         # `tokenize` function, shadowing the submodule attribute of that name.
-        tokenize_mod = importlib.import_module("memlora.extraction.tokenize")
+        tokenize_mod = importlib.import_module("cognikernel.extraction.tokenize")
 
         def _boom(_text: str):
             raise RuntimeError("extractor bug")
@@ -134,7 +134,7 @@ class TestExtractSession:
     ) -> None:
         """Git augmentation is auxiliary signal, not the session's memory — a
         broken diff parser must not fail the job."""
-        import memlora.extraction.git_augment as git_mod
+        import cognikernel.extraction.git_augment as git_mod
 
         def _boom(*_a, **_k):
             raise RuntimeError("diff parser bug")

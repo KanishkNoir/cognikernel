@@ -11,7 +11,7 @@ import dataclasses
 import json
 from pathlib import Path
 
-from memlora.storage.connection import get_connection
+from cognikernel.storage.connection import get_connection
 
 
 def _event_stats(db) -> tuple[int, int, float]:
@@ -39,8 +39,8 @@ def _write_rollout(codex_home: Path, cwd: str, sid: str, user_lines, *, prepend_
 
 class TestCodexRolloutReliability:
     def test_malformed_rollout_drains_without_crash(self, project, tmp_path) -> None:
-        from memlora.integration.codex_sync import sync_codex_rollouts
-        from memlora.integration.session import process_jobs
+        from cognikernel.integration.codex_sync import sync_codex_rollouts
+        from cognikernel.integration.session import process_jobs
 
         codex_home = tmp_path / "codex"
         cfg = dataclasses.replace(project.cfg, codex_home=codex_home)
@@ -56,8 +56,8 @@ class TestCodexRolloutReliability:
         assert _event_stats(project.db)[0] > 0           # the valid decision survived
 
     def test_resync_through_real_worker_is_idempotent(self, project, tmp_path) -> None:
-        from memlora.integration.codex_sync import sync_codex_rollouts
-        from memlora.integration.session import process_jobs
+        from cognikernel.integration.codex_sync import sync_codex_rollouts
+        from cognikernel.integration.session import process_jobs
 
         codex_home = tmp_path / "codex"
         cfg = dataclasses.replace(project.cfg, codex_home=codex_home)

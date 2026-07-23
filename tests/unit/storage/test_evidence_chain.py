@@ -16,13 +16,13 @@ import sqlite3
 
 import pytest
 
-from memlora.storage.cursors import (
+from cognikernel.storage.cursors import (
     IngestCursor,
     compute_anchor,
     slice_storage_delta,
 )
-from memlora.storage.evidence import load_full_transcript, store_evidence
-from memlora.storage.migrations import run_migrations
+from cognikernel.storage.evidence import load_full_transcript, store_evidence
+from cognikernel.storage.migrations import run_migrations
 
 
 def _db() -> sqlite3.Connection:

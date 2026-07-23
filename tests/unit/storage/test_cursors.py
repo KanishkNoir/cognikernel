@@ -12,7 +12,7 @@ import sqlite3
 
 import pytest
 
-from memlora.storage.cursors import (
+from cognikernel.storage.cursors import (
     ANCHOR_LINES,
     OVERLAP_LINES,
     IngestCursor,
@@ -21,7 +21,7 @@ from memlora.storage.cursors import (
     save_cursor,
     slice_jsonl_for_extraction,
 )
-from memlora.storage.migrations import run_migrations
+from cognikernel.storage.migrations import run_migrations
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

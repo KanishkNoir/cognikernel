@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.session import init_project, session_end
-from memlora.telemetry.render_cost import (
+from cognikernel.config import Config
+from cognikernel.integration.session import init_project, session_end
+from cognikernel.telemetry.render_cost import (
     diff_reports,
     render_cost_report,
     section_token_report,
@@ -68,7 +68,7 @@ class TestDiffReports:
 
 class TestRenderCostReport:
     def test_report_for_initialised_project(self, tmp_path: Path) -> None:
-        cfg = Config(memlora_dir=tmp_path / "memlora")
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         project = tmp_path / "proj"
         project.mkdir()
         init_project(project, config=cfg)
@@ -83,8 +83,8 @@ class TestRenderCostReport:
         assert isinstance(report["sections"], dict)
 
     def test_render_stays_under_single_ceiling(self, tmp_path: Path) -> None:
-        from memlora.config import DEFAULT_TOKEN_BUDGET
-        cfg = Config(memlora_dir=tmp_path / "memlora")
+        from cognikernel.config import DEFAULT_TOKEN_BUDGET
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         project = tmp_path / "proj"
         project.mkdir()
         init_project(project, config=cfg)

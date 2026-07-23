@@ -69,7 +69,7 @@ def sweep(collected, config_base) -> None:
     """Offline gate sweep over the cached temporal retrievals."""
     import dataclasses
 
-    from memlora.integration.query import select_ck1_hits
+    from cognikernel.integration.query import select_ck1_hits
 
     grid = [
         (d, b, anchor, cap)
@@ -112,29 +112,29 @@ def main() -> None:
     ap.add_argument("--sweep", action="store_true", help="grid-sweep gate params")
     args = ap.parse_args()
 
-    home = Path(tempfile.mkdtemp(prefix="memlora_ck1_"))
+    home = Path(tempfile.mkdtemp(prefix="cognikernel_ck1_"))
     (home / "projects").mkdir()
-    # The embedding-model cache lives under MEMLORA_DIR — carry the real one
+    # The embedding-model cache lives under COGNIKERNEL_DIR — carry the real one
     # into the sandbox so the warm path doesn't re-download 130MB per run.
-    real_models = Path.home() / ".memlora" / "models"
+    real_models = Path.home() / ".cognikernel" / "models"
     if real_models.exists():
         shutil.copytree(real_models, home / "models")
-    os.environ["MEMLORA_DIR"] = str(home)
-    os.environ["MEMLORA_DISABLE_AUTO_WARM"] = "1"
+    os.environ["COGNIKERNEL_DIR"] = str(home)
+    os.environ["COGNIKERNEL_DISABLE_AUTO_WARM"] = "1"
 
     if args.cold:
-        import memlora.embedding.model as m
+        import cognikernel.embedding.model as m
         m.is_ready = lambda: False  # type: ignore[assignment]
         m.warm = lambda: None  # type: ignore[assignment]
         print("mode: forced cold (BM25 only)")
     else:
-        from memlora.embedding.model import ensure_ready
+        from cognikernel.embedding.model import ensure_ready
         print("dense axis:", "warm" if ensure_ready(timeout=90) else "COLD")
 
-    from memlora.config import Config
-    from memlora.integration.query import recall_for_prompt
-    from memlora.integration.session import render_state
-    from memlora.storage.projections import invalidate_projection
+    from cognikernel.config import Config
+    from cognikernel.integration.query import recall_for_prompt
+    from cognikernel.integration.session import render_state
+    from cognikernel.storage.projections import invalidate_projection
 
     config = Config.load(project_path=PROJECT)
 
@@ -146,8 +146,8 @@ def main() -> None:
     probe_rx = [(frag, re.compile(gold, re.IGNORECASE | re.DOTALL))
                 for _, frag, gold in [(i, p[1][:60], p[2]) for i, p in enumerate(PROBES)]]
 
-    from memlora.retrieval.hybrid import hybrid_recall
-    from memlora.storage.render_ledger import rendered_event_ids
+    from cognikernel.retrieval.hybrid import hybrid_recall
+    from cognikernel.storage.render_ledger import rendered_event_ids
 
     # Phase 1 — collect temporal retrievals once: (prompt, hits, block-seen,
     # gold regex | None, is_fixture). Ledger growth from ck1 injections within
@@ -204,7 +204,7 @@ def main() -> None:
         return
 
     # Phase 2 — evaluate the shipped defaults.
-    from memlora.integration.query import select_ck1_hits
+    from cognikernel.integration.query import select_ck1_hits
 
     n_inject = probe_hits = eligible = 0
     fixture_ok = False

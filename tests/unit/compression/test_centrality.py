@@ -1,6 +1,6 @@
 """Tests for PageRank-based file centrality."""
 import pytest
-from memlora.compression.centrality import centrality_factor, compute_file_centrality
+from cognikernel.compression.centrality import centrality_factor, compute_file_centrality
 
 
 class TestComputeFileCentrality:

@@ -7,7 +7,7 @@
 #   powershell -File scripts/verify_simulation_s1.ps1
 
 $CK_PATH = "C:\Users\Admin\OneDrive\Desktop\notesapi_ck"
-$MEMLORA = "memlora"
+$COGNIKERNEL = "cognikernel"
 $PYTHON  = "C:\Users\Admin\AppData\Local\Programs\Python\Python312\python.exe"
 
 Write-Host "=== Session 1 Extraction Verification ===" -ForegroundColor Cyan
@@ -15,16 +15,16 @@ Write-Host "Project: $CK_PATH"
 Write-Host ""
 
 # Show full injection state
-Write-Host "--- memlora show output ---" -ForegroundColor Yellow
-& $MEMLORA show $CK_PATH
+Write-Host "--- cognikernel show output ---" -ForegroundColor Yellow
+& $COGNIKERNEL show $CK_PATH
 Write-Host ""
 
 # Check for specific decisions in DB
 $PYTHON_CHECK = @"
 import sys, sqlite3
 sys.path.insert(0, 'src')
-from memlora.config import Config
-from memlora.storage.connection import get_db_path, hash_project_path
+from cognikernel.config import Config
+from cognikernel.storage.connection import get_db_path, hash_project_path
 
 cfg = Config.load()
 pid = hash_project_path('$CK_PATH')
@@ -75,14 +75,14 @@ print(f'Total active events: {total}')
 failures = conn.execute('SELECT COUNT(*) FROM extraction_failures').fetchone()[0]
 print(f'Extraction failures: {failures}')
 if failures > 0:
-    print('  Run: memlora failures $CK_PATH')
+    print('  Run: cognikernel failures $CK_PATH')
 
 print()
 if all_pass:
     print('All checks passed — safe to start Session 2.')
 else:
     print('Some checks FAILED — investigate before starting Session 2.')
-    print('Run: memlora doctor $CK_PATH')
+    print('Run: cognikernel doctor $CK_PATH')
     sys.exit(1)
 "@
 

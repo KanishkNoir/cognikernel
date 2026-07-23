@@ -52,18 +52,18 @@ BUDGETS = [1500, 2500, 3500, 5000]
 
 
 def main() -> None:
-    home = Path(tempfile.mkdtemp(prefix="memlora_j7_"))
+    home = Path(tempfile.mkdtemp(prefix="cognikernel_j7_"))
     (home / "projects").mkdir()
     shutil.copy(SRC_DB, home / "projects" / f"{PID}.db")
-    os.environ["MEMLORA_DIR"] = str(home)
-    os.environ["MEMLORA_DISABLE_AUTO_WARM"] = "1"
+    os.environ["COGNIKERNEL_DIR"] = str(home)
+    os.environ["COGNIKERNEL_DISABLE_AUTO_WARM"] = "1"
 
     import dataclasses
 
-    from memlora.config import Config
-    from memlora.injection.template import count_tokens_accurate
-    from memlora.integration.session import render_state
-    from memlora.storage.projections import invalidate_projection
+    from cognikernel.config import Config
+    from cognikernel.injection.template import count_tokens_accurate
+    from cognikernel.integration.session import render_state
+    from cognikernel.storage.projections import invalidate_projection
 
     base = Config.load(project_path=PROJECT)
 

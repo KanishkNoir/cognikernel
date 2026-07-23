@@ -80,10 +80,10 @@ def main():
 
         print(f"[smoke] Temp project at: {tmp}")
 
-        # Import memlora modules
-        from memlora.integration.session import session_end, render_state
-        from memlora.storage.connection import hash_project_path, get_db_path
-        from memlora.config import Config
+        # Import cognikernel modules
+        from cognikernel.integration.session import session_end, render_state
+        from cognikernel.storage.connection import hash_project_path, get_db_path
+        from cognikernel.config import Config
 
         config = Config.load()
         project_id = hash_project_path(tmp)

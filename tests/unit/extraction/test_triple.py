@@ -1,13 +1,13 @@
-"""Tests for CKL V2 triple extraction (memlora.extraction.triple)."""
+"""Tests for CKL V2 triple extraction (cognikernel.extraction.triple)."""
 import pytest
-from memlora.extraction.triple import (
+from cognikernel.extraction.triple import (
     OP_IMPL,
     OP_NEG,
     OP_NULL,
     augment_with_triple,
     extract_triple,
 )
-from memlora.storage.events import Event
+from cognikernel.storage.events import Event
 
 
 def _event(

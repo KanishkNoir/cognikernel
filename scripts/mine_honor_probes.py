@@ -76,7 +76,7 @@ def _jaccard(a: str, b: str) -> float:
 
 
 def mine_store(name: str, pid: str, cap: int) -> list[dict]:
-    db = Path.home() / ".memlora" / "projects" / f"{pid}.db"
+    db = Path.home() / ".cognikernel" / "projects" / f"{pid}.db"
     con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     cands: list[dict] = []

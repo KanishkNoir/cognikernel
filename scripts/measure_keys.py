@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from memlora.extraction.decision_key import CHOICE_FAMILY, derive_decision_key
+from cognikernel.extraction.decision_key import CHOICE_FAMILY, derive_decision_key
 
 # The three measured evolution chains (gamma): event ids that SHOULD co-key.
 GOLD_CHAINS = {

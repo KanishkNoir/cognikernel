@@ -1,7 +1,7 @@
 """Tests for CKL (CogniKernel Language) V1 and V2 rendering."""
-from memlora.injection.ckl import CKL_LEGEND, CKL_OPS_LEGEND, render_event_ckl
-from memlora.injection.template import InjectionContext, render_injection
-from memlora.storage.events import Event
+from cognikernel.injection.ckl import CKL_LEGEND, CKL_OPS_LEGEND, render_event_ckl
+from cognikernel.injection.template import InjectionContext, render_injection
+from cognikernel.storage.events import Event
 
 
 def _event(

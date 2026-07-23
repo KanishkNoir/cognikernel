@@ -14,7 +14,7 @@ It is version-agnostic: it scores the current lexical+subject `supersedes()` tod
 any future cross-encoder on the SAME pairs. It never trains on anything — the fixture
 (tests/fixtures/supersession_pairs_gold.json) is the held-out eval.
 
-Default predicate is memlora.delta.supersede.supersedes(new, old). Swap with --predicate
+Default predicate is cognikernel.delta.supersede.supersedes(new, old). Swap with --predicate
 to score an alternative (an importable "module:function" taking (new_desc, old_desc) -> bool).
 
 Usage:
@@ -41,7 +41,7 @@ sys.path.insert(0, str(_ROOT / "src"))
 def load_predicate(spec: str | None) -> Callable[[str, str], bool]:
     """Return a (new_desc, old_desc) -> bool predicate. Default: lexical+subject supersedes()."""
     if not spec:
-        from memlora.delta.supersede import supersedes
+        from cognikernel.delta.supersede import supersedes
         return supersedes
     mod_name, _, fn_name = spec.partition(":")
     if not fn_name:

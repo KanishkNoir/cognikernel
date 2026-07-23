@@ -2,7 +2,7 @@
 """Train the v1 salience+type head — closed-form ridge over bge-small embeddings.
 
 Reads a JSONL of {text, label} seed examples, embeds each with the SAME model the
-runtime uses (memlora.embedding.model.embed_text, L2-normalized 384-d), fits a
+runtime uses (cognikernel.embedding.model.embed_text, L2-normalized 384-d), fits a
 linear classifier in closed form, and exports heads/salience_v1.npz.
 
 Closed-form ridge (no SGD → deterministic, no sklearn):
@@ -28,7 +28,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_SEEDS = _ROOT / "tests" / "fixtures" / "salience_seed.jsonl"
 _GENERATED = _ROOT / "tests" / "fixtures" / "salience_train_generated.jsonl"
 _TWINS = _ROOT / "tests" / "fixtures" / "salience_twins_generated.jsonl"
-_OUT = _ROOT / "src" / "memlora" / "extraction" / "heads" / "salience_v1.npz"
+_OUT = _ROOT / "src" / "cognikernel" / "extraction" / "heads" / "salience_v1.npz"
 
 # Must match salience.LABELS order.
 LABELS = (
@@ -57,7 +57,7 @@ def load_seeds(path: Path) -> list[tuple[str, str]]:
 
 
 def embed_all(texts: list[str]) -> np.ndarray:
-    from memlora.embedding.model import embed_text, ensure_ready
+    from cognikernel.embedding.model import embed_text, ensure_ready
 
     if not ensure_ready(timeout=180):
         raise SystemExit("embedding model not available — cannot train")

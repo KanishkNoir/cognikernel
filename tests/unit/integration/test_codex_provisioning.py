@@ -7,15 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.cli import _cmd_init
-from memlora.integration.health import check_codex
+from cognikernel.config import Config
+from cognikernel.integration.cli import _cmd_init
+from cognikernel.integration.health import check_codex
 
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch) -> Path:
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("MEMLORA_DISABLE_AUTO_WARM", "1")
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("COGNIKERNEL_DISABLE_AUTO_WARM", "1")
     p = tmp_path / "proj"
     p.mkdir()
     return p
@@ -29,7 +29,7 @@ class TestInitProvisionsCodex:
         assert "mcp-serve" in codex_cfg
         assert "cwd =" in codex_cfg
         assert "[mcp_servers.cognikernel.env]" in codex_cfg
-        assert "MEMLORA_PROJECT_PATH" in codex_cfg
+        assert "COGNIKERNEL_PROJECT_PATH" in codex_cfg
         agents = (project / "AGENTS.md").read_text(encoding="utf-8")
         assert "CogniKernel" in agents and "codex-sync" in agents and "get_session_state" in agents
 
@@ -58,13 +58,13 @@ class TestInitProvisionsCodex:
             "\n"
             "[mcp_servers.cognikernel]\n"
             'command = "python"\n'
-            'args = ["-m", "memlora", "mcp-serve"]\n',
+            'args = ["-m", "cognikernel", "mcp-serve"]\n',
             encoding="utf-8",
         )
         _cmd_init(argparse.Namespace(project_path=str(project)))
         cfg = (codex_dir / "config.toml").read_text(encoding="utf-8")
         assert cfg.count("[mcp_servers.cognikernel]") == 1
-        assert "cwd =" in cfg and "MEMLORA_PROJECT_PATH" in cfg
+        assert "cwd =" in cfg and "COGNIKERNEL_PROJECT_PATH" in cfg
         assert "keep-me" in cfg
 
     def test_preserves_existing_agents_md(self, project: Path):

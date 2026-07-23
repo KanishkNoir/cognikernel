@@ -6,8 +6,8 @@ import sqlite3
 
 import pytest
 
-from memlora.storage.events import Event, insert_event
-from memlora.storage.fts import (
+from cognikernel.storage.events import Event, insert_event
+from cognikernel.storage.fts import (
     bm25_search,
     build_match_query,
     ensure_fts,
@@ -15,7 +15,7 @@ from memlora.storage.fts import (
     fts_enabled,
     prohibition_search,
 )
-from memlora.storage.migrations import run_migrations
+from cognikernel.storage.migrations import run_migrations
 
 PID = "a" * 16
 

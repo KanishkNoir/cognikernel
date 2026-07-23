@@ -1,0 +1,1366 @@
+"""Minimal CLI entry point for CogniKernel — drives E2E testing and project management."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+from cognikernel.config import Config
+
+# `cognikernel.integration.session` (and its extraction / symbol / tree-sitter stack)
+# is imported lazily inside the handlers that need it, NOT at module top — so the
+# `python -m cognikernel hook-*` hot path (hook-pretool fires on every Read) never pays
+# for the heavy stack it doesn't use. See main()'s hook fast-path dispatch (CK-6a).
+
+
+def _ensure_utf8_output() -> None:
+    """Make CLI/hook output encoding-safe on non-UTF-8 consoles (e.g. Windows
+    cp1252). The rendered block uses non-ASCII (the skeleton's '→'), which raises
+    UnicodeEncodeError when printed to a cp1252 stdout. Best-effort: reconfigure
+    stdout/stderr to UTF-8 with replacement; leave streams that can't reconfigure.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+# Hook subcommand → integration.hooks entrypoint. Dispatched before argparse and
+# before any heavy import so the per-Read hook stays light (CK-6a).
+_HOOK_ENTRYPOINTS = {
+    "hook-session-start": "session_start_main",
+    "hook-stop": "stop_main",
+    "hook-pretool": "pretool_main",
+    "hook-posttool": "posttool_main",
+    "hook-posttool-read": "posttool_read_main",
+    # CK-1: UserPromptSubmit query-time injection (flag: query_time_injection)
+    "hook-user-prompt": "user_prompt_submit_main",
+    # CK-4: SubagentStop transcript extraction (flag: capture_subagents)
+    "hook-subagent-stop": "subagent_stop_main",
+    # CK-3a: PostToolUse:Grep cache storage (gate: grep_cache_enabled)
+    "hook-posttool-grep": "posttool_grep_main",
+}
+
+
+def main() -> None:
+    _ensure_utf8_output()
+    argv = sys.argv[1:]
+    if argv and argv[0] in _HOOK_ENTRYPOINTS:
+        from cognikernel.integration import hooks
+        getattr(hooks, _HOOK_ENTRYPOINTS[argv[0]])()
+        return
+    parser = argparse.ArgumentParser(
+        prog="cognikernel",
+        description="CogniKernel — structured session memory for AI coding assistants",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # ── init ──────────────────────────────────────────────────────────────────
+    p_init = sub.add_parser("init", help="Initialise the DB for a project")
+    p_init.add_argument("project_path", help="Path to the project root")
+    p_init.add_argument(
+        "--no-warm",
+        action="store_true",
+        help="Skip the one-time embedding-model download (recall stays lexical until warmed)",
+    )
+
+    # ── extract ───────────────────────────────────────────────────────────────
+    p_extract = sub.add_parser(
+        "extract",
+        help="Extract events from a transcript file and merge into DB",
+    )
+    p_extract.add_argument("project_path", help="Path to the project root")
+    p_extract.add_argument(
+        "transcript_file",
+        help="Path to the transcript file, or '-' to read from stdin",
+    )
+    p_extract.add_argument(
+        "--session-id",
+        required=False,
+        default=None,
+        metavar="ID",
+        help="Unique identifier for this session. Omit when using --auto-session-id.",
+    )
+    p_extract.add_argument(
+        "--auto-session-id",
+        action="store_true",
+        help="Derive session ID from the JSONL filename (the UUID stem). "
+             "Mutually exclusive with --session-id.",
+    )
+    p_extract.add_argument(
+        "--jsonl",
+        action="store_true",
+        help="Treat transcript_file as a Claude Code JSONL session file and convert it",
+    )
+    p_extract.add_argument(
+        "--codex",
+        action="store_true",
+        help="Treat transcript_file as a Codex CLI rollout JSONL session and convert it",
+    )
+    p_extract.add_argument(
+        "--git-diff",
+        metavar="FILE",
+        help="Optional path to a git-diff file to augment extraction",
+    )
+
+    # ── capture ───────────────────────────────────────────────────────────────
+    p_capture = sub.add_parser(
+        "capture",
+        help="Store evidence + enqueue job, then spawn background worker (I4 fast path)",
+    )
+    p_capture.add_argument("project_path", help="Path to the project root")
+    p_capture.add_argument("transcript_file", help="Path to the JSONL session file")
+    p_capture.add_argument("--auto-session-id", action="store_true",
+                           help="Derive session ID from the JSONL filename stem")
+    p_capture.add_argument("--session-id", default=None, metavar="ID")
+    p_capture.add_argument("--jsonl", action="store_true",
+                           help="Transcript is a Claude Code JSONL file (default: yes for capture)")
+    p_capture.add_argument("--git-diff", metavar="FILE",
+                           help="Optional path to a git-diff file")
+    p_capture.add_argument("--no-spawn", action="store_true",
+                           help="Store evidence + enqueue only; do not spawn the worker subprocess")
+
+    # ── process-jobs ──────────────────────────────────────────────────────────
+    p_pjobs = sub.add_parser(
+        "process-jobs",
+        help="Claim and process queued extraction jobs (background worker for I4)",
+    )
+    p_pjobs.add_argument("project_path", help="Path to the project root")
+    p_pjobs.add_argument("--max-jobs", type=int, default=50, metavar="N",
+                         help="Max jobs to process in one run (default 50)")
+    p_pjobs.add_argument("--time-budget", type=float, default=None, metavar="S",
+                         dest="time_budget",
+                         help="Stop claiming new jobs after S seconds (hook-safe drains)")
+
+    # ── show ──────────────────────────────────────────────────────────────────
+    p_show = sub.add_parser("show", help="Display current project state")
+    p_show.add_argument("project_path", help="Path to the project root")
+    p_show.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Output raw projection JSON instead of rendered text",
+    )
+
+    # ── doctor ────────────────────────────────────────────────────────────────
+    p_doctor = sub.add_parser("doctor", help="Check DB health and print a summary")
+    p_doctor.add_argument("project_path", help="Path to the project root")
+    p_doctor.add_argument(
+        "--strict", action="store_true",
+        help="Exit non-zero if any subsystem is degraded (for pre-flight / CI).",
+    )
+
+    # ── reset ─────────────────────────────────────────────────────────────────
+    p_reset = sub.add_parser("reset", help="Delete all events for a project")
+    p_reset.add_argument("project_path", help="Path to the project root")
+    p_reset.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt",
+    )
+
+    # ── telemetry ─────────────────────────────────────────────────────────────
+    p_telemetry = sub.add_parser(
+        "telemetry",
+        help="Ingest cache stats from Claude Code JSONL session files",
+    )
+    p_telemetry.add_argument("project_path", help="Path to the project root")
+
+    # ── mcp-serve ─────────────────────────────────────────────────────────────
+    sub.add_parser(
+        "mcp-serve",
+        help="Run the MCP server over stdio (used by Claude Code config)",
+    )
+
+    # ── failures ──────────────────────────────────────────────────────────────
+    p_failures = sub.add_parser(
+        "failures",
+        help="Show recent extraction failures (dead-letter queue)",
+    )
+    p_failures.add_argument("project_path", help="Path to the project root")
+    p_failures.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Number of recent failures to show (default: 10)",
+    )
+    p_failures.add_argument(
+        "--replay",
+        type=int,
+        metavar="JOB_ID",
+        help="Re-run extraction for a dead-lettered job using its original raw evidence",
+    )
+
+    # ── rebuild ───────────────────────────────────────────────────────────────
+    p_rebuild = sub.add_parser(
+        "rebuild",
+        help="Regenerate derived tables from raw_evidence into a sidecar DB",
+    )
+    p_rebuild.add_argument("project_path", help="Path to the project root")
+    p_rebuild.add_argument(
+        "--from-raw",
+        action="store_true",
+        required=True,
+        help="Replay all raw_evidence to regenerate events and projections",
+    )
+    p_rebuild.add_argument(
+        "--sidecar",
+        action="store_true",
+        required=True,
+        help=(
+            "Write output to <project>.db.rebuild (required in V1 — "
+            "the source DB is never modified)"
+        ),
+    )
+    p_rebuild.add_argument(
+        "--since",
+        type=int,
+        default=0,
+        metavar="EVIDENCE_ID",
+        help="Only replay evidence rows with id > EVIDENCE_ID (default: 0 = all)",
+    )
+    p_rebuild.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be processed without writing the sidecar",
+    )
+
+    # ── lookup ────────────────────────────────────────────────────────────────
+    p_lookup = sub.add_parser(
+        "lookup",
+        help="Look up a file path in the component map (used by PreToolUse hook)",
+    )
+    p_lookup.add_argument("project_path", help="Path to the project root")
+    p_lookup.add_argument("file_path", help="File path to look up")
+
+    # ── codex-sync ──────────────────────────────────────────────────────────────
+    p_codex = sub.add_parser(
+        "codex-sync",
+        help="Capture Codex CLI rollouts for this project into the shared store "
+             "(cross-platform memory). Scans ~/.codex/sessions and matches by cwd.",
+    )
+    p_codex.add_argument("project_path", help="Path to the project root")
+    p_codex.add_argument("--scan-days", type=int, default=None, metavar="N",
+                         help="Only consider rollouts modified in the last N days "
+                              "(default: config codex_scan_window_days).")
+    p_codex.add_argument("--no-drain", action="store_true",
+                         help="Enqueue only; do not spawn the background extraction worker.")
+
+    # ── warm ──────────────────────────────────────────────────────────────────
+    sub.add_parser(
+        "warm",
+        help=(
+            "Download + load the embedding model once into the persistent cache. "
+            "Run before benchmarking so no session pays the cold-start download."
+        ),
+    )
+
+    # ── install-heads ───────────────────────────────────────────────────────────
+    p_install = sub.add_parser(
+        "install-heads",
+        help=(
+            "Install the v2 (SetFit) encoder ONNX body + tokenizer into the canonical "
+            "~/.cognikernel/models/salience_v2/ so v2/v2-broad extraction works outside a "
+            "repo checkout. Run once before benchmarking the encoder backend."
+        ),
+    )
+    p_install.add_argument(
+        "--source",
+        help="Dir containing body.onnx + tokenizer.json (default: the repo export output "
+             "at models/salience_setfit/onnx). Produce it with scripts/export_setfit_onnx.py.",
+    )
+    p_install.add_argument(
+        "--force", action="store_true", help="Overwrite artifacts already installed",
+    )
+    p_install.add_argument(
+        "--no-download", action="store_true",
+        help="Never fetch from the GitHub release; install only from a local source",
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "init":
+        _cmd_init(args)
+    elif args.command == "extract":
+        _cmd_extract(args)
+    elif args.command == "capture":
+        _cmd_capture(args)
+    elif args.command == "process-jobs":
+        _cmd_process_jobs(args)
+    elif args.command == "codex-sync":
+        _cmd_codex_sync(args)
+    elif args.command == "show":
+        _cmd_show(args)
+    elif args.command == "doctor":
+        _cmd_doctor(args)
+    elif args.command == "reset":
+        _cmd_reset(args)
+    elif args.command == "telemetry":
+        _cmd_telemetry(args)
+    elif args.command == "mcp-serve":
+        _cmd_mcp_serve()
+    elif args.command == "failures":
+        _cmd_failures(args)
+    elif args.command == "rebuild":
+        _cmd_rebuild(args)
+    elif args.command == "lookup":
+        sys.exit(_cmd_lookup(args))
+    elif args.command == "warm":
+        _cmd_warm()
+    elif args.command == "install-heads":
+        _cmd_install_heads(args)
+
+
+# ── subcommand handlers ───────────────────────────────────────────────────────
+
+
+def _warm_embedding_model() -> bool:
+    """Best-effort: download + load the embedding model into the persistent cache.
+
+    The first fastembed fetch is ~130MB and can take minutes; doing it once, in the
+    foreground (init or `cognikernel warm`), means no hook or MCP `recall` ever pays
+    that cost mid-session. Prints status; returns True if the model is ready.
+    Never raises — recall degrades to deterministic lexical matching without it.
+    """
+    import importlib.util
+    import time
+
+    if importlib.util.find_spec("fastembed") is None:
+        print("embedding extra not installed — recall/find_related will use lexical matching.")
+        return False
+
+    from cognikernel.embedding.model import EMBEDDING_MODEL_VERSION, ensure_ready
+
+    print(f"warming embedding model ({EMBEDDING_MODEL_VERSION}); first run downloads ~130MB, please wait…")
+    t0 = time.monotonic()
+    try:
+        ok = ensure_ready(timeout=None)  # block fully: the one place a long wait is OK
+    except Exception:
+        ok = False
+    dt = time.monotonic() - t0
+    if ok:
+        print(f"embedding model ready in {dt:.1f}s — cached under COGNIKERNEL_DIR/models (default ~/.cognikernel/models)")
+    else:
+        print("embedding model download failed — recall/find_related will use lexical matching.")
+    return ok
+
+
+def _cmd_warm() -> None:
+    if not _warm_embedding_model():
+        sys.exit(1)
+
+# ── In-session slash commands / skills (so operators never drop out of the
+# assistant to run the `cognikernel` CLI) ─────────────────────────────────────────
+# Two client surfaces, written by `cognikernel init` into every project:
+#   - Claude Code: `.claude/commands/<name>.md` — a slash command whose body
+#     `!`-executes the CLI and asks the model to summarise the output.
+#   - Codex:       `.agents/skills/<name>/SKILL.md` — a repo-level skill that
+#     instructs Codex to run the CLI itself. (Codex only discovers project skills
+#     from `.agents/skills`; `.codex/prompts` is user-home-only and deprecated.)
+# These files are CK-managed and rewritten on every init so template fixes
+# propagate. `recall` / `find_related` are MCP tools, so those wrappers steer the
+# model to the tool rather than shelling out (there is no `cognikernel recall` CLI).
+#
+# Spec tuple: (name, kind, target, takes_arg, blurb)
+#   kind="cli" → runs `cognikernel <target>`; kind="mcp" → steers to the <target> MCP tool.
+_AGENT_COMMANDS: list[tuple[str, str, str, bool, str]] = [
+    ("ck-doctor", "cli", "doctor", False,
+     "CogniKernel DB health: schema/projection version, job counts, telemetry, dead-letters."),
+    ("ck-sync", "cli", "codex-sync", False,
+     "Capture this Codex session's prior decisions into CogniKernel (cross-platform memory). "
+     "Run at session start so memory from earlier Codex/Claude work is available."),
+    ("ck-show", "cli", "show", False,
+     "Render the current CogniKernel session-context block on demand."),
+    ("ck-failures", "cli", "failures", False,
+     "List CogniKernel dead-lettered extraction jobs for triage."),
+    ("ck-lookup", "cli", "lookup", True,
+     "Debug CogniKernel's strict Read-gate decision for a file path."),
+    ("ck-recall", "mcp", "recall", True,
+     "Recall prior CogniKernel decisions/constraints relevant to a query."),
+    ("ck-related", "mcp", "find_related", True,
+     "Find decisions and code areas related to a query via semantics and the import graph."),
+    ("ck-skeleton", "mcp", "skeleton", True,
+     "Full AST signatures for a file from the CogniKernel skeleton — no file read needed."),
+]
+
+
+def _write_claude_command(
+    commands_dir: Path, name: str, kind: str, target: str, takes_arg: bool, blurb: str
+) -> None:
+    """Write one `.claude/commands/<name>.md` slash command."""
+    front = ["---", f"description: {blurb}"]
+    if takes_arg:
+        hint = "<file-path>" if target in ("lookup", "skeleton") else "<query>"
+        front.append(f"argument-hint: {hint}")
+    if kind == "cli":
+        # Prefix-scoped permission so the `!` execution doesn't prompt every time.
+        front.append(f"allowed-tools: Bash(python -m cognikernel {target}:*)")
+    front.append("---")
+
+    # The `!`-executed command MUST NOT contain a shell expansion: Claude Code
+    # static-checks it against `allowed-tools` before running and rejects any
+    # `$VAR` / `$(...)` ("Contains simple_expansion") because the expansion can't
+    # be verified — so the command silently fails to run. We therefore pass the
+    # project root as a literal `.` (slash-command `!`-bash runs from the project
+    # root), NOT `$CLAUDE_PROJECT_DIR`. `$ARGUMENTS` is safe — Claude Code
+    # substitutes it into the command string *before* the permission check.
+    if kind == "mcp":
+        body = (
+            f'Use the cognikernel `{target}` MCP tool to answer: "$ARGUMENTS". Pass '
+            "project_path as the absolute path of this project's root directory. "
+            "Summarise the returned items; do not re-read files for facts already covered.\n"
+        )
+    elif takes_arg:
+        body = (
+            f"Explain CogniKernel's `{target}` result for `$ARGUMENTS`, based on the "
+            "output below. Do not modify any files.\n\n"
+            f'!`python -m cognikernel {target} . "$ARGUMENTS"`\n'
+        )
+    else:
+        body = (
+            f"Run CogniKernel's `{target}` for this project and give a short, "
+            "actionable summary of the output below. Do not modify any files.\n\n"
+            f"!`python -m cognikernel {target} .`\n"
+        )
+    (commands_dir / f"{name}.md").write_text("\n".join(front) + "\n\n" + body, encoding="utf-8")
+
+
+def _write_codex_skill(
+    skills_dir: Path, name: str, kind: str, target: str, takes_arg: bool, blurb: str
+) -> None:
+    """Write one `.agents/skills/<name>/SKILL.md` repo-level Codex skill."""
+    skill_dir = skills_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    desc = f"{blurb} Use when the user asks for this CogniKernel/cognikernel operation."
+    front = f"---\nname: {name}\ndescription: {desc}\n---\n\n"
+
+    if kind == "mcp":
+        body = (
+            f"Use the cognikernel `{target}` MCP tool with the user's query and "
+            "project_path set to the repository root, then summarise the returned "
+            "decisions/constraints concisely.\n"
+        )
+    elif takes_arg:
+        body = (
+            f'From the repository root, run `python -m cognikernel {target} . "<PATH>"`, '
+            "substituting the path the user supplied, then explain the result. Do not "
+            "modify any files.\n"
+        )
+    else:
+        body = (
+            f"From the repository root, run `python -m cognikernel {target} .` and give a "
+            "short, actionable summary of the output. Do not modify any files.\n"
+        )
+    (skill_dir / "SKILL.md").write_text(front + body, encoding="utf-8")
+
+
+def _write_agent_commands(project_path: Path) -> None:
+    """Scaffold the Claude Code slash commands and Codex skills for a project."""
+    commands_dir = project_path / ".claude" / "commands"
+    commands_dir.mkdir(parents=True, exist_ok=True)
+    skills_dir = project_path / ".agents" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    for spec in _AGENT_COMMANDS:
+        _write_claude_command(commands_dir, *spec)
+        _write_codex_skill(skills_dir, *spec)
+
+
+# Published encoder artifacts (cognikernel install-heads). Each entry is
+# (release asset name, installed filename, sha256). Bump the tag + hashes
+# together when a new head generation is released.
+_HEADS_RELEASE_URL = "https://github.com/KanishkNoir/cognikernel/releases/download/heads-v1"
+_HEADS_RELEASE_ASSETS: dict[str, list[tuple[str, str, str]]] = {
+    "salience_v2": [
+        ("salience_v2-body.onnx", "body.onnx",
+         "551dff21e4bef79a7cc6f7f196d6f8a836a9752cce49617e20cdced93907f7a8"),
+        ("salience_v2-tokenizer.json", "tokenizer.json",
+         "de2a1b8d1aee816739bc3ca0125a473a080bf05311c640f63bc22099527b1c6b"),
+    ],
+    "supersession_xenc": [
+        ("supersession_xenc-body.onnx", "body.onnx",
+         "0eed82dbda0c3da3fcb64e1c6175602df106a92479ec0e06aef8f79553378ef6"),
+        ("supersession_xenc-tokenizer.json", "tokenizer.json",
+         "851ca67100d372ca3ae031a6abd168f53489eebfd7d89523f35c5c9b4d372c3c"),
+        ("supersession_xenc-threshold.json", "threshold.json",
+         "cc6087b344be54772989e8b6264800f7d2dc09d944080ee74fd5c58f0911dc9d"),
+    ],
+}
+
+
+def _repo_models_dir() -> Path:
+    """The repo-checkout models/ dir (the developer path; absent in installs)."""
+    return Path(__file__).resolve().parents[3] / "models"
+
+
+def _download_head_asset(url: str, target: Path, sha256: str) -> None:
+    """Stream *url* to *target*, verifying the pinned sha256. Atomic via .part."""
+    import hashlib
+    import urllib.request
+
+    part = target.with_suffix(target.suffix + ".part")
+    digest = hashlib.sha256()
+    req = urllib.request.Request(url, headers={"User-Agent": "cognikernel-install-heads"})
+    with urllib.request.urlopen(req, timeout=60) as resp, open(part, "wb") as out:
+        while chunk := resp.read(1 << 20):
+            digest.update(chunk)
+            out.write(chunk)
+    if digest.hexdigest() != sha256:
+        part.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"checksum mismatch for {url}: got {digest.hexdigest()}, expected {sha256}"
+        )
+    os.replace(part, target)
+
+
+def _install_head_from_release(label: str, dest: Path, assets: list[tuple[str, str, str]],
+                               force: bool) -> bool:
+    """Download one head's assets from the GitHub release. True on success."""
+    dest.mkdir(parents=True, exist_ok=True)
+    for asset_name, dest_file, sha in assets:
+        target = dest / dest_file
+        if target.exists() and not force:
+            print(f"  exists (skip): {target}  — use --force to overwrite")
+            continue
+        url = f"{_HEADS_RELEASE_URL}/{asset_name}"
+        print(f"  downloading [{label}]: {asset_name} ...")
+        try:
+            _download_head_asset(url, target, sha)
+        except Exception as exc:
+            print(f"  download failed [{label}]: {exc}", file=sys.stderr)
+            return False
+        print(f"  installed [{label}]: {target}  ({target.stat().st_size / 1e6:.1f} MB)")
+    return True
+
+
+def _cmd_install_heads(args: argparse.Namespace) -> None:
+    """Install the trained encoder ONNX bodies + tokenizers into the canonical paths.
+
+    The 133 MB body.onnx files are gitignored (regenerable), so they are not in the
+    repo; they are published as GitHub release assets. A local repo export (models/…)
+    is preferred when present — the developer path; otherwise the assets are
+    downloaded and sha256-verified. This places them at
+    <COGNIKERNEL_DIR>/models/{salience_v2, supersession_xenc}/ — the locations
+    extraction.salience_v2 and delta.supersede_xenc resolve — so v2 extraction AND the
+    cross-encoder supersession axis work outside a repo checkout (else they fail open to
+    legacy / lexical). Each head is independent: a missing source is skipped, not fatal.
+    """
+    import os
+    import shutil
+
+    repo_models = _repo_models_dir()
+    models_root = Path(os.environ.get("COGNIKERNEL_DIR") or (Path.home() / ".cognikernel")) / "models"
+    heads = [
+        ("v2 salience head", repo_models / "salience_setfit" / "onnx", "salience_v2"),
+        ("supersession cross-encoder", repo_models / "supersession_xenc" / "onnx", "supersession_xenc"),
+    ]
+    if args.source:  # explicit override installs just the salience head from that dir
+        heads = [("v2 salience head", Path(args.source).resolve(), "salience_v2")]
+
+    needed = ["body.onnx", "tokenizer.json"]
+    installed_any = False
+    for label, src, dest_name in heads:
+        dest = models_root / dest_name
+        if not all((src / f).exists() for f in needed):
+            if args.source or getattr(args, "no_download", False):
+                print(f"  skip [{label}]: source missing in {src} "
+                      "(export via scripts/export_setfit_onnx.py / export_xenc_onnx.py)")
+                continue
+            if _install_head_from_release(
+                label, dest, _HEADS_RELEASE_ASSETS[dest_name], args.force
+            ):
+                installed_any = True
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        # threshold.json (calibration + optional re-validated deployed_min) rides
+        # along when present — the runtime reads it next to the body (xenc).
+        to_copy = list(needed)
+        for opt in ("threshold.json",):
+            if (src / opt).exists() or (src.parent / opt).exists():
+                opt_src = (src / opt) if (src / opt).exists() else (src.parent / opt)
+                shutil.copy2(opt_src, dest / opt)
+                print(f"  installed [{label}]: {dest / opt}")
+        for f in to_copy:
+            target = dest / f
+            if target.exists() and not args.force:
+                print(f"  exists (skip): {target}  — use --force to overwrite")
+                continue
+            shutil.copy2(src / f, target)
+            print(f"  installed [{label}]: {target}  ({(src / f).stat().st_size / 1e6:.1f} MB)")
+        installed_any = True
+
+    if not installed_any:
+        print("no head artifacts found to install", file=sys.stderr)
+        sys.exit(1)
+    print(f"\nheads installed under {models_root}")
+    print('Enable in .cognikernel/config.toml:  extractor = "v2-broad"  and '
+          "(optional) cross_encoder_supersession = true.")
+
+
+# A CK-managed hook command references the package (current name or the legacy
+# pre-rename `memlora`) AND a hook indicator — either the module subcommand form
+# (`-m cognikernel hook-stop`) or the shim-script form (`cognikernel_stop_hook.py`).
+# Matching every form is what lets re-init REPLACE its own hooks instead of
+# appending a duplicate set when the invocation form changed — e.g. across the
+# memlora→cognikernel rename, or a module↔script-shim switch. Recognizing only the
+# current exact string silently double-registered every hook on such a re-init.
+_CK_HOOK_PKG_NAMES = ("cognikernel", "memlora")
+_CK_HOOK_MARKERS = ("hook-", "_hook")
+
+
+def _is_ck_hook_command(command: str) -> bool:
+    c = command.lower()
+    return any(p in c for p in _CK_HOOK_PKG_NAMES) and any(m in c for m in _CK_HOOK_MARKERS)
+
+
+def _is_ck_hook_group(group: dict) -> bool:
+    """True when every command in a settings.json hook group is CK-managed."""
+    hooks = group.get("hooks") if isinstance(group, dict) else None
+    if not isinstance(hooks, list) or not hooks:
+        return False
+    return all(
+        isinstance(h, dict) and _is_ck_hook_command(str(h.get("command", "")))
+        for h in hooks
+    )
+
+
+def _merge_hooks(existing: dict | None, ck_hooks: dict) -> dict:
+    """Merge CK hook groups into existing settings.json hooks without clobbering.
+
+    Per event: user groups (anything not entirely CK-managed) are kept in place,
+    stale CK groups are dropped, and the current CK groups are appended. Events
+    CK doesn't manage pass through untouched.
+    """
+    merged: dict = {}
+    existing = existing if isinstance(existing, dict) else {}
+    for event, groups in existing.items():
+        kept = [g for g in groups if not _is_ck_hook_group(g)] if isinstance(groups, list) else groups
+        if kept:
+            merged[event] = kept
+    for event, ck_groups in ck_hooks.items():
+        merged[event] = merged.get(event, []) + ck_groups
+    return merged
+
+
+def _merge_codex_config(existing: str, codex_block: str) -> str:
+    """Replace CK's managed Codex MCP block while preserving user settings."""
+    lines = existing.splitlines()
+    kept: list[str] = []
+    skipping = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "[mcp_servers.cognikernel]":
+            skipping = True
+            continue
+        if skipping:
+            if stripped == "[mcp_servers.cognikernel.env]":
+                continue
+            if stripped.startswith("[") and stripped.endswith("]"):
+                skipping = False
+                kept.append(line)
+            continue
+        kept.append(line)
+
+    prefix = "\n".join(kept).rstrip()
+    return (prefix + "\n\n" if prefix else "") + codex_block
+
+
+def _cmd_init(args: argparse.Namespace) -> None:
+    import shutil
+
+    from cognikernel.integration.session import init_project
+    project_id = init_project(args.project_path)
+    project_path = Path(args.project_path).resolve()
+
+    # Use forward slashes — hooks run through bash on Windows; backslashes break them
+    python_exe = (shutil.which("python") or "python").replace("\\", "/")
+
+    def _hook_cmd(subcommand: str) -> str:
+        # Path-portable: invoke the installed package (`python -m cognikernel <sub>`)
+        # rather than an absolute script path, so moving the repo or reinstalling
+        # never breaks the registered hooks (CK-6a). Requires `cognikernel` importable.
+        return f"{python_exe} -m cognikernel {subcommand}"
+
+    def _toml_string(value: str | Path) -> str:
+        return json.dumps(str(value))
+
+    # ── .claude/settings.json ─────────────────────────────────────────────────
+    claude_dir = project_path / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    settings_path = claude_dir / "settings.json"
+
+    settings: dict = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    settings["enableAllProjectMcpServers"] = True
+    settings["autoMemoryEnabled"] = False
+    ck_hooks = {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-session-start")}
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    # timeout 300s: covers capture (15s) + the sync drain
+                    # (180s kill ceiling) with margin. Claude Code's default
+                    # hook timeout (60s) killed drains mid-job (I7d).
+                    {"type": "command", "command": _hook_cmd("hook-stop"), "timeout": 300}
+                ]
+            }
+        ],
+        "PreToolUse": [
+            {
+                # One hook, routed by tool_name inside pretool_main:
+                #   Read  → C1 strict re-read/skeleton gate (may deny)
+                #   Write/Edit/MultiEdit → K2 JIT prohibition surfacing (allow + context)
+                # Grep is handled too but only fires when grep_cache_enabled
+                # (default False), so it is omitted from the matcher by design.
+                "matcher": "Read|Write|Edit|MultiEdit",
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-pretool")}
+                ],
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Write",
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-posttool")}
+                ],
+            },
+            {
+                "matcher": "Edit",
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-posttool")}
+                ],
+            },
+            {
+                "matcher": "Read",
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-posttool-read")}
+                ],
+            },
+            {
+                # CK-3a: cache grep results; gated by grep_cache_enabled in config.
+                "matcher": "Grep",
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-posttool-grep")}
+                ],
+            },
+        ],
+        "SubagentStop": [
+            {
+                # CK-4: extract decisions from subagent transcripts; gated by
+                # capture_subagents in config (default True).
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-subagent-stop")}
+                ]
+            }
+        ],
+        # CK-1: per-prompt query-time injection. Benchmark evidence (two gamma
+        # runs): imperative-update prompts ("switch the default alias ...") do
+        # not reliably trigger the agent's pull path, and the block's section
+        # budgets can't carry the full decision surface by design — push the
+        # prompt-relevant slice instead. Fail-open, 3s budget, silent when
+        # nothing clears the relevance gate; still gated by the
+        # query_time_injection config flag.
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-user-prompt")}
+                ]
+            }
+        ],
+    }
+    # Merge, don't clobber: re-init rewrites the CK-managed entries (so template
+    # fixes propagate) but a user's own hooks — including on events CK doesn't
+    # manage — must survive. A CK entry is any group whose every command invokes
+    # `-m cognikernel hook-*`.
+    settings["hooks"] = _merge_hooks(settings.get("hooks"), ck_hooks)
+    settings_path.write_text(
+        json.dumps(settings, indent=2), encoding="utf-8"
+    )
+
+    # ── .cognikernel/config.toml — per-project overrides ──────────────────────────
+    # New projects ship with hook_policy='strict' so the C1 strict gate is active
+    # immediately. Users can edit this file to fall back to advisory mode without
+    # touching the global ~/.cognikernel/config.toml.
+    cognikernel_dir = project_path / ".cognikernel"
+    cognikernel_dir.mkdir(exist_ok=True)
+    project_cfg_path = cognikernel_dir / "config.toml"
+    if not project_cfg_path.exists():
+        project_cfg_path.write_text(
+            '# CogniKernel per-project config. Overrides ~/.cognikernel/config.toml.\n'
+            'hook_policy = "strict"\n'
+            '\n'
+            '# Stage-2 extraction backend: legacy | v1 | v1-broad | v2 | v2-broad.\n'
+            '#   legacy   = deterministic keyword/Aho-Corasick pipeline (default).\n'
+            '#   v2-broad = SetFit fine-tuned encoder head (best quality). Requires the\n'
+            '#              ONNX body installed once: `python -m cognikernel install-heads`.\n'
+            '# The COGNIKERNEL_EXTRACTOR env var overrides this. Heads fail open to legacy\n'
+            '# when artifacts are absent, so a non-legacy value is always safe.\n'
+            '# New projects default to the best mode (v2-broad). Install the ONNX body\n'
+            '# once with `python -m cognikernel install-heads`, or set this to "legacy".\n'
+            'extractor = "v2-broad"\n'
+            '\n'
+            '# Cross-encoder supersession axis (R5): catches a few paraphrased\n'
+            '# corrections lexical misses, precision-safe (additive above the\n'
+            '# temporal/authority/provenance gates; fail-open to lexical if the\n'
+            '# cross-encoder body is not installed). Needs `install-heads` + warm\n'
+            '# (embeddings) and adds some Stop-hook cost. Set false to use lexical only.\n'
+            'cross_encoder_supersession = true\n'
+            '\n'
+            '# CK-1: per-prompt memory injection (UserPromptSubmit hook). Pushes the\n'
+            '# prompt-relevant memory slice alongside each prompt — the block carries\n'
+            '# the top-ranked facts; this carries what THIS prompt needs. Fail-open,\n'
+            '# 3s budget, silent when nothing clears the relevance gate.\n'
+            'query_time_injection = true\n',
+            encoding="utf-8",
+        )
+
+    # ── .mcp.json ─────────────────────────────────────────────────────────────
+    mcp_path = project_path / ".mcp.json"
+    if not mcp_path.exists():
+        mcp_path.write_text(
+            json.dumps(
+                {"mcpServers": {"cognikernel": {"type": "stdio", "command": python_exe, "args": ["-m", "cognikernel", "mcp-serve"]}}},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    # ── .codex/config.toml — Codex MCP registration (cross-platform read path) ──
+    # Codex reads the same shared DB via the MCP server. Idempotent: create the
+    # file with our server block, or append the block to an existing config without
+    # touching the user's other settings (e.g. a `notify` they already configured).
+    codex_dir = project_path / ".codex"
+    codex_cfg_path = codex_dir / "config.toml"
+    codex_block = (
+        "[mcp_servers.cognikernel]\n"
+        f"command = {_toml_string(python_exe)}\n"
+        'args = ["-m", "cognikernel", "mcp-serve"]\n'
+        f"cwd = {_toml_string(project_path)}\n"
+        "[mcp_servers.cognikernel.env]\n"
+        f"COGNIKERNEL_PROJECT_PATH = {_toml_string(project_path)}\n"
+    )
+    if not codex_cfg_path.exists():
+        codex_dir.mkdir(exist_ok=True)
+        codex_cfg_path.write_text(
+            "# CogniKernel — Codex MCP server registration (cross-platform memory).\n"
+            + codex_block,
+            encoding="utf-8",
+        )
+    else:
+        existing_codex = codex_cfg_path.read_text(encoding="utf-8")
+        merged_codex = _merge_codex_config(existing_codex, codex_block)
+        if merged_codex != existing_codex:
+            codex_cfg_path.write_text(merged_codex, encoding="utf-8")
+
+    # ── AGENTS.md — Codex read-side instruction (auto-loaded into Codex context) ─
+    # Codex has no SessionStart hook, so the reliable lever is AGENTS.md: instruct
+    # Codex to pull memory (codex-sync + get_session_state) at session start.
+    agents_md = project_path / "AGENTS.md"
+    agents_section = """\
+## Project memory (CogniKernel)
+
+This project uses **CogniKernel** for cross-session, cross-platform memory shared with Claude Code.
+
+At the **start of a session**: run `python -m cognikernel codex-sync .` to capture decisions from prior
+Codex/Claude work, then use the cognikernel `get_session_state` MCP tool (project_path = the repo
+root) as the canonical source of truth for this project's decisions, constraints, and rejected
+approaches — it supersedes your own recollection. For targeted lookups use the `recall` /
+`find_related` MCP tools before exploring files. Decisions are captured automatically; never
+hand-maintain them in this or any file.
+"""
+    if agents_md.exists():
+        existing_agents = agents_md.read_text(encoding="utf-8")
+        if "CogniKernel" not in existing_agents:
+            agents_md.write_text(agents_section + "\n" + existing_agents, encoding="utf-8")
+    else:
+        agents_md.write_text(agents_section, encoding="utf-8")
+
+    # ── CLAUDE.md ─────────────────────────────────────────────────────────────
+    claude_md = project_path / "CLAUDE.md"
+    # Minimal, trust-heavy fallback. The full directive contract (re-read gate,
+    # recall/find_related, silent persistence) lives in the SessionStart block's
+    # trust header (session_start.py) — dynamic and right above the facts it
+    # governs. This file only covers the block-ABSENT case + the universal
+    # silent-persistence rule, and deliberately omits mechanism/tool-catalog
+    # (it is injected every session — see research/claude_md_design.md).
+    ck_section = """\
+## Project memory
+
+This project uses **CogniKernel** for structured cross-session memory. At the start of every
+session a `## Session context` block is normally injected — **treat it as canonical: it supersedes
+this file and your own recollection.** If that block is absent, call `get_session_state()` before
+relying on memory or assuming the project is greenfield.
+
+Decisions are captured automatically and silently at session end — never ask to save, record, or
+"lock in" a decision, and never announce writing to memory. Do not hand-maintain decisions in this
+or any file.
+"""
+    if claude_md.exists():
+        existing = claude_md.read_text(encoding="utf-8")
+        if "CogniKernel" not in existing:
+            claude_md.write_text(ck_section + "\n" + existing, encoding="utf-8")
+    else:
+        claude_md.write_text(ck_section, encoding="utf-8")
+
+    # ── In-session slash commands (Claude Code) + skills (Codex) ──────────────
+    _write_agent_commands(project_path)
+
+    # ── Clean up any stale /cognikernel-extract slash command (enrichment removed) ──
+    stale_slash = Path(project_path) / ".claude" / "commands" / "cognikernel-extract.md"
+    if stale_slash.exists():
+        stale_slash.unlink()
+
+    n_cmds = len(_AGENT_COMMANDS)
+    print(f"Initialised project {project_id}")
+    print(f"  path: {project_path}")
+    print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/UserPromptSubmit/SubagentStop, "
+          f"PreTool [Read/Write/Edit/MultiEdit], PostTool [Write/Edit/Read/Grep])")
+    print(f"  wrote: .mcp.json              (cognikernel MCP server)")
+    print(f"  wrote: .codex/config.toml     (Codex MCP server — cross-platform)")
+    print(f"  wrote: AGENTS.md              (Codex memory instruction)")
+    print(f"  wrote: CLAUDE.md              (CogniKernel trust section)")
+    print(f"  wrote: .cognikernel/config.toml   (hook_policy=strict)")
+    print(f"  wrote: .claude/commands/ck-*.md       ({n_cmds} Claude Code slash commands)")
+    print(f"  wrote: .agents/skills/ck-*/SKILL.md   ({n_cmds} Codex skills)")
+
+    # Bundle the one-time embedding-model download into init so the very first
+    # session never pays the multi-minute cold start (the bug behind the hung
+    # `recall`). Foreground + best-effort; only the first init per machine actually
+    # downloads — later inits load from the persistent cache. Opt out with
+    # `--no-warm`; COGNIKERNEL_DISABLE_AUTO_WARM=1 disables it for tests/CI (set in
+    # tests/conftest.py so the suite never downloads 130MB per test).
+    if not getattr(args, "no_warm", False) and not os.environ.get("COGNIKERNEL_DISABLE_AUTO_WARM"):
+        _warm_embedding_model()
+
+
+def _cmd_extract(args: argparse.Namespace) -> None:
+    # Resolve session ID
+    session_id: str | None = getattr(args, "session_id", None)
+    auto = getattr(args, "auto_session_id", False)
+    if auto:
+        if args.transcript_file == "-":
+            print("ERROR: --auto-session-id requires a file path, not stdin.", file=sys.stderr)
+            sys.exit(1)
+        session_id = Path(args.transcript_file).stem
+    if not session_id:
+        print(
+            "ERROR: provide --session-id <id> or --auto-session-id.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if args.transcript_file == "-":
+        raw_input = sys.stdin.read()
+    else:
+        raw_input = Path(args.transcript_file).read_text(encoding="utf-8")
+
+    transcript = raw_input
+    evidence_source_type = "transcript"
+    if getattr(args, "codex", False):
+        from cognikernel.extraction.transcript import transcript_from_source
+        evidence_source_type = "codex_rollout"
+        transcript = transcript_from_source(evidence_source_type, raw_input)
+    elif getattr(args, "jsonl", False):
+        from cognikernel.extraction.transcript import transcript_from_source
+        evidence_source_type = "jsonl_transcript"
+        transcript = transcript_from_source(evidence_source_type, raw_input)
+
+    git_diff: str | None = None
+    if getattr(args, "git_diff", None):
+        git_diff = Path(args.git_diff).read_text(encoding="utf-8")
+
+    from cognikernel.integration.session import session_end
+    stats = session_end(
+        args.project_path,
+        session_id,
+        transcript,
+        git_diff=git_diff,
+        evidence_content=raw_input,
+        evidence_source_type=evidence_source_type,
+        evidence_source_path="" if args.transcript_file == "-" else str(Path(args.transcript_file).resolve()),
+    )
+    print(json.dumps(stats, indent=2))
+
+
+def _cmd_capture(args: argparse.Namespace) -> None:
+    """Store evidence + enqueue, then spawn detached worker (I4 fast path)."""
+    session_id: str | None = getattr(args, "session_id", None)
+    auto = getattr(args, "auto_session_id", False)
+    if auto:
+        session_id = Path(args.transcript_file).stem
+    if not session_id:
+        print("ERROR: provide --session-id or --auto-session-id.", file=sys.stderr)
+        sys.exit(1)
+
+    raw_jsonl = Path(args.transcript_file).read_text(encoding="utf-8")
+
+    git_diff: str | None = None
+    if getattr(args, "git_diff", None):
+        git_diff = Path(args.git_diff).read_text(encoding="utf-8")
+
+    from cognikernel.integration.session import session_capture
+    result = session_capture(
+        args.project_path,
+        session_id,
+        raw_jsonl,
+        git_diff=git_diff,
+        evidence_source_type="jsonl_transcript",
+        evidence_source_path=str(Path(args.transcript_file).resolve()),
+    )
+    print(json.dumps(result))
+
+    # I7c: no spawn — a worker detached from a Claude Code hook is killed with
+    # the hook's Job Object at hook exit (and a doomed worker can orphan the
+    # single-flight lock). The Stop hook runs a sync time-budgeted drain after
+    # capture instead; --no-spawn is kept for CLI back-compat and is a no-op.
+
+
+def _cmd_codex_sync(args: argparse.Namespace) -> None:
+    """Capture Codex CLI rollouts for this project, then drain the queue.
+
+    A manual/terminal entry point (the SessionStart hook syncs automatically). As a
+    foreground command it may spawn the background worker to extract immediately.
+    """
+    from cognikernel.integration.codex_sync import sync_codex_rollouts
+    stats = sync_codex_rollouts(
+        args.project_path,
+        scan_window_days=getattr(args, "scan_days", None),
+        spawn_worker=not getattr(args, "no_drain", False),
+    )
+    print(json.dumps(stats))
+
+
+def _cmd_process_jobs(args: argparse.Namespace) -> None:
+    """Claim and process queued extraction jobs (worker / hook-drain entry point)."""
+    from cognikernel.integration.session import process_jobs
+    summary = process_jobs(
+        args.project_path,
+        max_jobs=args.max_jobs,
+        time_budget_s=getattr(args, "time_budget", None),
+    )
+    print(json.dumps(summary))
+
+
+def _cmd_show(args: argparse.Namespace) -> None:
+    from cognikernel.integration.session import get_projection, render_state
+    if args.as_json:
+        proj = get_projection(args.project_path)
+        data = {
+            "project_id": proj.project_id,
+            "built_at": proj.built_at,
+            "event_id_high_water": proj.event_id_high_water,
+            "hard_constraints": proj.hard_constraints,
+            "ranked_decisions": proj.ranked_decisions,
+            "component_map": proj.component_map,
+            "graveyard": proj.graveyard,
+            "active_threads": proj.active_threads,
+            "summary": proj.summary,
+        }
+        print(json.dumps(data, indent=2))
+    else:
+        rendered = render_state(args.project_path)
+        print(rendered)
+
+
+def _cmd_doctor(args: argparse.Namespace) -> None:
+    from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
+    from cognikernel.storage.migrations import run_migrations
+    from cognikernel.storage.evidence import get_evidence_summary
+    from cognikernel.storage.jobs import list_jobs
+    from cognikernel.telemetry.ingest import get_cache_stats
+
+    # Project-aware load (H2): doctor must diagnose the same DB the hooks use,
+    # which a project-local cognikernel_dir override can relocate.
+    config = Config.load(project_path=args.project_path)
+    project_id = resolve_project_id(args.project_path, config)
+    db_path = get_db_path(config, project_id)
+
+    if not db_path.exists():
+        print(f"ERROR: no database at {db_path}", file=sys.stderr)
+        print("Run 'cognikernel init <project_path>' first.", file=sys.stderr)
+        sys.exit(1)
+
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        total = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        active = conn.execute(
+            "SELECT COUNT(*) FROM events WHERE archived=0 AND superseded_by IS NULL"
+        ).fetchone()[0]
+        archived = conn.execute(
+            "SELECT COUNT(*) FROM events WHERE archived=1"
+        ).fetchone()[0]
+        superseded = conn.execute(
+            "SELECT COUNT(*) FROM events WHERE superseded_by IS NOT NULL"
+        ).fetchone()[0]
+        failures = conn.execute(
+            "SELECT COUNT(*) FROM extraction_failures"
+        ).fetchone()[0]
+        sessions = conn.execute(
+            """
+            SELECT COUNT(DISTINCT session_id)
+            FROM (
+                SELECT session_id FROM extraction_jobs WHERE project_id = ?
+                UNION
+                SELECT session_id FROM events WHERE project_id = ?
+            )
+            """,
+            (project_id, project_id),
+        ).fetchone()[0]
+        cache_stats = get_cache_stats(conn, project_id)
+        evidence_summary = get_evidence_summary(conn, project_id)
+        import time as _time
+        dead_jobs = list_jobs(conn, project_id, state="dead_lettered", limit=1000)
+        queued_jobs = list_jobs(conn, project_id, state="queued", limit=1000)
+        claimed_jobs = list_jobs(conn, project_id, state="claimed", limit=1000)
+        retryable_jobs = list_jobs(conn, project_id, state="retryable_failure", limit=1000)
+        now_ms = int(_time.time() * 1000)
+
+    print(f"project_id : {project_id}")
+    print(f"db_path    : {db_path}")
+    print(f"sessions   : {sessions}")
+    print(f"events     : {total} total / {active} active / {archived} archived / {superseded} superseded")
+    print(f"failures   : {failures}")
+    print(
+        "evidence   : "
+        f"{evidence_summary['count']} rows / "
+        f"{evidence_summary['average_compression_ratio']:.2f}x avg compression"
+    )
+    print(
+        f"jobs       : {len(queued_jobs)} queued / "
+        f"{len(claimed_jobs)} claimed / "
+        f"{len(retryable_jobs)} retryable / "
+        f"{len(dead_jobs)} dead-lettered"
+    )
+    stale_claimed = [
+        j for j in claimed_jobs
+        if j.claimed_at is not None and now_ms - j.claimed_at > j.hard_timeout_ms
+    ]
+    if stale_claimed:
+        print(
+            f"  WARNING: {len(stale_claimed)} claimed job(s) exceeded hard_timeout — "
+            "likely orphaned by a crashed process; run 'cognikernel doctor' again after "
+            "the next session to confirm they clear."
+        )
+
+    print()
+    print("-- cache telemetry ------------------------------------------")
+    n = cache_stats["sessions_with_data"]
+    if n == 0:
+        print("  no telemetry - run 'cognikernel telemetry <project_path>' to ingest")
+    else:
+        hit_pct = cache_stats["avg_cache_hit_rate"] * 100
+        read = cache_stats["total_cache_read_tokens"]
+        saved = cache_stats["effective_tokens_saved"]
+        print(f"  sessions with data : {n}")
+        print(f"  avg cache hit rate : {hit_pct:.1f}%")
+        print(f"  cache reads served : {read:,} tok")
+        print(f"  effective saved    : {saved:,} tok (read billed ~0.1x)")
+        recent = cache_stats["recent_sessions"]
+        if recent:
+            print("  last sessions      :")
+            for r in recent[:5]:
+                sess_short = r["session_id"][:12]
+                read = r["cache_read_tokens"]
+                inp = r["input_tokens"]
+                total_t = inp + read
+                pct = f"{read / total_t * 100:.0f}%" if total_t else "n/a"
+                print(f"    {sess_short}  cache={pct}  saved={read:,}tok")
+
+    print()
+    print("-- subsystem health -----------------------------------------")
+    from cognikernel.integration.health import run_health_checks
+    with get_connection(db_path) as conn:
+        checks = run_health_checks(conn, project_id, config,
+                                   project_path=args.project_path)
+    name_width = max((len(c.name) for c in checks), default=12)
+    for c in checks:
+        mark = "OK" if c.ok else "!!"
+        print(f"  [{mark}] {c.name:<{name_width}}: {c.detail}")
+    unhealthy = [c for c in checks if not c.ok]
+
+    print()
+    if unhealthy:
+        names = ", ".join(c.name for c in unhealthy)
+        msg = f"status     : DEGRADED — {len(unhealthy)} subsystem(s): {names}"
+        if getattr(args, "strict", False):
+            print(msg, file=sys.stderr)
+            sys.exit(1)
+        print(msg)
+        print("             (run `cognikernel doctor --strict` to fail on this)")
+    else:
+        print("status     : OK")
+
+
+def _cmd_telemetry(args: argparse.Namespace) -> None:
+    from cognikernel.telemetry.ingest import find_and_ingest_telemetry
+
+    result = find_and_ingest_telemetry(args.project_path)
+    n = result["ingested"]
+    skip = result["skipped"]
+    known = result["total_sessions_known"]
+    print(f"telemetry ingested : {n} sessions")
+    print(f"skipped (no JSONL) : {skip} sessions")
+    print(f"total known        : {known} sessions")
+
+
+def _cmd_reset(args: argparse.Namespace) -> None:
+    if not args.yes:
+        answer = input(
+            f"Delete ALL events for {Path(args.project_path).resolve()}? [y/N] "
+        )
+        if answer.strip().lower() != "y":
+            print("Aborted.")
+            return
+
+    from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
+    from cognikernel.storage.migrations import run_migrations
+
+    # Project-aware load (H2): reset must clear the DB the hooks write to, not
+    # the default-dir DB a project-local cognikernel_dir override moved away from.
+    config = Config.load(project_path=args.project_path)
+    project_id = resolve_project_id(args.project_path, config)
+    db_path = get_db_path(config, project_id)
+
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        # Memory + ingest state.
+        conn.execute("DELETE FROM extraction_job_acks")
+        conn.execute("DELETE FROM extraction_jobs")
+        conn.execute("DELETE FROM enrichment_jobs")
+        conn.execute("DELETE FROM event_provenance")
+        conn.execute("DELETE FROM event_embeddings")
+        conn.execute("DELETE FROM events")
+        conn.execute("DELETE FROM state_projections")
+        conn.execute("DELETE FROM extraction_failures")
+        conn.execute("DELETE FROM raw_evidence")
+        conn.execute("DELETE FROM ingest_cursors")
+        # Symbol graph — `cognikernel show` renders skeleton/component-map from these;
+        # a reset that leaves them makes show look "not reset" (user-reported).
+        conn.execute("DELETE FROM symbol_nodes")
+        conn.execute("DELETE FROM symbol_edges")
+        conn.execute("DELETE FROM symbol_files")
+        # Session-scoped caches + telemetry.
+        conn.execute("DELETE FROM grep_cache")
+        conn.execute("DELETE FROM read_session_cache")
+        conn.execute("DELETE FROM denied_reads")
+        conn.execute("DELETE FROM api_telemetry")
+        # Keep schema/projection versions AND project_path (resources need it;
+        # deleting it broke render_state-by-project-id until the next init).
+        conn.execute(
+            "DELETE FROM meta WHERE key NOT IN "
+            "('schema_version', 'projection_version', 'project_path')"
+        )
+        conn.commit()
+
+    print(f"Reset complete for project {project_id} (all 17 data tables cleared).")
+
+
+def _cmd_failures(args: argparse.Namespace) -> None:
+    import datetime
+    from cognikernel.integration.session import replay_job
+    from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
+    from cognikernel.storage.events import get_extraction_failures
+    from cognikernel.storage.jobs import list_jobs
+    from cognikernel.storage.migrations import run_migrations
+
+    config = Config.load(project_path=args.project_path)
+    project_id = resolve_project_id(args.project_path, config)
+    db_path = get_db_path(config, project_id)
+
+    if not db_path.exists():
+        print(f"No database found for {Path(args.project_path).resolve()}", file=sys.stderr)
+        sys.exit(1)
+
+    if getattr(args, "replay", None) is not None:
+        try:
+            stats = replay_job(args.project_path, args.replay, config=config)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as exc:
+            print(
+                f"ERROR: replay of job {args.replay} failed during re-execution: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"Replayed job {args.replay} — re-ran extraction.")
+        print(json.dumps(stats, indent=2))
+        return
+
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        failures = get_extraction_failures(conn, project_id, limit=args.limit)
+        dead_jobs = list_jobs(conn, project_id, state="dead_lettered", limit=args.limit)
+
+    if not failures and not dead_jobs:
+        print("No extraction failures recorded.")
+        return
+
+    if dead_jobs:
+        print(f"{len(dead_jobs)} dead-lettered extraction job(s):\n")
+        for job in dead_jobs:
+            ts = datetime.datetime.fromtimestamp(job.updated_at / 1000).strftime("%Y-%m-%d %H:%M:%S")
+            sess = job.session_id[:12]
+            err = (job.last_error or "")[:200]
+            print(
+                f"  job={job.id} [{ts}] session={sess} "
+                f"stage={job.stage} class={job.failure_class}"
+            )
+            print(f"    {err}")
+            print(f'    replay: cognikernel failures "{args.project_path}" --replay {job.id}')
+            print()
+
+    if not failures:
+        return
+
+    print(f"{len(failures)} legacy extraction failure(s):\n")
+    for f in failures:
+        ts = datetime.datetime.fromtimestamp(f["failed_at"] / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        sess = f["session_id"][:12]
+        print(f"  [{ts}] session={sess}  stage={f['stage']}")
+        print(f"    {f['error_message'][:200]}")
+        print()
+
+
+def _cmd_rebuild(args: argparse.Namespace) -> None:
+    from cognikernel.integration.session import rebuild_from_raw
+    config = Config.load(project_path=args.project_path)
+    stats = rebuild_from_raw(
+        project_path=args.project_path,
+        since_evidence_id=args.since,
+        dry_run=args.dry_run,
+        config=config,
+    )
+    print(json.dumps(stats, indent=2))
+
+
+def _cmd_mcp_serve() -> None:
+    from cognikernel.integration.mcp_server import run
+    run()
+
+
+def _cmd_lookup(args: argparse.Namespace) -> int:
+    from cognikernel.integration.lookup import lookup_file
+    code, message = lookup_file(args.project_path, args.file_path)
+    if message:
+        print(message)
+    return code
+
+
+if __name__ == "__main__":
+    main()

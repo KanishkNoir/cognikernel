@@ -442,7 +442,7 @@ def main() -> None:
         run_judge_pass(results, probes_by_id, out_path, args.judge_model, args.rejudge)
         return
 
-    from memlora.integration.session import render_state
+    from cognikernel.integration.session import render_state
 
     probes = load_probes()
     if args.probes:

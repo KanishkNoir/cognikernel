@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import EXPECTED_PROJECTION_VERSION, EXPECTED_SCHEMA_VERSION
-from memlora.storage.connection import get_connection
-from memlora.storage.migrations import (
+from cognikernel.config import EXPECTED_PROJECTION_VERSION, EXPECTED_SCHEMA_VERSION
+from cognikernel.storage.connection import get_connection
+from cognikernel.storage.migrations import (
     _bootstrap_meta,
     _run_schema_migrations,
     run_migrations,
@@ -236,7 +236,7 @@ class TestAtomicity:
     ) -> None:
         mdir = self._seed_dir(tmp_path)
         monkeypatch.setattr(
-            "memlora.storage.migrations._MIGRATIONS_DIR", mdir
+            "cognikernel.storage.migrations._MIGRATIONS_DIR", mdir
         )
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -275,7 +275,7 @@ class TestAtomicity:
         immediately writable again (a left-open tx would lock the next write)."""
         mdir = self._seed_dir(tmp_path)
         monkeypatch.setattr(
-            "memlora.storage.migrations._MIGRATIONS_DIR", mdir
+            "cognikernel.storage.migrations._MIGRATIONS_DIR", mdir
         )
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row

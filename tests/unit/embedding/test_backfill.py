@@ -6,9 +6,9 @@ import sqlite3
 
 import pytest
 
-from memlora.embedding.backfill import backfill_embeddings
-from memlora.embedding.model import EMBEDDING_MODEL_VERSION, is_available
-from memlora.storage.migrations import run_migrations
+from cognikernel.embedding.backfill import backfill_embeddings
+from cognikernel.embedding.model import EMBEDDING_MODEL_VERSION, is_available
+from cognikernel.storage.migrations import run_migrations
 
 pytestmark = pytest.mark.skipif(not is_available(), reason="embedding model not installed")
 
@@ -52,7 +52,7 @@ class TestBackfill:
         under the current version, replacing the row (event_id PK — no orphan)."""
         import numpy as np
 
-        from memlora.embedding.store import upsert_embedding
+        from cognikernel.embedding.store import upsert_embedding
 
         _insert(conn, 1, {"description": "Use argon2id for hashing"})
         upsert_embedding(conn, 1, np.zeros(384, dtype="float32"), "bge-small-en-v1.5+in0")

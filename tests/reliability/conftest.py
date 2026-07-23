@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.storage.connection import get_db_path, hash_project_path
+from cognikernel.config import Config
+from cognikernel.storage.connection import get_db_path, hash_project_path
 
 
 @dataclass
@@ -30,10 +30,10 @@ class ProjectCtx:
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch) -> ProjectCtx:
-    """A fully-initialized project with an isolated MEMLORA_DIR (no model warm)."""
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
-    os.environ.setdefault("MEMLORA_DISABLE_AUTO_WARM", "1")
-    from memlora.integration.session import init_project
+    """A fully-initialized project with an isolated COGNIKERNEL_DIR (no model warm)."""
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+    os.environ.setdefault("COGNIKERNEL_DISABLE_AUTO_WARM", "1")
+    from cognikernel.integration.session import init_project
 
     proj = tmp_path / "proj"
     proj.mkdir()

@@ -5,7 +5,7 @@ import io
 import sys
 from unittest.mock import patch
 
-from memlora.integration.cli import _ensure_utf8_output
+from cognikernel.integration.cli import _ensure_utf8_output
 
 
 def test_ensure_utf8_output_prevents_cp1252_crash() -> None:

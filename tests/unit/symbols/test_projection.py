@@ -1,7 +1,7 @@
 """Unit tests for symbol graph compression (projection)."""
 import pytest
-from memlora.symbols.extractor import SymbolNode, SymbolEdge
-from memlora.symbols.projection import compress_to_skeleton, SkeletonEntry
+from cognikernel.symbols.extractor import SymbolNode, SymbolEdge
+from cognikernel.symbols.projection import compress_to_skeleton, SkeletonEntry
 
 
 def _node(path: str, node_type: str, name: str, parent: str = "",

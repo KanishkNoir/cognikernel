@@ -1,6 +1,6 @@
 """Tests for the injection template engine."""
 import pytest
-from memlora.injection.template import (
+from cognikernel.injection.template import (
     InjectionContext,
     _render_active_thread,
     _render_components,
@@ -14,7 +14,7 @@ from memlora.injection.template import (
     render_injection,
     render_with_budget_enforcement,
 )
-from memlora.storage.events import Event
+from cognikernel.storage.events import Event
 
 
 def _event(

@@ -25,10 +25,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, "scripts")
 
 from build_model_eval import iter_store_sentences  # noqa: E402
-from memlora.delta.supersede import normalize_for_overlap  # noqa: E402
+from cognikernel.delta.supersede import normalize_for_overlap  # noqa: E402
 
 EVAL = Path("research/model_eval")
-PROJECTS = Path.home() / ".memlora" / "projects"
+PROJECTS = Path.home() / ".cognikernel" / "projects"
 
 _CUES = {
     "THREAD": re.compile(

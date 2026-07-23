@@ -1,7 +1,7 @@
 """Meta-guard for the import-linter architecture contracts (audit P2 / #64).
 
 The whole audit P2 root cause was that an import-linter contract named a module
-that did not exist (`memlora.observability`). import-linter aborts the ENTIRE run
+that did not exist (`cognikernel.observability`). import-linter aborts the ENTIRE run
 with "Module '...' does not exist." the instant any contract references a missing
 module — so that one typo silently disabled enforcement of every contract, and
 real layering drift accumulated underneath with zero signal.
@@ -26,7 +26,7 @@ _PYPROJECT = _REPO_ROOT / "pyproject.toml"
 
 
 def _contract_modules() -> set[str]:
-    """Every memlora module named by any import-linter contract."""
+    """Every cognikernel module named by any import-linter contract."""
     data = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))
     importlinter = data.get("tool", {}).get("importlinter", {})
     modules: set[str] = set(importlinter.get("root_packages", []))

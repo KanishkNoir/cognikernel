@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-import memlora.integration.cli as cli
+import cognikernel.integration.cli as cli
 
 
 class TestNewEntrypoints:
@@ -20,13 +20,13 @@ class TestNewEntrypoints:
     ])
     def test_main_dispatches(self, monkeypatch, sub: str, fn: str) -> None:
         called: list[str] = []
-        monkeypatch.setattr(f"memlora.integration.hooks.{fn}", lambda: called.append(fn))
-        monkeypatch.setattr(sys, "argv", ["memlora", sub])
+        monkeypatch.setattr(f"cognikernel.integration.hooks.{fn}", lambda: called.append(fn))
+        monkeypatch.setattr(sys, "argv", ["cognikernel", sub])
         cli.main()
         assert called == [fn]
 
     def test_all_nine_entrypoints_have_callables(self) -> None:
-        import memlora.integration.hooks as hooks
+        import cognikernel.integration.hooks as hooks
         assert len(cli._HOOK_ENTRYPOINTS) == 8
         for fn in cli._HOOK_ENTRYPOINTS.values():
             assert callable(getattr(hooks, fn)), fn
@@ -46,7 +46,7 @@ class TestUserPromptSubmitTimeout:
         import threading
         import time
 
-        from memlora.integration import hooks
+        from cognikernel.integration import hooks
 
         monkeypatch.setattr(hooks, "_HOOK_TIMEOUT_S", 0.1)
         monkeypatch.setattr(
@@ -57,7 +57,7 @@ class TestUserPromptSubmitTimeout:
         class _Cfg:
             query_time_injection = True
 
-        monkeypatch.setattr("memlora.config.Config.load", lambda **k: _Cfg())
+        monkeypatch.setattr("cognikernel.config.Config.load", lambda **k: _Cfg())
 
         release = threading.Event()
 
@@ -66,7 +66,7 @@ class TestUserPromptSubmitTimeout:
             return "LATE — should never be printed"
 
         monkeypatch.setattr(
-            "memlora.integration.query.recall_for_prompt", _stalled
+            "cognikernel.integration.query.recall_for_prompt", _stalled
         )
 
         start = time.monotonic()
@@ -88,9 +88,9 @@ class TestUserPromptSubmitSilenceContract:
             "cwd": str(proj),
             "prompt": "which database should we use?",
         })
-        env = {**os.environ, "MEMLORA_DIR": str(tmp_path / "data")}
+        env = {**os.environ, "COGNIKERNEL_DIR": str(tmp_path / "data")}
         r = subprocess.run(
-            [sys.executable, "-m", "memlora", "hook-user-prompt"],
+            [sys.executable, "-m", "cognikernel", "hook-user-prompt"],
             input=payload, text=True, capture_output=True, timeout=30, env=env,
         )
         assert r.returncode == 0
@@ -104,9 +104,9 @@ class TestUserPromptSubmitSilenceContract:
             "cwd": str(proj),
             "prompt": "any question",
         })
-        env = {**os.environ, "MEMLORA_DIR": str(tmp_path / "data")}
+        env = {**os.environ, "COGNIKERNEL_DIR": str(tmp_path / "data")}
         r = subprocess.run(
-            [sys.executable, "-m", "memlora", "hook-user-prompt"],
+            [sys.executable, "-m", "cognikernel", "hook-user-prompt"],
             input=payload, text=True, capture_output=True, timeout=30, env=env,
         )
         assert r.returncode == 0
@@ -115,7 +115,7 @@ class TestUserPromptSubmitSilenceContract:
     def test_bad_payload_exits_silently(self) -> None:
         """Malformed stdin → silence, exit 0."""
         r = subprocess.run(
-            [sys.executable, "-m", "memlora", "hook-user-prompt"],
+            [sys.executable, "-m", "cognikernel", "hook-user-prompt"],
             input="not json", text=True, capture_output=True, timeout=30,
         )
         assert r.returncode == 0
@@ -128,19 +128,19 @@ class TestUserPromptSubmitSilenceContract:
         query_time_injection flag (also default-on in the project template)
         still gates the work."""
         import argparse
-        monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
         proj = tmp_path / "proj"
         proj.mkdir()
         cli._cmd_init(argparse.Namespace(project_path=str(proj)))
         settings = json.loads((proj / ".claude" / "settings.json").read_text())
         assert "UserPromptSubmit" in settings.get("hooks", {})
-        cfg = (proj / ".memlora" / "config.toml").read_text()
+        cfg = (proj / ".cognikernel" / "config.toml").read_text()
         assert "query_time_injection = true" in cfg
 
     def test_init_registers_subagent_stop(self, tmp_path: Path, monkeypatch) -> None:
         """SubagentStop IS registered by init (capture_subagents default True)."""
         import argparse
-        monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
         proj = tmp_path / "proj"
         proj.mkdir()
         cli._cmd_init(argparse.Namespace(project_path=str(proj)))
@@ -153,7 +153,7 @@ class TestUserPromptSubmitSilenceContract:
     def test_init_registers_posttool_grep(self, tmp_path: Path, monkeypatch) -> None:
         """PostToolUse:Grep IS registered by init."""
         import argparse
-        monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
         proj = tmp_path / "proj"
         proj.mkdir()
         cli._cmd_init(argparse.Namespace(project_path=str(proj)))

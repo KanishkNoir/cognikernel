@@ -222,7 +222,7 @@ def report(s: dict, gold: dict) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Score extracted events against the gold fixture.")
-    ap.add_argument("--db", help="Path to a memlora project .db")
+    ap.add_argument("--db", help="Path to a cognikernel project .db")
     ap.add_argument("--session", help="Filter events to this session_id")
     ap.add_argument("--json", help="Path to a JSON list of {event_type, text} events")
     ap.add_argument("--gold", default=str(_DEFAULT_GOLD), help="Gold fixture path")

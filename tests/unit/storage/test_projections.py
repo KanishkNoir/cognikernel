@@ -3,8 +3,8 @@ import time
 
 import pytest
 
-from memlora.storage.events import Event, insert_event
-from memlora.storage.projections import (
+from cognikernel.storage.events import Event, insert_event
+from cognikernel.storage.projections import (
     Projection,
     invalidate_projection,
     load_projection,

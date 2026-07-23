@@ -1,8 +1,8 @@
 # setup_simulation.ps1 — Create and verify clean-slate simulation sandboxes
 #
 # Run this BEFORE starting either simulation arm.
-# Creates two fresh directories, verifies no Claude auto-memory or memlora DB
-# exists for these paths, and runs memlora init for the CK arm.
+# Creates two fresh directories, verifies no Claude auto-memory or cognikernel DB
+# exists for these paths, and runs cognikernel init for the CK arm.
 #
 # Usage:
 #   powershell -File scripts/setup_simulation.ps1
@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 $CK_PATH      = "C:\Users\Admin\OneDrive\Desktop\notesapi_ck"
 $VANILLA_PATH = "C:\Users\Admin\OneDrive\Desktop\notesapi_vanilla"
 $PYTHON       = "C:\Users\Admin\AppData\Local\Programs\Python\Python312\python.exe"
-$MEMLORA      = "memlora"
+$COGNIKERNEL      = "cognikernel"
 
 function Get-ClaudeEncodedPath($projectPath) {
     $resolved = [System.IO.Path]::GetFullPath($projectPath)
@@ -91,7 +91,7 @@ foreach ($path in @($CK_PATH, $VANILLA_PATH)) {
     }
 }
 
-# Initialize git for both (memlora needs a recognizable project root)
+# Initialize git for both (cognikernel needs a recognizable project root)
 foreach ($path in @($CK_PATH, $VANILLA_PATH)) {
     if (-not (Test-Path (Join-Path $path ".git"))) {
         git -C $path init --quiet
@@ -99,16 +99,16 @@ foreach ($path in @($CK_PATH, $VANILLA_PATH)) {
     }
 }
 
-# ── 3. Initialize memlora for CK arm ─────────────────────────────────────────
+# ── 3. Initialize cognikernel for CK arm ─────────────────────────────────────────
 
 Write-Host ""
 Write-Host "=== Initializing CogniKernel (CK arm) ===" -ForegroundColor Cyan
 
 try {
-    & $MEMLORA init $CK_PATH
-    Write-Host "  memlora init: OK" -ForegroundColor Green
+    & $COGNIKERNEL init $CK_PATH
+    Write-Host "  cognikernel init: OK" -ForegroundColor Green
 } catch {
-    Write-Host "  memlora init FAILED: $_" -ForegroundColor Red
+    Write-Host "  cognikernel init FAILED: $_" -ForegroundColor Red
     exit 1
 }
 
@@ -116,8 +116,8 @@ try {
 $db_path = & $PYTHON -c "
 import sys
 sys.path.insert(0, 'src')
-from memlora.config import Config
-from memlora.storage.connection import get_db_path, hash_project_path
+from cognikernel.config import Config
+from cognikernel.storage.connection import get_db_path, hash_project_path
 cfg = Config.load()
 pid = hash_project_path('$CK_PATH')
 print(get_db_path(cfg, pid))
@@ -136,15 +136,15 @@ print(count)
         Write-Host "  WARNING: DB is not empty!" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "  (Could not verify DB path — check manually with: memlora doctor '$CK_PATH')" -ForegroundColor Yellow
+    Write-Host "  (Could not verify DB path — check manually with: cognikernel doctor '$CK_PATH')" -ForegroundColor Yellow
 }
 
 # ── 4. Verify doctor passes for CK arm ───────────────────────────────────────
 
 Write-Host ""
-Write-Host "=== Running memlora doctor (CK arm) ===" -ForegroundColor Cyan
+Write-Host "=== Running cognikernel doctor (CK arm) ===" -ForegroundColor Cyan
 try {
-    & $MEMLORA doctor $CK_PATH
+    & $COGNIKERNEL doctor $CK_PATH
 } catch {
     Write-Host "  doctor FAILED: $_" -ForegroundColor Red
     exit 1
@@ -163,7 +163,7 @@ Write-Host "  1. Confirm hooks are registered for CK arm in Claude Code settings
 Write-Host "     (Stop hook, PreToolUse Read hook, PostToolUse Write/Edit hooks)"
 Write-Host "  2. Open a Claude Code session in: $CK_PATH"
 Write-Host "  3. Run Session 1 prompts from: research\benchmarking\simulation.md"
-Write-Host "  4. After Session 1 closes: memlora show '$CK_PATH'"
+Write-Host "  4. After Session 1 closes: cognikernel show '$CK_PATH'"
 Write-Host "     Verify N1-N6 decisions are present before starting Session 2"
 Write-Host ""
 Write-Host "IMPORTANT: Run CK arm FIRST (no evaluator hindsight from Vanilla arm)"

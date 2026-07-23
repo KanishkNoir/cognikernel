@@ -5,8 +5,8 @@ import logging
 import sys
 
 import pytest
-from memlora.symbols import extractor as _extractor_mod
-from memlora.symbols.extractor import (
+from cognikernel.symbols import extractor as _extractor_mod
+from cognikernel.symbols.extractor import (
     TypeScriptExtractor,
     SymbolNode,
     SymbolEdge,
@@ -71,7 +71,7 @@ class TestTypeScriptDiagnostics:
         # ImportError — i.e. the dependency is effectively absent.
         monkeypatch.setitem(sys.modules, "tree_sitter_language_pack", None)
         monkeypatch.setattr(_extractor_mod, "_TS_DEP_WARNED", False)
-        with caplog.at_level(logging.WARNING, logger="memlora.symbols"):
+        with caplog.at_level(logging.WARNING, logger="cognikernel.symbols"):
             r1 = _EXTRACTOR.extract("a.ts", "class Foo {}", _PID, _KNOWN)
             r2 = _EXTRACTOR.extract("b.ts", "class Bar {}", _PID, _KNOWN)
         assert r1 == ([], [])
@@ -88,7 +88,7 @@ class TestTypeScriptDiagnostics:
             raise RuntimeError("parser blew up")
 
         monkeypatch.setattr(tslp, "get_parser", _boom)
-        with caplog.at_level(logging.WARNING, logger="memlora.symbols"):
+        with caplog.at_level(logging.WARNING, logger="cognikernel.symbols"):
             result = _EXTRACTOR.extract("c.ts", "class Foo {}", _PID, _KNOWN)
         assert result == ([], [])
         assert any(

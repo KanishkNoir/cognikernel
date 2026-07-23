@@ -1,4 +1,4 @@
-"""Tests for rebuild_projection and load_or_rebuild in memlora.storage.projections."""
+"""Tests for rebuild_projection and load_or_rebuild in cognikernel.storage.projections."""
 from __future__ import annotations
 
 import sqlite3
@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from memlora.storage.events import Event, insert_event
-from memlora.storage.projections import (
+from cognikernel.storage.events import Event, insert_event
+from cognikernel.storage.projections import (
     Projection,
     load_or_rebuild,
     load_projection,

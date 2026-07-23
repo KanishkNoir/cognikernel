@@ -168,10 +168,10 @@ def simulate_posttool_hook(
     conn: sqlite3.Connection,
     label: str,
 ) -> None:
-    """Replicates what memlora_posttool_hook.py does after a Write/Edit."""
-    from memlora.symbols.extractor import build_symbol_update
-    from memlora.symbols.store import apply_symbol_update
-    from memlora.extraction.git_augment import FileChange
+    """Replicates what cognikernel_posttool_hook.py does after a Write/Edit."""
+    from cognikernel.symbols.extractor import build_symbol_update
+    from cognikernel.symbols.store import apply_symbol_update
+    from cognikernel.extraction.git_augment import FileChange
 
     rel_path = str(Path(file_path).relative_to(project_path)).replace("\\", "/")
     changed_files = [FileChange(path=rel_path, change_type="modified", lines_changed=0)]
@@ -189,13 +189,13 @@ def main() -> None:
 
 
 def _run_simulation(tmp: str) -> None:
-    from memlora.storage.connection import get_connection, get_db_path, hash_project_path
-    from memlora.storage.migrations import run_migrations
-    from memlora.config import Config
-    from memlora.integration.session import session_end, render_state
-    from memlora.symbols.store import load_symbol_nodes, load_symbol_edges
-    from memlora.symbols.projection import compress_to_skeleton
-    from memlora.symbols.render import render_skeleton_section
+    from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+    from cognikernel.storage.migrations import run_migrations
+    from cognikernel.config import Config
+    from cognikernel.integration.session import session_end, render_state
+    from cognikernel.symbols.store import load_symbol_nodes, load_symbol_edges
+    from cognikernel.symbols.projection import compress_to_skeleton
+    from cognikernel.symbols.render import render_skeleton_section
 
     config = Config.load()
     project_id = hash_project_path(tmp)

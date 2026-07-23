@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-from memlora.telemetry.bypass import analyze_bypass
+from cognikernel.telemetry.bypass import analyze_bypass
 
 _CWD = "C:/proj"
 

@@ -5,9 +5,9 @@ import argparse
 import io
 import json
 
-import memlora.integration.codex_sync as codex_sync
-import memlora.integration.hooks as hooks
-from memlora.integration.cli import _cmd_codex_sync
+import cognikernel.integration.codex_sync as codex_sync
+import cognikernel.integration.hooks as hooks
+from cognikernel.integration.cli import _cmd_codex_sync
 
 
 class TestCodexSyncCLI:

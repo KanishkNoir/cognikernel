@@ -6,10 +6,10 @@ import sqlite3
 
 import pytest
 
-import memlora.retrieval.hybrid as hybrid_mod
-from memlora.retrieval.hybrid import _RRF_K, _RRF_MAX, hybrid_recall
-from memlora.storage.events import Event, insert_event
-from memlora.storage.migrations import run_migrations
+import cognikernel.retrieval.hybrid as hybrid_mod
+from cognikernel.retrieval.hybrid import _RRF_K, _RRF_MAX, hybrid_recall
+from cognikernel.storage.events import Event, insert_event
+from cognikernel.storage.migrations import run_migrations
 
 PID = "a" * 16
 
@@ -50,8 +50,8 @@ def _seed(conn) -> dict[str, int]:
 class TestDegradationLadder:
     def test_bm25_only_when_model_cold(self, conn, monkeypatch) -> None:
         """Embedding model cold -> pure BM25 ranking, still returns hits."""
-        monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
-        monkeypatch.setattr("memlora.embedding.model.warm", lambda: None)
+        monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: False)
+        monkeypatch.setattr("cognikernel.embedding.model.warm", lambda: None)
         ids = _seed(conn)
         hits = hybrid_recall(conn, PID, "how many retry attempts and what timeout")
         assert hits, "BM25 axis alone must produce hits"
@@ -62,16 +62,16 @@ class TestDegradationLadder:
 
     def test_zero_axes_returns_empty(self, conn, monkeypatch) -> None:
         """No FTS + cold model -> [] so the caller can use the legacy scan."""
-        monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
-        monkeypatch.setattr("memlora.embedding.model.warm", lambda: None)
-        monkeypatch.setattr("memlora.storage.fts.fts_enabled", lambda c: False)
+        monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: False)
+        monkeypatch.setattr("cognikernel.embedding.model.warm", lambda: None)
+        monkeypatch.setattr("cognikernel.storage.fts.fts_enabled", lambda c: False)
         _seed(conn)
         assert hybrid_recall(conn, PID, "retry attempts") == []
 
     def test_identifier_query_hits(self, conn, monkeypatch) -> None:
         """The measured miss class: identifier-shaped query terms."""
-        monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
-        monkeypatch.setattr("memlora.embedding.model.warm", lambda: None)
+        monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: False)
+        monkeypatch.setattr("cognikernel.embedding.model.warm", lambda: None)
         target = insert_event(conn, _mk("the relay-default alias resolves to claude-opus-4-8"))
         _seed(conn)
         hits = hybrid_recall(conn, PID, "what does relay-default resolve to")
@@ -89,10 +89,10 @@ class TestRRFMath:
             {"id": ids["timeout"], "event_type": "DECISION", "score": 0.8,
              "description": "d", "subject": ""},
         ]
-        monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: True)
-        monkeypatch.setattr("memlora.embedding.model.warm", lambda: None)
+        monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: True)
+        monkeypatch.setattr("cognikernel.embedding.model.warm", lambda: None)
         monkeypatch.setattr(
-            "memlora.embedding.retrieval.recall",
+            "cognikernel.embedding.retrieval.recall",
             lambda conn, pid, q, k: fake_dense,
         )
         # BM25 axis on this query ranks 'timeout' first (attempts/timeout terms).
@@ -107,8 +107,8 @@ class TestRRFMath:
         assert t["score"] > s["score"] or s["bm25_rank"] is not None
 
     def test_deterministic_tiebreak_by_id(self, conn, monkeypatch) -> None:
-        monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
-        monkeypatch.setattr("memlora.embedding.model.warm", lambda: None)
+        monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: False)
+        monkeypatch.setattr("cognikernel.embedding.model.warm", lambda: None)
         a = insert_event(conn, _mk("identical twin fact alpha variant"))
         b = insert_event(conn, _mk("identical twin fact alpha variant."))
         hits = hybrid_recall(conn, PID, "identical twin fact alpha")
@@ -117,21 +117,21 @@ class TestRRFMath:
 
 class TestQueryRewire:
     def test_recall_hits_uses_hybrid(self, conn, monkeypatch) -> None:
-        from memlora.integration.query import _recall_hits
+        from cognikernel.integration.query import _recall_hits
 
-        monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
-        monkeypatch.setattr("memlora.embedding.model.warm", lambda: None)
+        monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: False)
+        monkeypatch.setattr("cognikernel.embedding.model.warm", lambda: None)
         ids = _seed(conn)
         hits = _recall_hits(conn, PID, "retry attempts timeout", 5)
         assert hits[0]["id"] == ids["timeout"]
         assert "score" in hits[0]
 
     def test_recall_hits_falls_back_to_lexical(self, conn, monkeypatch) -> None:
-        from memlora.integration.query import _recall_hits
+        from cognikernel.integration.query import _recall_hits
 
-        monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
-        monkeypatch.setattr("memlora.embedding.model.warm", lambda: None)
-        monkeypatch.setattr("memlora.storage.fts.fts_enabled", lambda c: False)
+        monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: False)
+        monkeypatch.setattr("cognikernel.embedding.model.warm", lambda: None)
+        monkeypatch.setattr("cognikernel.storage.fts.fts_enabled", lambda c: False)
         _seed(conn)
         hits = _recall_hits(conn, PID, "retry attempts timeout", 5)
         assert hits, "legacy Jaccard scan must keep recall alive with zero axes"

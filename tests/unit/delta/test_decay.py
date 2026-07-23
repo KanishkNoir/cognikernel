@@ -1,12 +1,12 @@
-"""Tests for memlora.delta.decay."""
+"""Tests for cognikernel.delta.decay."""
 from __future__ import annotations
 
 import sqlite3
 
 import pytest
 
-from memlora.delta.decay import ARCHIVE_THRESHOLD, DECAY_FACTOR, apply_decay_pass
-from memlora.storage.events import insert_event, Event
+from cognikernel.delta.decay import ARCHIVE_THRESHOLD, DECAY_FACTOR, apply_decay_pass
+from cognikernel.storage.events import insert_event, Event
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

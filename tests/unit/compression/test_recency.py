@@ -1,6 +1,6 @@
 """Tests for hyperbolic recency decay."""
 import pytest
-from memlora.compression.recency import recency_factor
+from cognikernel.compression.recency import recency_factor
 
 
 class TestRecencyFactor:

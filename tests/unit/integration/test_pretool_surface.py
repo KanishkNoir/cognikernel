@@ -10,16 +10,16 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from memlora.integration.query import surface_prohibitions_for_edit
+from cognikernel.integration.query import surface_prohibitions_for_edit
 
 
 def _project(tmp_path: Path, monkeypatch) -> tuple[str, str, object]:
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path))
-    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
-    monkeypatch.setattr("memlora.embedding.model.warm", lambda: None)
-    from memlora.config import Config
-    from memlora.integration.session import init_project
-    from memlora.storage.connection import get_db_path, hash_project_path
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path))
+    monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: False)
+    monkeypatch.setattr("cognikernel.embedding.model.warm", lambda: None)
+    from cognikernel.config import Config
+    from cognikernel.integration.session import init_project
+    from cognikernel.storage.connection import get_db_path, hash_project_path
 
     proj = str(tmp_path / "proj")
     Path(proj).mkdir()
@@ -31,7 +31,7 @@ def _project(tmp_path: Path, monkeypatch) -> tuple[str, str, object]:
 
 def _insert(db, pid: str, desc: str, etype: str, h: str = "h1",
             subject: str = "", rationale: str = "") -> int:
-    from memlora.storage.connection import get_connection
+    from cognikernel.storage.connection import get_connection
 
     payload = {"description": desc, "subject": subject}
     if rationale:
@@ -56,7 +56,7 @@ def test_empty_diff_silent(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_exception_silent() -> None:
-    with patch("memlora.integration.query._resolve", side_effect=RuntimeError("boom")):
+    with patch("cognikernel.integration.query._resolve", side_effect=RuntimeError("boom")):
         assert surface_prohibitions_for_edit("/any", "in-process counter += 1") == ""
 
 
@@ -143,8 +143,8 @@ def test_ledger_dedup_across_session(tmp_path: Path, monkeypatch) -> None:
     eid = _insert(db, pid,
                   "do not use in-process rate limit counters; use Redis shared budget",
                   etype="APPROACH_ABANDONED_DO_NOT_RETRY", subject="rate limiting")
-    from memlora.storage.connection import get_connection
-    from memlora.storage.render_ledger import record_rendered
+    from cognikernel.storage.connection import get_connection
+    from cognikernel.storage.render_ledger import record_rendered
 
     with get_connection(db) as conn:
         record_rendered(conn, pid, "sess-A", [eid], "block")
@@ -171,7 +171,7 @@ def test_disabled_by_config(tmp_path: Path, monkeypatch) -> None:
     proj, pid, db = _project(tmp_path, monkeypatch)
     _insert(db, pid, "do not use in-process counters; use Redis",
             etype="APPROACH_ABANDONED_DO_NOT_RETRY", subject="rate limiting")
-    from memlora.config import Config
+    from cognikernel.config import Config
 
     cfg = Config.load(project_path=proj)
     object.__setattr__(cfg, "pretool_prohibition_surface_enabled", False)
@@ -201,9 +201,9 @@ def test_dense_rescue_surfaces_thin_prohibition(tmp_path: Path, monkeypatch) -> 
     proj, pid, db = _project(tmp_path, monkeypatch)
     _insert(db, pid, "In-process counters are out — each instance sees only its slice.",
             "APPROACH_ABANDONED_DO_NOT_RETRY")
-    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: True)
-    monkeypatch.setattr("memlora.embedding.model.embed_text", lambda text: [1.0])
-    monkeypatch.setattr("memlora.embedding.store.load_embeddings",
+    monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: True)
+    monkeypatch.setattr("cognikernel.embedding.model.embed_text", lambda text: [1.0])
+    monkeypatch.setattr("cognikernel.embedding.store.load_embeddings",
                         lambda conn, ids, ver: {})
     diff = "use a process-local dict for rate limit counters"  # shared: {process, counters} = 2
     out = surface_prohibitions_for_edit(proj, diff)
@@ -216,9 +216,9 @@ def test_dense_rescue_requires_lexical_anchor(tmp_path: Path, monkeypatch) -> No
     proj, pid, db = _project(tmp_path, monkeypatch)
     _insert(db, pid, "In-process counters are out — each instance sees only its slice.",
             "APPROACH_ABANDONED_DO_NOT_RETRY")
-    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: True)
-    monkeypatch.setattr("memlora.embedding.model.embed_text", lambda text: [1.0])
-    monkeypatch.setattr("memlora.embedding.store.load_embeddings",
+    monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: True)
+    monkeypatch.setattr("cognikernel.embedding.model.embed_text", lambda text: [1.0])
+    monkeypatch.setattr("cognikernel.embedding.store.load_embeddings",
                         lambda conn, ids, ver: {})
     assert surface_prohibitions_for_edit(proj, "add a docstring to the config loader") == ""
 

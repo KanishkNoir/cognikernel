@@ -61,5 +61,5 @@ jobs:
         # Includes tests/reliability/ (failure injection) and the architecture
         # contract meta-guard — the categories the audit showed were missing.
         env:
-          MEMLORA_DISABLE_AUTO_WARM: "1"
+          COGNIKERNEL_DISABLE_AUTO_WARM: "1"
         run: uv run pytest -q

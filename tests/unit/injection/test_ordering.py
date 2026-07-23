@@ -1,14 +1,14 @@
 """Tests for event partitioning and InjectionContext construction."""
 import pytest
-from memlora.extraction.authority import (
+from cognikernel.extraction.authority import (
     ASSISTANT_ANSWER_TO_QUESTION,
     ASSISTANT_DECIDED,
     INFERRED_FROM_CODE,
     LLM,
     USER_STATED,
 )
-from memlora.injection.ordering import make_injection_context, partition_events
-from memlora.storage.events import Event, VALID_EVENT_TYPES
+from cognikernel.injection.ordering import make_injection_context, partition_events
+from cognikernel.storage.events import Event, VALID_EVENT_TYPES
 
 
 def _event(event_type: str, description: str = "x", *, weight: float = 1.0, **payload_extra) -> Event:
@@ -168,7 +168,7 @@ class TestActiveThreadRanking:
 
 class TestMakeInjectionContext:
     def test_returns_injection_context(self) -> None:
-        from memlora.injection.template import InjectionContext
+        from cognikernel.injection.template import InjectionContext
         ctx = make_injection_context([], "proj", 1, 5, 1)
         assert isinstance(ctx, InjectionContext)
 

@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from memlora.extraction.authority import ASSISTANT_ANSWER_TO_QUESTION
-from memlora.extraction.tokenize import Sentence
-from memlora.extraction.trie import TrieMatch
-from memlora.extraction.windowing import extract_co_captures
+from cognikernel.extraction.authority import ASSISTANT_ANSWER_TO_QUESTION
+from cognikernel.extraction.tokenize import Sentence
+from cognikernel.extraction.trie import TrieMatch
+from cognikernel.extraction.windowing import extract_co_captures
 
 
 def _sent(text: str, *, role: str, idx: int, is_code: bool = False) -> Sentence:
@@ -120,7 +120,7 @@ class TestEdgeCases:
 
 class TestPipelineIntegration:
     def test_co_capture_event_appears_in_extract_session(self) -> None:
-        from memlora.extraction.pipeline import SessionMetadata, extract_session
+        from cognikernel.extraction.pipeline import SessionMetadata, extract_session
 
         transcript = (
             "User:\nConfirm the env var name and that it must never appear anywhere else.\n\n"

@@ -25,7 +25,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, "src")
 
-HEAD = Path("src/memlora/extraction/heads/salience_v2.npz")
+HEAD = Path("src/cognikernel/extraction/heads/salience_v2.npz")
 LABELS = ("NOISE", "DECISION", "CONSTRAINT_HARD", "CONSTRAINT_SOFT",
           "APPROACH_ABANDONED_DO_NOT_RETRY", "THREAD")
 IX = {l: i for i, l in enumerate(LABELS)}
@@ -65,12 +65,12 @@ def main() -> None:
     args = ap.parse_args()
 
     import numpy as np
-    import memlora.extraction.salience_v2 as h
+    import cognikernel.extraction.salience_v2 as h
 
     if not h.is_available():
         sys.exit("v2 head/body not available")
     # Reach the raw W + embedder for logit computation.
-    from memlora.extraction import salience_v2 as sv
+    from cognikernel.extraction import salience_v2 as sv
 
     rows = _load_rows(Path(args.corpus))
     rng = np.random.default_rng(0)

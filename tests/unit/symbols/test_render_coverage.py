@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import pytest
 
-from memlora.storage.symbol_files import CoverageStats, RefreshInfo
-from memlora.symbols.projection import SkeletonClass, SkeletonEntry, SkeletonMethod
-from memlora.symbols.render import (
+from cognikernel.storage.symbol_files import CoverageStats, RefreshInfo
+from cognikernel.symbols.projection import SkeletonClass, SkeletonEntry, SkeletonMethod
+from cognikernel.symbols.render import (
     _path_to_module,
     _render_import_hint,
     render_skeleton_section,

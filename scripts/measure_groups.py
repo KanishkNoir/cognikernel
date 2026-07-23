@@ -19,8 +19,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from memlora.delta.supersede import supersedes
-from memlora.extraction.decision_key import CHOICE_FAMILY, derive_decision_key
+from cognikernel.delta.supersede import supersedes
+from cognikernel.extraction.decision_key import CHOICE_FAMILY, derive_decision_key
 
 GOLD_CHAINS = {
     "D4 default-alias": [27, 157, 172, 206, 325],

@@ -1,6 +1,6 @@
 """Unit tests for symbol skeleton rendering."""
-from memlora.symbols.projection import SkeletonEntry, SkeletonClass, SkeletonMethod
-from memlora.symbols.render import render_skeleton_section, _render_method
+from cognikernel.symbols.projection import SkeletonEntry, SkeletonClass, SkeletonMethod
+from cognikernel.symbols.render import render_skeleton_section, _render_method
 
 
 def _entry(path: str = "src/models.py", imports=None, classes=None, functions=None) -> SkeletonEntry:

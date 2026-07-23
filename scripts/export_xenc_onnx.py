@@ -8,7 +8,7 @@ BertForSequenceClassification) as a graph: (input_ids, attention_mask, token_typ
 
 Input:  models/supersession_xenc/            (the trained cross-encoder, HF format)
 Output: models/supersession_xenc/onnx/body.onnx + tokenizer.json
-Deploy: copy to ~/.memlora/models/supersession_xenc/ (or set MEMLORA_XENC_BODY_DIR);
+Deploy: copy to ~/.cognikernel/models/supersession_xenc/ (or set COGNIKERNEL_XENC_BODY_DIR);
         threshold.json (next to the model) carries the calibrated decision threshold.
 
 Usage:  python scripts/export_xenc_onnx.py
