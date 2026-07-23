@@ -7,16 +7,16 @@ from unittest.mock import patch
 
 import pytest
 
-from memlora.integration.query import recall_for_prompt
+from cognikernel.integration.query import recall_for_prompt
 
 
 def _project(tmp_path: Path, monkeypatch) -> tuple[str, str, object]:
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path))
-    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
-    monkeypatch.setattr("memlora.embedding.model.warm", lambda: None)
-    from memlora.config import Config
-    from memlora.integration.session import init_project
-    from memlora.storage.connection import get_db_path, hash_project_path
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path))
+    monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: False)
+    monkeypatch.setattr("cognikernel.embedding.model.warm", lambda: None)
+    from cognikernel.config import Config
+    from cognikernel.integration.session import init_project
+    from cognikernel.storage.connection import get_db_path, hash_project_path
 
     proj = str(tmp_path / "proj")
     Path(proj).mkdir()
@@ -27,7 +27,7 @@ def _project(tmp_path: Path, monkeypatch) -> tuple[str, str, object]:
 
 
 def _insert(db, pid: str, desc: str, etype: str = "DECISION", h: str = "h1") -> int:
-    from memlora.storage.connection import get_connection
+    from cognikernel.storage.connection import get_connection
 
     with get_connection(db) as conn:
         cur = conn.execute(
@@ -50,7 +50,7 @@ def test_empty_store_silent(tmp_path: Path, monkeypatch) -> None:
 
 def test_exception_silent() -> None:
     """Never raises — silence on any error path."""
-    with patch("memlora.integration.query._resolve", side_effect=RuntimeError("boom")):
+    with patch("cognikernel.integration.query._resolve", side_effect=RuntimeError("boom")):
         assert recall_for_prompt("/any/path", "query") == ""
 
 
@@ -82,8 +82,8 @@ def test_ledger_redundancy_filter(tmp_path: Path, monkeypatch) -> None:
     eid = _insert(db, pid, "rate limit counters live in Redis because multiple "
                            "gateway instances share one budget",
                   etype="CONSTRAINT_HARD")
-    from memlora.storage.connection import get_connection
-    from memlora.storage.render_ledger import record_rendered
+    from cognikernel.storage.connection import get_connection
+    from cognikernel.storage.render_ledger import record_rendered
 
     with get_connection(db) as conn:
         record_rendered(conn, pid, "sess-A", [eid], "block")

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from memlora.extraction.decision_key import derive_decision_key
-from memlora.extraction.schema_decisions import extract_schema_decisions
+from cognikernel.extraction.decision_key import derive_decision_key
+from cognikernel.extraction.schema_decisions import extract_schema_decisions
 
 
 def _sent(text, role="assistant", code=True):

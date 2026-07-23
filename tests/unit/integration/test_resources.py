@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-import memlora.integration.cli as cli
-from memlora.integration.resources import (
+import cognikernel.integration.cli as cli
+from cognikernel.integration.resources import (
     list_projects,
     render_constraints,
     render_decisions,
@@ -18,18 +18,18 @@ from memlora.integration.resources import (
     render_skeleton,
     render_threads,
 )
-from memlora.storage.migrations import run_migrations
+from cognikernel.storage.migrations import run_migrations
 
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch):
     """Initialise a real project dir + DB, return (project_dir, project_id)."""
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
     proj = tmp_path / "myproject"
     proj.mkdir()
     cli._cmd_init(argparse.Namespace(project_path=str(proj)))
-    from memlora.config import Config
-    from memlora.storage.connection import get_db_path, hash_project_path
+    from cognikernel.config import Config
+    from cognikernel.storage.connection import get_db_path, hash_project_path
     pid = hash_project_path(str(proj))
     cfg = Config.load(project_path=str(proj))
     db = get_db_path(cfg, pid)
@@ -51,7 +51,7 @@ def _insert_event(conn, pid, etype, desc, rationale="", weight=1.0):
 
 def test_init_stores_project_path_in_meta(project, tmp_path: Path) -> None:
     proj, pid, db, cfg = project
-    from memlora.storage.connection import get_connection
+    from cognikernel.storage.connection import get_connection
     with get_connection(db) as conn:
         row = conn.execute("SELECT value FROM meta WHERE key='project_path'").fetchone()
     assert row is not None
@@ -71,8 +71,8 @@ def test_list_projects_returns_known_project(project, tmp_path: Path) -> None:
 
 
 def test_list_projects_empty_dir_returns_empty_list(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "empty"))
-    from memlora.config import Config
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "empty"))
+    from cognikernel.config import Config
     cfg = Config.load()
     result = json.loads(list_projects(cfg))
     assert result == []
@@ -81,16 +81,16 @@ def test_list_projects_empty_dir_returns_empty_list(tmp_path: Path, monkeypatch)
 # ── constraints renderer ──────────────────────────────────────────────────────
 
 def test_render_constraints_returns_not_found_for_missing_project(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
-    from memlora.config import Config
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+    from cognikernel.config import Config
     cfg = Config.load()
     result = render_constraints("deadbeefdeadbeef", cfg)
-    assert "memlora init" in result.lower() or "no cognikernel" in result.lower()
+    assert "cognikernel init" in result.lower() or "no cognikernel" in result.lower()
 
 
 def test_render_constraints_returns_events(project) -> None:
     proj, pid, db, cfg = project
-    from memlora.storage.connection import get_connection
+    from cognikernel.storage.connection import get_connection
     with get_connection(db) as conn:
         _insert_event(conn, pid, "CONSTRAINT_HARD", "Never store secrets in plaintext",
                       rationale="Security baseline")
@@ -109,7 +109,7 @@ def test_render_constraints_empty_message(project) -> None:
 
 def test_render_decisions_shows_weight(project) -> None:
     proj, pid, db, cfg = project
-    from memlora.storage.connection import get_connection
+    from cognikernel.storage.connection import get_connection
     with get_connection(db) as conn:
         _insert_event(conn, pid, "DECISION", "Use PostgreSQL", weight=1.5)
     result = render_decisions(pid, cfg)
@@ -121,7 +121,7 @@ def test_render_decisions_shows_weight(project) -> None:
 
 def test_render_graveyard_shows_rejected(project) -> None:
     proj, pid, db, cfg = project
-    from memlora.storage.connection import get_connection
+    from cognikernel.storage.connection import get_connection
     with get_connection(db) as conn:
         _insert_event(conn, pid, "APPROACH_ABANDONED_DO_NOT_RETRY",
                       "Celery broker", rationale="Too heavy for local dev")
@@ -134,7 +134,7 @@ def test_render_graveyard_shows_rejected(project) -> None:
 
 def test_render_threads_shows_open_items(project) -> None:
     proj, pid, db, cfg = project
-    from memlora.storage.connection import get_connection
+    from cognikernel.storage.connection import get_connection
     with get_connection(db) as conn:
         _insert_event(conn, pid, "THREAD_OPEN", "Implement auth end-to-end")
     result = render_threads(pid, cfg)
@@ -168,17 +168,17 @@ def test_render_section_rejects_malformed_project_id(project, tmp_path: Path) ->
     evil = "../../outside"
     for section in ("constraints", "decisions", "graveyard", "threads", "skeleton", "state"):
         out = render_section(evil, section, cfg)
-        assert "memlora init" in out.lower() or "no cognikernel" in out.lower()
+        assert "cognikernel init" in out.lower() or "no cognikernel" in out.lower()
     assert outside.read_bytes() == b""  # never opened as SQLite, never migrated
     # Well-formed but unknown ids still read as not-found, not as errors.
-    assert "memlora init" in render_section("0123456789abcdef", "state", cfg).lower()
+    assert "cognikernel init" in render_section("0123456789abcdef", "state", cfg).lower()
 
 
 # ── MCP server registers resources ───────────────────────────────────────────
 
 def test_mcp_server_has_seven_resources() -> None:
     """FastMCP should register 1 static + 6 template resources (CK-5)."""
-    from memlora.integration.mcp_server import _mcp
+    from cognikernel.integration.mcp_server import _mcp
     # list_resources covers static; list_resource_templates covers templates.
     # We just verify both lists are populated.
     import asyncio
@@ -199,8 +199,8 @@ def test_mcp_server_has_seven_resources() -> None:
 # ── skeleton path filter (ck-skeleton / skeleton MCP tool) ────────────────────
 
 def _seed_skeleton(db, pid):
-    from memlora.storage.connection import get_connection
-    from memlora.symbols.extractor import SymbolNode, SymbolUpdate
+    from cognikernel.storage.connection import get_connection
+    from cognikernel.symbols.extractor import SymbolNode, SymbolUpdate
     nodes = [
         SymbolNode(path="src/router.py", node_type="function", name="route",
                    parent_name="", signature="route(request) -> Response",
@@ -210,7 +210,7 @@ def _seed_skeleton(db, pid):
                    project_id=pid, updated_at=0),
     ]
     update = SymbolUpdate(project_id=pid, upsert_nodes=nodes, upsert_edges=[], delete_paths=[])
-    from memlora.symbols.store import apply_symbol_update
+    from cognikernel.symbols.store import apply_symbol_update
     with get_connection(db) as conn:
         apply_symbol_update(conn, update)
 

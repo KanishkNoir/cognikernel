@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import threading
 
-from memlora.storage.connection import get_connection
+from cognikernel.storage.connection import get_connection
 
 
 class TestWorkerContention:
     def test_two_racing_workers_process_each_job_once(self, project, jsonl) -> None:
-        from memlora.integration.session import process_jobs, session_capture
+        from cognikernel.integration.session import process_jobs, session_capture
 
         # Three distinct sessions => three independent queued jobs.
         for i in range(3):

@@ -10,7 +10,7 @@ attribute every CK mistake to two mechanisms:
            schema-decision capture from DDL code blocks.
 
 This harness replays each probe OFFLINE against the ORIGINAL benchmark stores
-(copied into a scratch MEMLORA_DIR; originals untouched):
+(copied into a scratch COGNIKERNEL_DIR; originals untouched):
 
   Part 1 (Mode B): rebuild_from_raw re-extracts every arm's raw_evidence with
   the CURRENT pipeline (legacy AND v2-broad) and scores gold-fact capture.
@@ -40,7 +40,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-REAL_MEMLORA = Path.home() / ".memlora"
+REAL_COGNIKERNEL = Path.home() / ".cognikernel"
 
 # The four CK-arm stores the consolidated findings scored
 # (scripts/_token_telemetry.py is the canonical arm->dir mapping).
@@ -164,15 +164,15 @@ BIND_PROBES = [
 def setup_scratch(scratch: Path) -> None:
     (scratch / "projects").mkdir(parents=True, exist_ok=True)
     for _, (proj, pid) in ARMS.items():
-        src = REAL_MEMLORA / "projects" / f"{pid}.db"
+        src = REAL_COGNIKERNEL / "projects" / f"{pid}.db"
         if not src.exists():
             sys.exit(f"missing benchmark DB: {src}")
         shutil.copy2(src, scratch / "projects" / f"{pid}.db")
 
 
 def make_config(scratch: Path, extractor: str):
-    from memlora.config import Config
-    return dataclasses.replace(Config(memlora_dir=scratch), extractor=extractor)
+    from cognikernel.config import Config
+    return dataclasses.replace(Config(cognikernel_dir=scratch), extractor=extractor)
 
 
 def event_texts(db: Path) -> list[tuple[str, str, bool]]:
@@ -206,7 +206,7 @@ def score_gold(db: Path, gold) -> dict:
 
 def part1_extraction(scratch: Path, extractors: list[str]) -> dict:
     """rebuild_from_raw sidecars with the current pipeline; score gold capture."""
-    from memlora.integration.session import rebuild_from_raw
+    from cognikernel.integration.session import rebuild_from_raw
 
     results: dict = {}
     for arm in ("taskflow", "conductor"):
@@ -231,7 +231,7 @@ def part1_extraction(scratch: Path, extractors: list[str]) -> dict:
 def _overlap_debug(db: Path, probe_text: str, top: int = 3) -> list[str]:
     """Top prohibition-typed events by content-term overlap with the probe —
     shows why a near-miss missed (e.g. one token under the K2 floor)."""
-    from memlora.delta.supersede import normalize_for_overlap
+    from cognikernel.delta.supersede import normalize_for_overlap
     q = normalize_for_overlap(probe_text)
     scored = []
     for et, txt, live in event_texts(db):
@@ -247,7 +247,7 @@ def _overlap_debug(db: Path, probe_text: str, top: int = 3) -> list[str]:
 
 def part2_bind(scratch: Path) -> dict:
     """Replay the offending edits through K2 and the prompts through CK-1."""
-    from memlora.integration.query import recall_for_prompt, surface_prohibitions_for_edit
+    from cognikernel.integration.query import recall_for_prompt, surface_prohibitions_for_edit
 
     cfg = make_config(scratch, "legacy")  # extractor irrelevant for bind
     results: dict = {}
@@ -290,9 +290,9 @@ def main() -> None:
     # Redirect the data dir to the scratch copies; keep the learned heads and
     # the embedding cache reachable by symlink/copy of the models dir — the
     # deployed bind path runs with the dense axis live, so the replay must too.
-    os.environ["MEMLORA_DIR"] = str(scratch)
-    os.environ["MEMLORA_V2_BODY_DIR"] = str(REAL_MEMLORA / "models" / "salience_v2")
-    models_src = REAL_MEMLORA / "models"
+    os.environ["COGNIKERNEL_DIR"] = str(scratch)
+    os.environ["COGNIKERNEL_V2_BODY_DIR"] = str(REAL_COGNIKERNEL / "models" / "salience_v2")
+    models_src = REAL_COGNIKERNEL / "models"
     models_dst = scratch / "models"
     if models_src.exists() and not models_dst.exists():
         try:
@@ -300,10 +300,10 @@ def main() -> None:
         except OSError:
             shutil.copytree(models_src, models_dst)
 
-    from memlora.embedding.model import ensure_ready
+    from cognikernel.embedding.model import ensure_ready
     dense_ok = ensure_ready(timeout=120)  # cached locally — a load, not a download
 
-    from memlora.extraction import salience_v2
+    from cognikernel.extraction import salience_v2
     v2_ok = salience_v2.is_available()
     extractors = ["legacy"] + ([] if (args.skip_v2 or not v2_ok) else ["v2-broad"])
 

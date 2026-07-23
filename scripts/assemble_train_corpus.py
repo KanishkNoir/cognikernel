@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from memlora.delta.supersede import normalize_for_overlap
+from cognikernel.delta.supersede import normalize_for_overlap
 
 CORPUS = Path("research/train_corpus")
 EVAL = Path("research/model_eval")

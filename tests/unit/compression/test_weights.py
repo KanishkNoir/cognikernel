@@ -3,14 +3,14 @@ import math
 
 import pytest
 
-from memlora.compression.weights import (
+from cognikernel.compression.weights import (
     BASE_WEIGHT,
     TYPE_MULTIPLIER,
     activity_factor,
     compute_weight,
     repetition_factor,
 )
-from memlora.storage.events import Event
+from cognikernel.storage.events import Event
 
 
 def _make_event(**overrides) -> Event:
@@ -103,7 +103,7 @@ class TestBaseWeightAndTypeMultiplier:
         assert TYPE_MULTIPLIER["THREAD_CLOSE"] == min(TYPE_MULTIPLIER.values())
 
     def test_all_valid_event_types_covered(self) -> None:
-        from memlora.storage.events import VALID_EVENT_TYPES
+        from cognikernel.storage.events import VALID_EVENT_TYPES
         assert set(BASE_WEIGHT.keys()) == VALID_EVENT_TYPES
         assert set(TYPE_MULTIPLIER.keys()) == VALID_EVENT_TYPES
 

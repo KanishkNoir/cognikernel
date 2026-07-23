@@ -1,14 +1,14 @@
 """Tests for fallback rendering."""
 import pytest
-from memlora.injection.fallback import (
+from cognikernel.injection.fallback import (
     ProjectionCorruptedError,
     _fallback_corrupted,
     _fallback_empty_projection,
     _fallback_uninitialized,
     render_or_fallback,
 )
-from memlora.injection.template import InjectionContext
-from memlora.storage.events import Event
+from cognikernel.injection.template import InjectionContext
+from cognikernel.storage.events import Event
 
 
 def _make_ctx(**overrides) -> InjectionContext:
@@ -40,9 +40,9 @@ def _decision(description: str = "Use SQLite.") -> Event:
 
 
 class TestFallbackUninitialized:
-    def test_contains_memlora_init(self) -> None:
+    def test_contains_cognikernel_init(self) -> None:
         out = _fallback_uninitialized()
-        assert "memlora init" in out
+        assert "cognikernel init" in out
 
     def test_contains_header_marker(self) -> None:
         assert "auto-generated" in _fallback_uninitialized()
@@ -79,7 +79,7 @@ class TestFallbackCorrupted:
 
     def test_mentions_doctor_command(self) -> None:
         ctx = _make_ctx()
-        assert "memlora doctor" in _fallback_corrupted(ctx)
+        assert "cognikernel doctor" in _fallback_corrupted(ctx)
 
     def test_contains_header_marker(self) -> None:
         ctx = _make_ctx()
@@ -93,7 +93,7 @@ class TestFallbackCorrupted:
 class TestRenderOrFallback:
     def test_none_ctx_returns_uninitialized(self) -> None:
         out = render_or_fallback(None)
-        assert "memlora init" in out
+        assert "cognikernel init" in out
 
     def test_empty_ctx_returns_first_session_message(self) -> None:
         ctx = _make_ctx()
@@ -113,11 +113,11 @@ class TestRenderOrFallback:
         from unittest.mock import patch
         ctx = _make_ctx(decisions=[_decision("Use SQLite.")])
         with patch(
-            "memlora.injection.template.render_with_budget_enforcement",
+            "cognikernel.injection.template.render_with_budget_enforcement",
             side_effect=ProjectionCorruptedError("disk read error"),
         ):
             out = render_or_fallback(ctx)
-        assert "memlora doctor" in out
+        assert "cognikernel doctor" in out
 
     def test_hard_constraint_ctx_renders_full_block(self) -> None:
         hc = Event(

@@ -1,4 +1,4 @@
-"""Tests for memlora.extraction.file_mentions.
+"""Tests for cognikernel.extraction.file_mentions.
 
 Focus: bare-basename rejection at insertion time. Mentions like ``env.py``
 without a directory prefix are extractor noise (they collide with the
@@ -8,8 +8,8 @@ this test pins the upstream version.
 """
 from __future__ import annotations
 
-from memlora.extraction.file_mentions import extract_file_mention_events
-from memlora.extraction.tokenize import Sentence
+from cognikernel.extraction.file_mentions import extract_file_mention_events
+from cognikernel.extraction.tokenize import Sentence
 
 
 def _assistant_sentence(text: str, idx: int = 0) -> Sentence:

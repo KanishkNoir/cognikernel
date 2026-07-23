@@ -1,7 +1,7 @@
 """Tests for token estimation."""
 import pytest
-from memlora.compression.token_count import estimate_tokens
-from memlora.storage.events import Event
+from cognikernel.compression.token_count import estimate_tokens
+from cognikernel.storage.events import Event
 
 
 def _make_event(**overrides) -> Event:
@@ -73,8 +73,8 @@ class TestSingleCounter:
     """Selection and enforcement must use the one canonical counter."""
 
     def test_count_tokens_matches_renderer_counter(self) -> None:
-        from memlora.compression.token_count import count_tokens
-        from memlora.injection.template import count_tokens_accurate
+        from cognikernel.compression.token_count import count_tokens
+        from cognikernel.injection.template import count_tokens_accurate
         for s in ("", "Use SQLite for local storage.",
                   "### Hard constraints\n- never log secrets — security"):
             assert count_tokens(s) == count_tokens_accurate(s)

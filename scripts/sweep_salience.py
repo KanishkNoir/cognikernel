@@ -10,7 +10,7 @@ Per config, sequentially (retrains clobber shared artifacts, so never parallel):
   1. train_salience_setfit.py <cfg args> --extra-corpus ...   (writes package head)
   2. export_setfit_onnx.py                                     (writes onnx body)
   3. stash body+head -> models/sweep/<name>/  (so the winner is re-installable)
-  4. model_eval.py --tag sweep-<name>  (MEMLORA_V2_BODY_DIR -> the fresh body)
+  4. model_eval.py --tag sweep-<name>  (COGNIKERNEL_V2_BODY_DIR -> the fresh body)
   5. record acc / macro_f1 / deployment_view / held-out acc
 
 At the end prints a comparison table and the winner. NOTE: with n=368 eval and
@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SWEEP_DIR = ROOT / "models" / "sweep"
 EVAL_DIR = ROOT / "research" / "model_eval"
 EXPORT_ONNX = ROOT / "models" / "salience_setfit" / "onnx"
-PKG_HEAD = ROOT / "src" / "memlora" / "extraction" / "heads" / "salience_v2.npz"
+PKG_HEAD = ROOT / "src" / "cognikernel" / "extraction" / "heads" / "salience_v2.npz"
 TRAIN_DEPS = ["--with", "setfit", "--with", "transformers<4.50"]
 EXPORT_DEPS = TRAIN_DEPS + ["--with", "onnx", "--with", "onnxruntime"]
 
@@ -118,7 +118,7 @@ def stash(name: str) -> Path:
 def evaluate(name: str, body_dir: Path, log: Path) -> dict | None:
     import os
     env = os.environ.copy()
-    env["MEMLORA_V2_BODY_DIR"] = str(body_dir)
+    env["COGNIKERNEL_V2_BODY_DIR"] = str(body_dir)
     cmd = ["uv", "run", "--extra", "embedding", "python", "scripts/model_eval.py",
            "--tag", f"sweep-{name}"]
     with open(log, "w", encoding="utf-8") as f:

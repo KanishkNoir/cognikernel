@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from memlora.storage.denied_reads import (
+from cognikernel.storage.denied_reads import (
     DEFAULT_CLEANUP_TTL_MS,
     DEFAULT_RETRY_WINDOW_MS,
     cleanup_old,

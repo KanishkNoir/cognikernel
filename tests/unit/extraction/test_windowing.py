@@ -1,8 +1,8 @@
 """Tests for sliding-window context extraction."""
 import pytest
-from memlora.extraction.tokenize import Sentence, tokenize
-from memlora.extraction.trie import TrieScanner, TrieMatch
-from memlora.extraction.windowing import extract_window, extract_events_from_matches
+from cognikernel.extraction.tokenize import Sentence, tokenize
+from cognikernel.extraction.trie import TrieScanner, TrieMatch
+from cognikernel.extraction.windowing import extract_window, extract_events_from_matches
 
 
 def _make_sentence(text: str, idx: int, role: str = "user", code: bool = False) -> Sentence:

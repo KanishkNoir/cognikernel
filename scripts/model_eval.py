@@ -42,9 +42,9 @@ def _sha(path: Path) -> str:
 
 
 def artifact_fingerprints() -> dict:
-    import memlora.extraction.salience as s1
-    import memlora.extraction.salience_v2 as s2
-    home = Path.home() / ".memlora" / "models"
+    import cognikernel.extraction.salience as s1
+    import cognikernel.extraction.salience_v2 as s2
+    home = Path.home() / ".cognikernel" / "models"
     return {
         "salience_v1_head": _sha(Path(s1.__file__).parent / "heads" / "salience_v1.npz"),
         "salience_v2_head": _sha(Path(s2.__file__).parent / "heads" / "salience_v2.npz"),
@@ -157,10 +157,10 @@ def _rank_auc(scores: list[float], labels: list[int]) -> float:
 
 
 def eval_supersession(pairs: list[dict]) -> dict:
-    from memlora.delta import supersede_xenc
-    from memlora.delta.supersede import jaccard_similarity, supersedes
-    from memlora.embedding.input import embedding_input
-    from memlora.embedding.model import embed_text, ensure_ready
+    from cognikernel.delta import supersede_xenc
+    from cognikernel.delta.supersede import jaccard_similarity, supersedes
+    from cognikernel.embedding.input import embedding_input
+    from cognikernel.embedding.model import embed_text, ensure_ready
 
     labels = [p["label"] for p in pairs]
     out: dict = {"n_pairs": len(pairs), "by_kind": dict(Counter(p["kind"] for p in pairs))}
@@ -227,10 +227,10 @@ def main() -> None:
     args = ap.parse_args()
 
     import os
-    os.environ.setdefault("MEMLORA_V2_BODY_DIR", str(Path.home() / ".memlora" / "models" / "salience_v2"))
+    os.environ.setdefault("COGNIKERNEL_V2_BODY_DIR", str(Path.home() / ".cognikernel" / "models" / "salience_v2"))
 
-    import memlora.extraction.salience as head_v1
-    import memlora.extraction.salience_v2 as head_v2
+    import cognikernel.extraction.salience as head_v1
+    import cognikernel.extraction.salience_v2 as head_v2
 
     sal_items = load_jsonl(args.eval_file)
     sup_pairs = [] if args.skip_supersession else load_jsonl("supersession_eval.jsonl")

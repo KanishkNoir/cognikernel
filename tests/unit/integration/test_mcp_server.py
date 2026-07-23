@@ -1,4 +1,4 @@
-"""Tests for memlora.integration.mcp_server."""
+"""Tests for cognikernel.integration.mcp_server."""
 from __future__ import annotations
 
 import json
@@ -9,15 +9,15 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.session import init_project, session_end
+from cognikernel.config import Config
+from cognikernel.integration.session import init_project, session_end
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def cfg(tmp_path: Path) -> Config:
-    return Config(memlora_dir=tmp_path / "memlora")
+    return Config(cognikernel_dir=tmp_path / "cognikernel")
 
 
 @pytest.fixture
@@ -33,25 +33,25 @@ class TestGetSessionStateUnit:
     """Test the tool's logic by calling the underlying render_state directly."""
 
     def test_returns_string(self, project_path: Path, cfg: Config) -> None:
-        from memlora.integration.session import render_state
+        from cognikernel.integration.session import render_state
         init_project(project_path, config=cfg)
         result = render_state(str(project_path), config=cfg)
         assert isinstance(result, str)
 
     def test_non_empty_for_empty_project(self, project_path: Path, cfg: Config) -> None:
-        from memlora.integration.session import render_state
+        from cognikernel.integration.session import render_state
         init_project(project_path, config=cfg)
         result = render_state(str(project_path), config=cfg)
         assert len(result) > 0
 
     def test_contains_project_name(self, project_path: Path, cfg: Config) -> None:
-        from memlora.integration.session import render_state
+        from cognikernel.integration.session import render_state
         init_project(project_path, config=cfg)
         result = render_state(str(project_path), config=cfg)
         assert project_path.name in result
 
     def test_reflects_session_events(self, project_path: Path, cfg: Config) -> None:
-        from memlora.integration.session import render_state
+        from cognikernel.integration.session import render_state
         transcript = (
             "Hard constraint: we must never use synchronous blocking I/O in async paths. "
             "We decided to use SQLite WAL mode for the storage layer."
@@ -65,7 +65,7 @@ class TestGetSessionStateUnit:
 
 class TestMcpServerName:
     def test_server_name_is_cognikernel(self) -> None:
-        from memlora.integration.mcp_server import _mcp
+        from cognikernel.integration.mcp_server import _mcp
         assert _mcp.name == "cognikernel"
 
 
@@ -73,14 +73,14 @@ class TestMcpServerName:
 
 class TestToolRegistration:
     def test_get_session_state_tool_registered(self) -> None:
-        from memlora.integration.mcp_server import _mcp
+        from cognikernel.integration.mcp_server import _mcp
         import asyncio
         tools = asyncio.run(_mcp.list_tools())
         tool_names = [t.name for t in tools]
         assert "get_session_state" in tool_names
 
     def test_tool_has_project_path_parameter(self) -> None:
-        from memlora.integration.mcp_server import _mcp
+        from cognikernel.integration.mcp_server import _mcp
         import asyncio
         tools = asyncio.run(_mcp.list_tools())
         tool = next(t for t in tools if t.name == "get_session_state")
@@ -92,7 +92,7 @@ class TestToolRegistration:
 # ── subprocess integration ────────────────────────────────────────────────────
 
 class TestMcpStdioProtocol:
-    """Launch memlora mcp-serve as a real subprocess and exchange JSON-RPC frames."""
+    """Launch cognikernel mcp-serve as a real subprocess and exchange JSON-RPC frames."""
 
     def _rpc(self, proc: subprocess.Popen, method: str, params: dict, rpc_id: int) -> dict:
         msg = json.dumps({"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params})
@@ -109,7 +109,7 @@ class TestMcpStdioProtocol:
     @pytest.fixture
     def mcp_proc(self, tmp_path: Path):
         proc = subprocess.Popen(
-            [sys.executable, "-m", "memlora.integration.cli", "mcp-serve"],
+            [sys.executable, "-m", "cognikernel.integration.cli", "mcp-serve"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

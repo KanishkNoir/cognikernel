@@ -17,7 +17,7 @@ labels: bug
 - OS (Windows / macOS / Linux / WSL):
 - Python version:
 - Agent (Claude Code / Codex) and version:
-- Output of `uv run memlora doctor --strict <project>`:
+- Output of `uv run cognikernel doctor --strict <project>`:
 
 ```
 paste doctor output here

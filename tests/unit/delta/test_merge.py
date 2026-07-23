@@ -1,4 +1,4 @@
-"""Tests for memlora.delta.merge."""
+"""Tests for cognikernel.delta.merge."""
 from __future__ import annotations
 
 import json
@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 import pytest
 
-from memlora.delta.decay import DECAY_FACTOR
-from memlora.delta.merge import execute_merge, merge_event
-from memlora.storage.evidence import store_evidence
-from memlora.storage.events import Event, MAX_EVENT_WEIGHT, WEIGHT_INCREMENT_ON_DEDUP, insert_event
+from cognikernel.delta.decay import DECAY_FACTOR
+from cognikernel.delta.merge import execute_merge, merge_event
+from cognikernel.storage.evidence import store_evidence
+from cognikernel.storage.events import Event, MAX_EVENT_WEIGHT, WEIGHT_INCREMENT_ON_DEDUP, insert_event
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -437,7 +437,7 @@ class TestExecuteMergeTransaction:
         # (it's part of the migration, so conn fixture already has it)
         bad_event = make_event(content_hash="bad")
         with patch(
-            "memlora.delta.merge._insert_or_update",
+            "cognikernel.delta.merge._insert_or_update",
             side_effect=RuntimeError("boom"),
         ):
             with pytest.raises(RuntimeError, match="boom"):
@@ -450,7 +450,7 @@ class TestExecuteMergeTransaction:
     def test_exception_rolls_back_events(self, conn: sqlite3.Connection) -> None:
         bad_event = make_event(content_hash="bad")
         with patch(
-            "memlora.delta.merge._insert_or_update",
+            "cognikernel.delta.merge._insert_or_update",
             side_effect=RuntimeError("rollback test"),
         ):
             with pytest.raises(RuntimeError):

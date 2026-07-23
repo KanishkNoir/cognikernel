@@ -16,16 +16,16 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.session import init_project
-from memlora.storage import symbol_files as sf
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.config import Config
+from cognikernel.integration.session import init_project
+from cognikernel.storage import symbol_files as sf
+from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
 
 PRETOOL = (
-    Path(__file__).parent.parent.parent / "scripts" / "memlora_pretool_hook.py"
+    Path(__file__).parent.parent.parent / "scripts" / "cognikernel_pretool_hook.py"
 )
 POSTTOOL_READ = (
-    Path(__file__).parent.parent.parent / "scripts" / "memlora_posttool_read_hook.py"
+    Path(__file__).parent.parent.parent / "scripts" / "cognikernel_posttool_read_hook.py"
 )
 
 
@@ -34,7 +34,7 @@ POSTTOOL_READ = (
 
 def _make_project(tmp_path: Path) -> tuple[Path, Path]:
     """Set up a tmp project with the minimal scaffolding hooks expect."""
-    memlora_dir = tmp_path / "memlora"
+    cognikernel_dir = tmp_path / "cognikernel"
     project_path = tmp_path / "proj"
     project_path.mkdir()
 
@@ -43,22 +43,22 @@ def _make_project(tmp_path: Path) -> tuple[Path, Path]:
     claude.mkdir()
     (claude / "settings.json").write_text("{}", encoding="utf-8")
 
-    # Force strict mode at the project layer (mirrors what `memlora init` writes).
-    memlora_cfg_dir = project_path / ".memlora"
-    memlora_cfg_dir.mkdir()
-    (memlora_cfg_dir / "config.toml").write_text(
+    # Force strict mode at the project layer (mirrors what `cognikernel init` writes).
+    cognikernel_cfg_dir = project_path / ".cognikernel"
+    cognikernel_cfg_dir.mkdir()
+    (cognikernel_cfg_dir / "config.toml").write_text(
         'hook_policy = "strict"\n', encoding="utf-8"
     )
 
-    cfg = Config(memlora_dir=memlora_dir)
+    cfg = Config(cognikernel_dir=cognikernel_dir)
     init_project(project_path, config=cfg)
 
-    return memlora_dir, project_path
+    return cognikernel_dir, project_path
 
 
-def _seed_symbol_files(memlora_dir: Path, project_path: Path, rel: str) -> None:
+def _seed_symbol_files(cognikernel_dir: Path, project_path: Path, rel: str) -> None:
     """Seed a fresh+scanned+symbols-present row so STEP 2 Case A is reachable."""
-    cfg = Config(memlora_dir=memlora_dir)
+    cfg = Config(cognikernel_dir=cognikernel_dir)
     project_id = hash_project_path(str(project_path))
     db_path = get_db_path(cfg, project_id)
     with get_connection(db_path) as conn:
@@ -95,8 +95,8 @@ def _run_posttool_read(payload: dict, env: dict) -> subprocess.CompletedProcess:
     )
 
 
-def _build_env(memlora_dir: Path) -> dict:
-    return {**os.environ, "MEMLORA_DIR": str(memlora_dir)}
+def _build_env(cognikernel_dir: Path) -> dict:
+    return {**os.environ, "COGNIKERNEL_DIR": str(cognikernel_dir)}
 
 
 # ── tests ────────────────────────────────────────────────────────────────────
@@ -104,9 +104,9 @@ def _build_env(memlora_dir: Path) -> dict:
 
 class TestPreToolStrictMode:
     def test_skeleton_fresh_first_read_is_denied(self, tmp_path: Path) -> None:
-        memlora_dir, project_path = _make_project(tmp_path)
-        _seed_symbol_files(memlora_dir, project_path, "app/main.py")
-        env = _build_env(memlora_dir)
+        cognikernel_dir, project_path = _make_project(tmp_path)
+        _seed_symbol_files(cognikernel_dir, project_path, "app/main.py")
+        env = _build_env(cognikernel_dir)
 
         result = _run_pretool({
             "tool_name": "Read",
@@ -124,9 +124,9 @@ class TestPreToolStrictMode:
     def test_retry_within_window_is_allowed_with_body_needed_context(
         self, tmp_path: Path,
     ) -> None:
-        memlora_dir, project_path = _make_project(tmp_path)
-        _seed_symbol_files(memlora_dir, project_path, "app/main.py")
-        env = _build_env(memlora_dir)
+        cognikernel_dir, project_path = _make_project(tmp_path)
+        _seed_symbol_files(cognikernel_dir, project_path, "app/main.py")
+        env = _build_env(cognikernel_dir)
         payload = {
             "tool_name": "Read",
             "session_id": "sess-1",
@@ -156,9 +156,9 @@ class TestPreToolStrictMode:
           3. PostToolUse  — records cache as 'body_needed_retry'
           4. Third Read   — denied (already read this session, even via body_retry)
         """
-        memlora_dir, project_path = _make_project(tmp_path)
-        _seed_symbol_files(memlora_dir, project_path, "app/main.py")
-        env = _build_env(memlora_dir)
+        cognikernel_dir, project_path = _make_project(tmp_path)
+        _seed_symbol_files(cognikernel_dir, project_path, "app/main.py")
+        env = _build_env(cognikernel_dir)
 
         file_abs = str(project_path / "app/main.py")
         payload = {
@@ -198,8 +198,8 @@ class TestPreToolStrictMode:
     def test_universal_reread_block_for_plain_ok_read(self, tmp_path: Path) -> None:
         """A non-skeleton file (no symbol_files row) still gets re-read blocked
         once it's been read once. Covers the v2 STEP 1 universal invariant."""
-        memlora_dir, project_path = _make_project(tmp_path)
-        env = _build_env(memlora_dir)
+        cognikernel_dir, project_path = _make_project(tmp_path)
+        env = _build_env(cognikernel_dir)
 
         # NO symbol_files seeding — file should fall to Case E (allow first time).
         file_abs = str(project_path / "novel.py")
@@ -226,8 +226,8 @@ class TestPreToolStrictMode:
         assert "already read" in d2["permissionDecisionReason"].lower()
 
     def test_other_tools_pass_through_untouched(self, tmp_path: Path) -> None:
-        memlora_dir, project_path = _make_project(tmp_path)
-        env = _build_env(memlora_dir)
+        cognikernel_dir, project_path = _make_project(tmp_path)
+        env = _build_env(cognikernel_dir)
 
         result = _run_pretool({
             "tool_name": "Bash",
@@ -244,12 +244,12 @@ class TestPreToolStrictMode:
         self, tmp_path: Path,
     ) -> None:
         """If the project DB doesn't exist yet, hook must not block."""
-        memlora_dir = tmp_path / "memlora"
+        cognikernel_dir = tmp_path / "cognikernel"
         project_path = tmp_path / "untouched"
         project_path.mkdir()
         (project_path / ".claude").mkdir()
         (project_path / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
-        env = _build_env(memlora_dir)
+        env = _build_env(cognikernel_dir)
 
         result = _run_pretool({
             "tool_name": "Read",
@@ -265,8 +265,8 @@ class TestPreToolStrictMode:
 
 class TestPostToolReadCacheWrite:
     def test_successful_read_writes_cache(self, tmp_path: Path) -> None:
-        memlora_dir, project_path = _make_project(tmp_path)
-        env = _build_env(memlora_dir)
+        cognikernel_dir, project_path = _make_project(tmp_path)
+        env = _build_env(cognikernel_dir)
 
         file_abs = str(project_path / "novel.py")
         (project_path / "novel.py").write_text("x", encoding="utf-8")
@@ -279,7 +279,7 @@ class TestPostToolReadCacheWrite:
         }, env)
 
         # Query the DB directly to verify the row landed.
-        cfg = Config(memlora_dir=memlora_dir)
+        cfg = Config(cognikernel_dir=cognikernel_dir)
         project_id = hash_project_path(str(project_path))
         db_path = get_db_path(cfg, project_id)
         with get_connection(db_path) as conn:
@@ -294,8 +294,8 @@ class TestPostToolReadCacheWrite:
         assert row["last_read_outcome"] == "ok"
 
     def test_non_read_tool_is_ignored(self, tmp_path: Path) -> None:
-        memlora_dir, project_path = _make_project(tmp_path)
-        env = _build_env(memlora_dir)
+        cognikernel_dir, project_path = _make_project(tmp_path)
+        env = _build_env(cognikernel_dir)
 
         _run_posttool_read({
             "tool_name": "Bash",
@@ -304,7 +304,7 @@ class TestPostToolReadCacheWrite:
             "tool_input": {"command": "echo hi"},
         }, env)
 
-        cfg = Config(memlora_dir=memlora_dir)
+        cfg = Config(cognikernel_dir=cognikernel_dir)
         project_id = hash_project_path(str(project_path))
         db_path = get_db_path(cfg, project_id)
         with get_connection(db_path) as conn:

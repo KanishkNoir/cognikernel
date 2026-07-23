@@ -1,4 +1,4 @@
-"""Tests for memlora.delta.cascade."""
+"""Tests for cognikernel.delta.cascade."""
 from __future__ import annotations
 
 import json
@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from memlora.delta.cascade import cascade_component_status
-from memlora.storage.events import Event
+from cognikernel.delta.cascade import cascade_component_status
+from cognikernel.storage.events import Event
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

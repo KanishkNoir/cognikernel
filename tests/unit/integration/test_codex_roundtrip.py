@@ -13,14 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
+from cognikernel.config import Config
 
 
 @pytest.fixture
 def initialized(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("MEMLORA_DISABLE_AUTO_WARM", "1")
-    from memlora.integration.session import init_project
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("COGNIKERNEL_DISABLE_AUTO_WARM", "1")
+    from cognikernel.integration.session import init_project
 
     proj = tmp_path / "proj"
     proj.mkdir()
@@ -44,9 +44,9 @@ def _write_rollout(codex_home: Path, cwd: str, sid: str, text: str) -> None:
 
 
 def test_codex_decision_reaches_claude_block(initialized) -> None:
-    from memlora.integration.codex_sync import sync_codex_rollouts
-    from memlora.integration.session import process_jobs
-    from memlora.integration.session_start import handle_session_start
+    from cognikernel.integration.codex_sync import sync_codex_rollouts
+    from cognikernel.integration.session import process_jobs
+    from cognikernel.integration.session_start import handle_session_start
 
     proj, codex_home, cfg = initialized
     _write_rollout(codex_home, str(proj), "sid-pg",

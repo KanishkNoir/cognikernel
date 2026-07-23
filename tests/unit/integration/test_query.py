@@ -6,8 +6,8 @@ import sqlite3
 
 import pytest
 
-from memlora.integration.query import _lexical_recall, find_related_memory, recall_memory
-from memlora.storage.migrations import run_migrations
+from cognikernel.integration.query import _lexical_recall, find_related_memory, recall_memory
+from cognikernel.storage.migrations import run_migrations
 
 
 @pytest.fixture
@@ -58,12 +58,12 @@ def test_recall_memory_missing_project_returns_message(tmp_path) -> None:
 
 def test_recall_memory_end_to_end_lexical(tmp_path, monkeypatch) -> None:
     """Full wrapper, forced down the deterministic lexical path (model-independent)."""
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path))
-    monkeypatch.setattr("memlora.embedding.model.is_ready", lambda: False)
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path))
+    monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: False)
 
-    from memlora.config import Config
-    from memlora.integration.session import init_project
-    from memlora.storage.connection import get_connection, get_db_path, hash_project_path
+    from cognikernel.config import Config
+    from cognikernel.integration.session import init_project
+    from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
 
     proj = str(tmp_path / "proj")
     (tmp_path / "proj").mkdir()
@@ -85,7 +85,7 @@ def test_recall_memory_end_to_end_lexical(tmp_path, monkeypatch) -> None:
 
 def test_query_functions_never_raise(tmp_path, monkeypatch) -> None:
     """Both entrypoints return a string even when the underlying call blows up."""
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path))
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path))
     # Missing project → safe message, not an exception.
     assert isinstance(recall_memory(str(tmp_path / "x"), "q"), str)
     assert isinstance(find_related_memory(str(tmp_path / "x"), "q"), str)

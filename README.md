@@ -21,10 +21,6 @@ scoring salience and detecting when a new decision supersedes an old one. No
 API calls, no tokens billed, nothing leaves your machine. The only LLM involved
 is the coding agent you already run — CogniKernel makes it remember.
 
-> **Naming:** CogniKernel is the project; `memlora` (package `memlora-edge`) is
-> the Python module and CLI it ships as — the working name the code grew up
-> under. One project, two names: `memlora init`, `memlora doctor`, etc.
-
 ---
 
 ## The fine-tuned models
@@ -47,14 +43,14 @@ the model to that ceiling rather than to a naive 100%. The model's minority clas
 (rare event types with few historical examples) are tracked and grown deliberately,
 because a thin eval slice can hide the exact class that most needs work.
 
-**They're optional but on by default — here's the fail-open contract.** `memlora init`
+**They're optional but on by default — here's the fail-open contract.** `cognikernel init`
 writes a per-project config that already selects the fine-tuned path
 (`extractor = "v2-broad"`, `cross_encoder_supersession = true`). What's missing after
 `init` is the ~270 MB of model weights themselves — that's what
-`memlora install-heads` fetches. Until you run it, CogniKernel works, but degrades
+`cognikernel install-heads` fetches. Until you run it, CogniKernel works, but degrades
 both decisions to a deterministic keyword/lexical fallback (weaker: it can miss
 decisions phrased outside its trigger vocabulary, and it can't catch a paraphrased
-correction lexical matching misses) — `memlora doctor` names this state explicitly
+correction lexical matching misses) — `cognikernel doctor` names this state explicitly
 rather than leaving it invisible (see below). Nothing breaks either way — that's
 the fail-open design — but the fine-tuned path is the better-quality one, and the
 one new projects are configured to use by default. See [Quickstart](#quickstart) to
@@ -184,7 +180,7 @@ The system is designed to degrade *legibly*, never silently:
   in one transaction; safe to crash mid-script
 - **Idempotent replay** — a re-run worker job can't double-count or drift decay (evidence-provenance guard)
 - **Fail-open hooks** — every surface swallows its own failure *and logs at WARNING*; silence never reads as success
-- **`memlora doctor --strict`** — per-subsystem health (schema, FTS5, embeddings, symbols, worker queue); non-zero exit when degraded
+- **`cognikernel doctor --strict`** — per-subsystem health (schema, FTS5, embeddings, symbols, worker queue); non-zero exit when degraded
 - **Architecture enforcement** — `import-linter` layered contracts, guarded by a meta-test so a typo can't silently disable them
 - **CI promotion gate** — lint + full suite (incl. `tests/reliability/` failure-injection) on every PR; see [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
@@ -197,11 +193,11 @@ and Codex working in the same directory share one memory. Project resolution is
 **alias-aware**: `C:\repo` and `/mnt/c/repo` resolve to the same store, so memory
 follows the checkout across Windows, WSL, and native mounts; for genuinely
 different checkout paths, an opt-in `project_identity` key in
-`.memlora/config.toml` pins them to one shared store. Codex reads memory through
+`.cognikernel/config.toml` pins them to one shared store. Codex reads memory through
 the registered MCP server (`get_session_state` / `recall`); the capture direction
 is **pull-based**, because Codex has no `Stop`-hook equivalent:
 
-- **`memlora codex-sync <project>`** scans `~/.codex/sessions` for rollouts whose
+- **`cognikernel codex-sync <project>`** scans `~/.codex/sessions` for rollouts whose
   recorded `cwd` maps to the project and captures the delta through the *same*
   extraction pipeline (a rollout→transcript adapter is the only Codex-specific
   code; delta/dedup/idempotency are shared and unchanged).
@@ -213,7 +209,7 @@ is **pull-based**, because Codex has no `Stop`-hook equivalent:
 - **`init` provisions both** — `.mcp.json` (Claude) and `.codex/config.toml`
   (with the server's `cwd` + project env pinned) + `AGENTS.md` (Codex),
   idempotently and without clobbering existing settings.
-- **`memlora doctor`** reports a `codex` health line (sessions dir + rollout
+- **`cognikernel doctor`** reports a `codex` health line (sessions dir + rollout
   count, or "nothing to sync" — Codex is optional, so its absence is healthy).
 
 A decision made in Codex reaches the next Claude session's block, and
@@ -229,11 +225,11 @@ block + MCP recall.
 `recall` · `find_related` · `skeleton` · `get_session_state`
 
 **CLI:**
-- `memlora init <project>` — register the project and install the session hooks
-- `memlora doctor [--strict] <project>` — subsystem health report
-- `memlora codex-sync <project>` — capture Codex CLI sessions for this project
-- `memlora install-heads` — install the trained encoder artifacts (salience + cross-encoder ONNX bodies): downloaded from the [`heads-v1` release](https://github.com/KanishkNoir/cognikernel/releases/tag/heads-v1) and sha256-verified, or copied from a local `models/` export when present
-- `memlora show <project>` / `memlora reset <project>` — inspect / clear stored memory
+- `cognikernel init <project>` — register the project and install the session hooks
+- `cognikernel doctor [--strict] <project>` — subsystem health report
+- `cognikernel codex-sync <project>` — capture Codex CLI sessions for this project
+- `cognikernel install-heads` — install the trained encoder artifacts (salience + cross-encoder ONNX bodies): downloaded from the [`heads-v1` release](https://github.com/KanishkNoir/cognikernel/releases/tag/heads-v1) and sha256-verified, or copied from a local `models/` export when present
+- `cognikernel show <project>` / `cognikernel reset <project>` — inspect / clear stored memory
 
 ---
 
@@ -246,32 +242,32 @@ uv sync --extra embedding    # + dense retrieval (fastembed + numpy) — recomme
 
 # 2. Register the project (writes .mcp.json, hooks, and a per-project config that
 #    already selects the fine-tuned extraction path — see below)
-uv run memlora init .
+uv run cognikernel init .
 
 # 3. Install the fine-tuned encoder heads — the models described above
-uv run memlora install-heads     # ~270 MB, one-time, sha256-verified
+uv run cognikernel install-heads     # ~270 MB, one-time, sha256-verified
 
 # 4. Confirm everything is wired up
-uv run memlora doctor .
+uv run cognikernel doctor .
 ```
 
-Step 3 is the one easiest to skip and most worth not skipping: `memlora init`
+Step 3 is the one easiest to skip and most worth not skipping: `cognikernel init`
 already configured this project to use `salience_v2` and `supersession_xenc`
 (`extractor = "v2-broad"`, `cross_encoder_supersession = true` in
-`.memlora/config.toml`) — `install-heads` is what actually supplies the model
+`.cognikernel/config.toml`) — `install-heads` is what actually supplies the model
 weights those settings call for. Skip it and CogniKernel still runs, just on the
 weaker deterministic fallback (fail-open, not a hard error). The download pulls
 from the [`heads-v1` release](https://github.com/KanishkNoir/cognikernel/releases/tag/heads-v1)
 by default; pass `--source <dir>` to install from a local `models/` export instead,
 or `--no-download` to skip the network fetch and rely on the fallback deliberately.
 
-Step 4 actually tells you which path is active — `memlora doctor`'s subsystem
+Step 4 actually tells you which path is active — `cognikernel doctor`'s subsystem
 health block reports `salience_head` and `supersession_head` by name:
 
 ```
 -- subsystem health -----------------------------------------
-  [OK] salience_head    : installed, loads from ~/.memlora/models/salience_v2
-  [OK] supersession_head: installed, loads from ~/.memlora/models/supersession_xenc
+  [OK] salience_head    : installed, loads from ~/.cognikernel/models/salience_v2
+  [OK] supersession_head: installed, loads from ~/.cognikernel/models/supersession_xenc
 ```
 
 If you skipped `install-heads` (or ran `uv sync` without `--extra embedding`,
@@ -288,7 +284,7 @@ automatically at session start, and decisions are captured when the session ends
 ## Project layout
 
 ```
-src/memlora/
+src/cognikernel/
   integration/   hooks, CLI, MCP server, session/worker orchestration
   extraction/    sanitize -> classify -> salience -> decision-key pipeline
   delta/         delta-merge + supersession (latest-wins; cross-encoder optional)

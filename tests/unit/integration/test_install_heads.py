@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from memlora.integration import cli
-from memlora.integration.cli import (
+from cognikernel.integration import cli
+from cognikernel.integration.cli import (
     _cmd_install_heads,
     _download_head_asset,
     _HEADS_RELEASE_ASSETS,
@@ -23,8 +23,8 @@ def _args(**over) -> argparse.Namespace:
 
 @pytest.fixture()
 def isolated(tmp_path: Path, monkeypatch):
-    """No repo models/ dir, MEMLORA_DIR under tmp — the adopter-install shape."""
-    monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "memlora"))
+    """No repo models/ dir, COGNIKERNEL_DIR under tmp — the adopter-install shape."""
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "cognikernel"))
     monkeypatch.setattr(cli, "_repo_models_dir", lambda: tmp_path / "no-such-models")
     return tmp_path
 
@@ -40,7 +40,7 @@ class TestDownloadFallback:
         monkeypatch.setattr(cli, "_download_head_asset", fake_download)
         _cmd_install_heads(_args())
 
-        models = isolated / "memlora" / "models"
+        models = isolated / "cognikernel" / "models"
         assert (models / "salience_v2" / "body.onnx").exists()
         assert (models / "salience_v2" / "tokenizer.json").exists()
         assert (models / "supersession_xenc" / "body.onnx").exists()
@@ -49,7 +49,7 @@ class TestDownloadFallback:
         assert sorted(fetched) == sorted(expected)
 
     def test_existing_files_skipped_without_force(self, isolated, monkeypatch):
-        dest = isolated / "memlora" / "models" / "salience_v2"
+        dest = isolated / "cognikernel" / "models" / "salience_v2"
         dest.mkdir(parents=True)
         (dest / "body.onnx").write_bytes(b"already-here")
 
@@ -87,7 +87,7 @@ class TestLocalSource:
         (src / "tokenizer.json").write_text("{}", encoding="utf-8")
 
         _cmd_install_heads(_args(source=str(src)))
-        dest = isolated / "memlora" / "models" / "salience_v2"
+        dest = isolated / "cognikernel" / "models" / "salience_v2"
         assert (dest / "body.onnx").read_bytes() == b"onnx-bytes"
 
 

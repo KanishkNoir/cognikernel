@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from memlora.storage.events import (
+from cognikernel.storage.events import (
     VALID_EVENT_TYPES,
     WEIGHT_INCREMENT_ON_DEDUP,
     Event,

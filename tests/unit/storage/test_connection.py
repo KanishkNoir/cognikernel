@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from memlora.storage.connection import (
+from cognikernel.storage.connection import (
     get_connection,
     get_db_path,
     hash_project_identity,
@@ -12,7 +12,7 @@ from memlora.storage.connection import (
     project_paths_equivalent,
     resolve_project_id,
 )
-from memlora.config import Config
+from cognikernel.config import Config
 
 
 class TestPragmas:
@@ -99,11 +99,11 @@ class TestHashProjectPath:
         assert hash_project_identity("acme-api") != hash_project_identity("other")
 
     def test_resolve_uses_explicit_identity(self, tmp_path: Path) -> None:
-        cfg = Config(memlora_dir=tmp_path / "memlora", project_identity="acme-api")
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel", project_identity="acme-api")
         assert resolve_project_id("/any/checkout", cfg) == hash_project_identity("acme-api")
 
     def test_resolve_finds_existing_db_by_path_alias(self, tmp_path: Path) -> None:
-        cfg = Config(memlora_dir=tmp_path / "memlora")
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         cfg.projects_dir.mkdir(parents=True)
         db_path = cfg.projects_dir / "existing12345678.db"
         with get_connection(db_path) as conn:
@@ -119,16 +119,16 @@ class TestHashProjectPath:
 
 class TestGetDbPath:
     def test_creates_parent_directory(self, tmp_path: Path) -> None:
-        config = Config(memlora_dir=tmp_path / "memlora")
+        config = Config(cognikernel_dir=tmp_path / "cognikernel")
         db_path = get_db_path(config, "abc123")
         assert db_path.parent.exists()
 
     def test_returns_db_extension(self, tmp_path: Path) -> None:
-        config = Config(memlora_dir=tmp_path / "memlora")
+        config = Config(cognikernel_dir=tmp_path / "cognikernel")
         db_path = get_db_path(config, "abc123")
         assert db_path.suffix == ".db"
 
     def test_project_id_in_filename(self, tmp_path: Path) -> None:
-        config = Config(memlora_dir=tmp_path / "memlora")
+        config = Config(cognikernel_dir=tmp_path / "cognikernel")
         db_path = get_db_path(config, "myproject99")
         assert "myproject99" in db_path.name

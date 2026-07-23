@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from memlora.extraction.decision_key import (
+from cognikernel.extraction.decision_key import (
     backfill_keys,
     derive_decision_key,
     normalize_key,
@@ -125,7 +125,7 @@ class TestHonestCoverageTable:
 
 class TestBackfill:
     def _db(self) -> sqlite3.Connection:
-        from memlora.storage.migrations import run_migrations
+        from cognikernel.storage.migrations import run_migrations
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         run_migrations(conn)
@@ -133,7 +133,7 @@ class TestBackfill:
 
     def test_backfill_idempotent(self) -> None:
         import hashlib
-        from memlora.storage.events import Event, insert_event
+        from cognikernel.storage.events import Event, insert_event
 
         conn = self._db()
         e = Event(

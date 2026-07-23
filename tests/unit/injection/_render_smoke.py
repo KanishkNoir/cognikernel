@@ -2,10 +2,10 @@
 
 Not a test — run as `python tests/unit/injection/_render_smoke.py`.
 """
-from memlora.injection.template import InjectionContext, render_injection
-from memlora.storage.events import Event
-from memlora.storage.symbol_files import CoverageStats, RefreshInfo
-from memlora.symbols.projection import SkeletonEntry, SkeletonMethod
+from cognikernel.injection.template import InjectionContext, render_injection
+from cognikernel.storage.events import Event
+from cognikernel.storage.symbol_files import CoverageStats, RefreshInfo
+from cognikernel.symbols.projection import SkeletonEntry, SkeletonMethod
 
 
 def main() -> None:

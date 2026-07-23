@@ -32,8 +32,8 @@ promotion gate enforces (`.github/workflows/ci.yml`).
    not just the happy path. Add it to `tests/reliability/` where it fits.
 4. **Degradation is legible** — any new fail-open branch (a swallowed exception,
    an empty-result fallback) logs at `WARNING` and, where it represents a
-   subsystem that can be unhealthy, is reflected in `memlora doctor`
-   (`src/memlora/integration/health.py`). Silence must not read as success.
+   subsystem that can be unhealthy, is reflected in `cognikernel doctor`
+   (`src/cognikernel/integration/health.py`). Silence must not read as success.
 5. **Migrations are atomic** — a new `NNN_*.sql` migration must be safe to crash
    mid-script (the runner wraps body + version bump in one transaction; the
    migration must not contain its own `BEGIN`/`COMMIT` or transaction-incompatible
@@ -46,7 +46,7 @@ promotion gate enforces (`.github/workflows/ci.yml`).
 | Import-layering | `uv run lint-imports` | Architectural drift / import cycles accumulating unseen. |
 | Contract meta-guard | `pytest tests/unit/test_architecture_contracts.py` | A typo'd contract silently disabling **all** enforcement (audit P2). |
 | Reliability suite | `pytest tests/reliability/` | Crash/contention/corrupt-input bugs that the happy-path suite structurally cannot reach (audit P1). |
-| Diagnostic spine | `memlora doctor --strict` | Fail-open degradation looking identical to healthy (audit P3). |
+| Diagnostic spine | `cognikernel doctor --strict` | Fail-open degradation looking identical to healthy (audit P3). |
 
 ## Pre-flight (local)
 
@@ -55,7 +55,7 @@ Before opening a PR, the quick local equivalent of the gate:
 ```sh
 uv run lint-imports
 uv run pytest -q
-uv run python -m memlora doctor --strict <a-real-project-path>   # optional: subsystem health
+uv run python -m cognikernel doctor --strict <a-real-project-path>   # optional: subsystem health
 ```
 
 `doctor --strict` exits non-zero if any subsystem (schema version, FTS5,

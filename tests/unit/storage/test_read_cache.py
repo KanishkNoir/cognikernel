@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from memlora.storage.read_cache import (
+from cognikernel.storage.read_cache import (
     DEFAULT_TTL_MS,
     ReadCacheEntry,
     cleanup_old,

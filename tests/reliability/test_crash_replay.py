@@ -15,8 +15,8 @@ hand the worker after a crash in the merge->cursor window.
 """
 from __future__ import annotations
 
-from memlora.storage.connection import get_connection
-from memlora.storage.jobs import enqueue_extraction, fail_job, get_job
+from cognikernel.storage.connection import get_connection
+from cognikernel.storage.jobs import enqueue_extraction, fail_job, get_job
 
 
 def _event_stats(db) -> tuple[int, int, float]:
@@ -30,7 +30,7 @@ def _event_stats(db) -> tuple[int, int, float]:
 
 class TestCrashReplayNoDrift:
     def test_replayed_evidence_does_not_drift(self, project, jsonl) -> None:
-        from memlora.integration.session import process_jobs, session_capture
+        from cognikernel.integration.session import process_jobs, session_capture
 
         raw = jsonl(8)
         job_id = session_capture(project.path, "sess-orig", raw)["job_id"]
@@ -63,7 +63,7 @@ class TestCrashReplayNoDrift:
     def test_timeout_dead_letter_replay_does_not_drift(self, project, jsonl) -> None:
         """The auto-replay route: a TIMEOUT dead-letter (process-killed) replayed by
         process_jobs must also not double-apply its merge."""
-        from memlora.integration.session import process_jobs, session_capture
+        from cognikernel.integration.session import process_jobs, session_capture
 
         job_id = session_capture(project.path, "sess-orig", jsonl(6))["job_id"]
         assert process_jobs(project.path)["processed"] >= 1

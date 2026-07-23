@@ -1,0 +1,290 @@
+"""PreToolUse:Read decision logic — Stage C1.
+
+The decision tree (per v2 plan §2):
+
+  STEP 1 — RE-READ CHECK (always runs):
+    If (project_id, session_id, file_path) is in read_session_cache → DENY.
+
+  STEP 2 — SKELETON-BASED GATING (only under strict policy):
+    Lookup canonical_path in symbol_files:
+      Case A  freshness='fresh' AND scan_status='scanned' AND symbol_count > 0:
+              Verify freshness against the file's mtime (the `freshness` flag is
+              only updated by the Write/Edit hook; an external edit — git
+              checkout, another editor, codegen — leaves it falsely 'fresh'):
+                If mtime > refreshed_at  → mark row stale, ALLOW (skeleton can no
+                                           longer vouch for these signatures)
+              Otherwise check denied_reads for the same (project, session, path):
+                If within retry window   → ALLOW as 'body_needed_retry'
+                Otherwise                → DENY (record in denied_reads)
+      Case B  freshness='stale'         → ALLOW (skeleton may be out of date)
+      Case C  scan_status in {parse_error, ignored} → ALLOW (no signatures to offer)
+      Case D  symbol_count = 0          → ALLOW (no public surface to defer to)
+      Case E  no symbol_files row at all → ALLOW (genuinely new file)
+
+Under `advisory` policy, STEP 2 is skipped entirely — every non-re-read goes
+through (the v1 behaviour, kept available for one minor version per the plan).
+
+This module is the single source of truth for the policy. The hook script is a
+thin wrapper that translates the Decision dataclass to Claude Code's JSON
+permission-decision protocol.
+"""
+from __future__ import annotations
+
+import os
+import sqlite3
+from dataclasses import dataclass
+
+from cognikernel.config import Config
+from cognikernel.storage import denied_reads as dr
+from cognikernel.storage import read_cache as rc
+from cognikernel.storage import symbol_files as sf
+from cognikernel.utils.paths import canonicalize_path
+
+# A 'fresh' row is only trusted if the file on disk hasn't changed since the scan.
+# This margin absorbs clock/mtime-resolution jitter between the write that set the
+# file's mtime and the scan that set refreshed_at, so a just-scanned file is never
+# spuriously judged stale. External edits we care about (git checkout, manual
+# edits, codegen) land seconds or more after the scan, well beyond this margin.
+_MTIME_STALE_MARGIN_MS = 1000
+
+
+# ── public types ─────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Decision:
+    """Outcome of the PreToolUse:Read decision tree.
+
+    `allow`           — Claude Code lets the Read proceed.
+    `deny`            — Claude Code blocks the Read; `message` is shown to Claude.
+    `outcome_hint`    — for ALLOW only; tells PostToolUse:Read what to record
+                        in read_session_cache ('ok' or 'body_needed_retry').
+                        None means PostToolUse decides on its own (legacy).
+    `reason`          — debug label for logs/tests; not shown to Claude.
+    """
+    action: str                       # 'allow' | 'deny'
+    message: str = ""
+    outcome_hint: str | None = None   # 'ok' | 'body_needed_retry' | None
+    reason: str = ""
+
+    @property
+    def is_deny(self) -> bool:
+        return self.action == "deny"
+
+
+# ── primary entrypoint ───────────────────────────────────────────────────────
+
+
+def decide_pretool_read(
+    conn: sqlite3.Connection,
+    project_id: str,
+    session_id: str,
+    file_path: str,
+    project_path: str,
+    *,
+    policy: str = "strict",
+    retry_window_ms: int = 60_000,
+    now_ms: int | None = None,
+) -> Decision:
+    """Run the C1 decision tree for a PreToolUse:Read.
+
+    Inputs are pre-validated; caller (the hook script) is responsible for
+    extracting them from the tool payload.
+
+    `file_path` may be absolute or relative — internally normalized to a
+    canonical relative-from-project path via cognikernel.utils.paths. When the
+    path cannot be canonicalized (outside project root, escape attempt, etc.),
+    we allow the read so the hook never blocks paths it doesn't own.
+    """
+    canonical = canonicalize_path(file_path, project_path)
+    if not canonical:
+        return Decision(action="allow", reason="path_outside_project")
+
+    # ── STEP 1 — re-read check (universal) ───────────────────────────────────
+    was_read, last_outcome = rc.was_read_in_session(conn, project_id, session_id, canonical)
+    if was_read:
+        if last_outcome == "body_needed_retry":
+            return Decision(
+                action="deny",
+                message=(
+                    f"[CogniKernel] {canonical} body was already provided in a previous "
+                    f"read this session — cite the existing content instead of re-reading."
+                ),
+                reason="rereread_after_body_retry",
+            )
+        # last_outcome == 'ok'
+        return Decision(
+            action="deny",
+            message=(
+                f"[CogniKernel] {canonical} was already read in this session — "
+                f"its content is in your context. Cite it directly rather than re-reading."
+            ),
+            reason="reread_same_session",
+        )
+
+    # ── advisory mode skips STEP 2 ───────────────────────────────────────────
+    if policy != "strict":
+        return Decision(action="allow", reason="advisory_policy")
+
+    # ── STEP 2 — skeleton-based gating (strict only) ─────────────────────────
+    file_row = sf.get(conn, project_id, canonical)
+
+    if file_row is None:
+        return Decision(action="allow", reason="not_in_symbol_files")
+
+    if file_row.freshness == "stale":
+        return Decision(action="allow", reason="symbol_files_stale")
+
+    if file_row.scan_status in ("parse_error", "ignored"):
+        return Decision(action="allow", reason=f"scan_status_{file_row.scan_status}")
+
+    if file_row.scan_status == "pending":
+        # Edge: file row exists but symbols haven't been scanned yet. Be permissive.
+        return Decision(action="allow", reason="scan_status_pending")
+
+    # scan_status == "scanned" past this point
+    if file_row.symbol_count == 0:
+        return Decision(action="allow", reason="no_public_symbols")
+
+    # Freshness verification — `freshness` is only a flag, and nothing flips it
+    # back to 'stale' for edits made outside the Write/Edit hook (git checkout,
+    # external editor, codegen). Verify it against the file's mtime so a 'fresh'
+    # row that no longer matches disk is recorded stale and the read is allowed,
+    # rather than denying with signatures the skeleton can no longer vouch for.
+    if _changed_since_scan(project_path, canonical, file_row.refreshed_at):
+        sf.mark_stale(conn, project_id, canonical)
+        return Decision(action="allow", reason="symbol_files_mtime_stale")
+
+    # Case A — fresh, scanned, has symbols. Apply 60s retry escape hatch.
+    if dr.was_denied_within(
+        conn, project_id, session_id, canonical,
+        window_ms=retry_window_ms,
+        now_ms=now_ms,
+    ):
+        # Second-attempt allowance. Clear the denial so a future Edit-cycle
+        # starts a clean denial timer.
+        dr.clear(conn, project_id, session_id, canonical)
+        return Decision(
+            action="allow",
+            outcome_hint="body_needed_retry",
+            reason="body_needed_retry_within_window",
+        )
+
+    # First denial — record it and tell Claude what's available.
+    dr.record(conn, project_id, session_id, canonical, reason="skeleton_fresh", now_ms=now_ms)
+    return Decision(
+        action="deny",
+        message=(
+            f"[CogniKernel] {canonical} signatures are listed in the §Codebase skeleton "
+            f"section of your session context. Use them. If the block's skeleton omits "
+            f"this file or lacks detail, call the `skeleton` MCP tool with this path for "
+            f"the full signatures. If you genuinely need the function body (e.g., to "
+            f"replace an implementation), retry this Read once within 60 seconds and it "
+            f"will be allowed."
+        ),
+        reason="skeleton_fresh_first_denial",
+    )
+
+
+# ── freshness verification ───────────────────────────────────────────────────
+
+
+def _changed_since_scan(project_path: str, canonical: str, refreshed_at_ms: int) -> bool:
+    """True if the file's mtime is newer than the last scan (beyond jitter margin).
+
+    Pure `os.stat` — no file read, so it costs nothing in tokens and the cache
+    benefit of a deny is preserved. If the file can't be stat'd (deleted /
+    unreadable), return False so we fall back to the stored flag rather than
+    flip-flopping the decision on a transient error.
+    """
+    # No real scan timestamp (sentinel/unset) → can't compare; trust the flag.
+    if refreshed_at_ms <= 0:
+        return False
+    try:
+        mtime_ms = int(os.stat(os.path.join(project_path, canonical)).st_mtime * 1000)
+    except OSError:
+        return False
+    return mtime_ms > refreshed_at_ms + _MTIME_STALE_MARGIN_MS
+
+
+# ── post-tool outcome resolution ─────────────────────────────────────────────
+
+
+def resolve_post_read_outcome(
+    conn: sqlite3.Connection,
+    project_id: str,
+    session_id: str,
+    canonical_path: str,
+    *,
+    retry_window_ms: int = 60_000,
+    now_ms: int | None = None,
+) -> str:
+    """Determine what outcome to record in read_session_cache after a successful Read.
+
+    PostToolUse:Read fires only on success (per Anthropic docs verified during C0).
+    Because PreToolUse may have allowed the read as a body_needed_retry, we need
+    to detect that situation here. We DO NOT clear denied_reads here — that's
+    PreToolUse's responsibility when it consumes the retry allowance.
+
+    Logic:
+      If the read just succeeded but `denied_reads` still has a recent row,
+      that means PreToolUse denied the FIRST attempt but allowed the SECOND;
+      record as 'body_needed_retry'. Otherwise record as 'ok'.
+
+    In the current PreToolUse implementation, the row is cleared inside
+    decide_pretool_read() the moment the retry is granted, so by the time
+    PostToolUse runs, the row is already gone. We keep this query as
+    defense-in-depth in case the clear ever races.
+    """
+    if dr.was_denied_within(
+        conn, project_id, session_id, canonical_path,
+        window_ms=retry_window_ms,
+        now_ms=now_ms,
+    ):
+        return "body_needed_retry"
+    return "ok"
+
+
+# ── legacy CLI shim ──────────────────────────────────────────────────────────
+
+
+_LEGACY_ALLOW_STATUSES = frozenset({"modified", "in_flux", "added", "deleted"})
+
+
+def lookup_file(
+    project_path: str,
+    file_path: str,
+    config: Config | None = None,
+) -> tuple[int, str]:
+    """Legacy CLI subcommand entrypoint — kept for `cognikernel lookup` debugging.
+
+    The PreToolUse hook no longer routes through this function (it imports
+    decide_pretool_read directly to avoid subprocess overhead). This shim
+    exists so `python -m cognikernel lookup <project> <file>` continues to work
+    as an admin/debugging utility. It runs the C1 strict-mode tree with a
+    synthetic session_id ("__cli__") so re-read protection never fires.
+    """
+    from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
+
+    # Project-aware load (H2): the debug shim must evaluate the same policy and
+    # DB the live PreToolUse hook does, or its verdict is misleading.
+    config = config or Config.load(project_path=project_path)
+    project_id = resolve_project_id(project_path, config)
+    db_path = get_db_path(config, project_id)
+
+    if not db_path.exists():
+        return 1, ""
+
+    with get_connection(db_path) as conn:
+        decision = decide_pretool_read(
+            conn,
+            project_id=project_id,
+            session_id="__cli__",
+            file_path=file_path,
+            project_path=project_path,
+            policy=config.hook_policy,
+        )
+
+    if decision.is_deny:
+        return 0, decision.message
+    return 1, ""

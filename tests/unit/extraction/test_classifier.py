@@ -1,11 +1,11 @@
 """Tests for constraint classification heuristics."""
 import pytest
-from memlora.extraction.classifier import (
+from cognikernel.extraction.classifier import (
     classify_constraint,
     classify_event,
     HARD_THRESHOLD,
 )
-from memlora.storage.events import Event
+from cognikernel.storage.events import Event
 
 
 def _make_constraint_event(
@@ -124,7 +124,7 @@ class TestClassifyEvent:
 
     def test_hard_override_marker_forces_hard(self) -> None:
         event = _make_constraint_event(
-            description="You might want to avoid Redis here. <!-- memlora:hard -->",
+            description="You might want to avoid Redis here. <!-- cognikernel:hard -->",
             confidence=0.3,
         )
         result = classify_event(event)
@@ -133,7 +133,7 @@ class TestClassifyEvent:
     def test_soft_override_marker_forces_soft(self) -> None:
         event = _make_constraint_event(
             event_type="CONSTRAINT_HARD",
-            description="We cannot use Redis. <!-- memlora:soft -->",
+            description="We cannot use Redis. <!-- cognikernel:soft -->",
             confidence=1.0,
         )
         result = classify_event(event)

@@ -20,7 +20,7 @@ Thresholds (--check mode, override with --max-latency / --max-amp):
                        regressions back toward the old O(n^2) behavior.
 
 Usage:
-    python scripts/eval_ingest_cost.py --db ~/.memlora/projects/<id>.db
+    python scripts/eval_ingest_cost.py --db ~/.cognikernel/projects/<id>.db
     python scripts/eval_ingest_cost.py --db <db> --check
     python scripts/eval_ingest_cost.py --db <db> --max-latency 30 --max-amp 1.5
 """

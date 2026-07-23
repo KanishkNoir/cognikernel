@@ -1,13 +1,13 @@
 """Tests for git diff augmentation and cross-referencing."""
 import pytest
-from memlora.extraction.git_augment import (
+from cognikernel.extraction.git_augment import (
     FileChange,
     cross_reference_signals,
     extract_git_events,
     infer_intent_from_path,
     parse_diff,
 )
-from memlora.storage.events import Event
+from cognikernel.storage.events import Event
 
 _SAMPLE_DIFF = """\
 M\tsrc/auth/middleware.py

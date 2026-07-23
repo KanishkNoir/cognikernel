@@ -31,11 +31,11 @@ from dataclasses import dataclass
 
 import pytest
 
-from memlora.delta import supersede
-from memlora.delta.supersede import find_superseded
-from memlora.embedding.model import is_available
-from memlora.storage.events import Event
-from memlora.storage.migrations import run_migrations
+from cognikernel.delta import supersede
+from cognikernel.delta.supersede import find_superseded
+from cognikernel.embedding.model import is_available
+from cognikernel.storage.events import Event
+from cognikernel.storage.migrations import run_migrations
 
 PRECISION_TARGET = 0.9  # a false supersession deletes a valid decision — bias here.
 
@@ -122,9 +122,9 @@ def _seed_case(conn: sqlite3.Connection, case: Case) -> tuple[Event, int]:
     conn.commit()
 
     if is_available():
-        from memlora.embedding.input import embedding_input
-        from memlora.embedding.model import EMBEDDING_MODEL_VERSION, embed_text
-        from memlora.embedding.store import upsert_embedding
+        from cognikernel.embedding.input import embedding_input
+        from cognikernel.embedding.model import EMBEDDING_MODEL_VERSION, embed_text
+        from cognikernel.embedding.store import upsert_embedding
         vec = embed_text(embedding_input(old_payload, case.event_type))
         if vec is not None:
             upsert_embedding(conn, old_id, vec, EMBEDDING_MODEL_VERSION)
@@ -177,7 +177,7 @@ def evaluate(threshold: float) -> dict:
 
 @pytest.mark.skipif(not is_available(), reason="embedding model not installed")
 def test_precision_at_current_threshold() -> None:
-    from memlora.delta.supersede import SUPERSESSION_COSINE_THRESHOLD
+    from cognikernel.delta.supersede import SUPERSESSION_COSINE_THRESHOLD
     m = evaluate(SUPERSESSION_COSINE_THRESHOLD)
     assert m["precision"] >= PRECISION_TARGET, (
         f"precision {m['precision']:.2f} < {PRECISION_TARGET} at threshold "
@@ -216,7 +216,7 @@ def _sweep() -> None:
         print(f"{t:>7.2f} {m['precision']:>6.2f} {m['recall']:>7.2f} "
               f"{m['tp']:>3} {m['fp']:>3} {m['tn']:>3} {m['fn']:>3}")
     print("\nDetail at the shipped threshold:")
-    from memlora.delta.supersede import SUPERSESSION_COSINE_THRESHOLD
+    from cognikernel.delta.supersede import SUPERSESSION_COSINE_THRESHOLD
     m = evaluate(SUPERSESSION_COSINE_THRESHOLD)
     print(f"  threshold={SUPERSESSION_COSINE_THRESHOLD}  precision={m['precision']:.2f}  recall={m['recall']:.2f}")
     for fp in m["false_positives"]:

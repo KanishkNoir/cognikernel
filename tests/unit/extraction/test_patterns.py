@@ -1,4 +1,4 @@
-"""Tests for memlora.extraction.patterns — Phase A-3 pattern engine.
+"""Tests for cognikernel.extraction.patterns — Phase A-3 pattern engine.
 
 Locks the precision guards from the v2 plan:
   USE_X       : starts with "use" / "we'll use" / "let's use", role any
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from memlora.extraction.patterns import scan_patterns
-from memlora.extraction.tokenize import Sentence
+from cognikernel.extraction.patterns import scan_patterns
+from cognikernel.extraction.tokenize import Sentence
 
 
 def _sent(
@@ -212,7 +212,7 @@ class TestStopwordSubjects:
 class TestPipelineIntegration:
     def test_patterns_appear_in_extract_session_output(self) -> None:
         """Confirms scan_patterns is wired into extract_session."""
-        from memlora.extraction.pipeline import SessionMetadata, extract_session
+        from cognikernel.extraction.pipeline import SessionMetadata, extract_session
 
         transcript = (
             "User:\nNo Material UI, no Chakra. Use shadcn/ui instead.\n\n"

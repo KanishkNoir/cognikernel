@@ -19,14 +19,14 @@ from pathlib import Path
 
 import pytest
 
-from memlora.integration.lookup import (
+from cognikernel.integration.lookup import (
     Decision,
     decide_pretool_read,
     resolve_post_read_outcome,
 )
-from memlora.storage import denied_reads as dr
-from memlora.storage import read_cache as rc
-from memlora.storage import symbol_files as sf
+from cognikernel.storage import denied_reads as dr
+from cognikernel.storage import read_cache as rc
+from cognikernel.storage import symbol_files as sf
 
 
 # Helpers ----------------------------------------------------------------------

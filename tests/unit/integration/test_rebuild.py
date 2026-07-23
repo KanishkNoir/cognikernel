@@ -1,14 +1,14 @@
-"""Tests for memlora.integration.session.rebuild_from_raw (sidecar mode)."""
+"""Tests for cognikernel.integration.session.rebuild_from_raw (sidecar mode)."""
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.session import rebuild_from_raw, session_end
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
-from memlora.storage.migrations import run_migrations
+from cognikernel.config import Config
+from cognikernel.integration.session import rebuild_from_raw, session_end
+from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.storage.migrations import run_migrations
 
 
 TRANSCRIPT_A = (
@@ -25,7 +25,7 @@ TRANSCRIPT_B = (
 
 @pytest.fixture
 def cfg(tmp_path: Path) -> Config:
-    return Config(memlora_dir=tmp_path / "memlora")
+    return Config(cognikernel_dir=tmp_path / "cognikernel")
 
 
 @pytest.fixture

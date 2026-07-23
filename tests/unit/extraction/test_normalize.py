@@ -1,9 +1,9 @@
-"""Tests for memlora.extraction.normalize — Phase A-1 + A-2."""
+"""Tests for cognikernel.extraction.normalize — Phase A-1 + A-2."""
 from __future__ import annotations
 
 import pytest
 
-from memlora.extraction.normalize import normalize_description, smart_truncate
+from cognikernel.extraction.normalize import normalize_description, smart_truncate
 
 
 # ── A-1: normalize_description ───────────────────────────────────────────────

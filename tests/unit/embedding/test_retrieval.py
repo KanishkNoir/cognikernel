@@ -6,10 +6,10 @@ import sqlite3
 
 import pytest
 
-from memlora.embedding.backfill import backfill_embeddings
-from memlora.embedding.model import is_available
-from memlora.embedding.retrieval import find_related, recall
-from memlora.storage.migrations import run_migrations
+from cognikernel.embedding.backfill import backfill_embeddings
+from cognikernel.embedding.model import is_available
+from cognikernel.embedding.retrieval import find_related, recall
+from cognikernel.storage.migrations import run_migrations
 
 pytestmark = pytest.mark.skipif(not is_available(), reason="embedding model not installed")
 

@@ -1,4 +1,4 @@
-"""E2E subprocess test for memlora_session_start_hook.py.
+"""E2E subprocess test for cognikernel_session_start_hook.py.
 
 Spawns the hook script as a real subprocess (just as Claude Code would),
 passes a compact payload on stdin, and asserts the correct JSON output
@@ -14,12 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.session import init_project
+from cognikernel.config import Config
+from cognikernel.integration.session import init_project
 
 
 HOOK_SCRIPT = (
-    Path(__file__).parent.parent.parent / "scripts" / "memlora_session_start_hook.py"
+    Path(__file__).parent.parent.parent / "scripts" / "cognikernel_session_start_hook.py"
 )
 
 
@@ -39,15 +39,15 @@ class TestSessionStartHookSubprocess:
     def test_compact_event_returns_json_with_additional_context(
         self, tmp_path: Path
     ) -> None:
-        memlora_dir = tmp_path / "memlora"
+        cognikernel_dir = tmp_path / "cognikernel"
         project_path = tmp_path / "myproject"
         project_path.mkdir()
 
-        cfg = Config(memlora_dir=memlora_dir)
+        cfg = Config(cognikernel_dir=cognikernel_dir)
         init_project(project_path, config=cfg)
 
         payload = {"source": "compact", "cwd": str(project_path)}
-        result = _run_hook(payload, env_overrides={"MEMLORA_DIR": str(memlora_dir)})
+        result = _run_hook(payload, env_overrides={"COGNIKERNEL_DIR": str(cognikernel_dir)})
 
         assert result.returncode == 0
         assert result.stdout.strip(), "Hook printed nothing to stdout"
@@ -59,15 +59,15 @@ class TestSessionStartHookSubprocess:
         assert "auto-generated" in hook_out["additionalContext"]
 
     def test_clear_event_also_triggers_reinject(self, tmp_path: Path) -> None:
-        memlora_dir = tmp_path / "memlora"
+        cognikernel_dir = tmp_path / "cognikernel"
         project_path = tmp_path / "proj2"
         project_path.mkdir()
 
-        cfg = Config(memlora_dir=memlora_dir)
+        cfg = Config(cognikernel_dir=cognikernel_dir)
         init_project(project_path, config=cfg)
 
         payload = {"source": "clear", "cwd": str(project_path)}
-        result = _run_hook(payload, env_overrides={"MEMLORA_DIR": str(memlora_dir)})
+        result = _run_hook(payload, env_overrides={"COGNIKERNEL_DIR": str(cognikernel_dir)})
 
         assert result.returncode == 0
         data = json.loads(result.stdout)
@@ -75,15 +75,15 @@ class TestSessionStartHookSubprocess:
 
     def test_startup_source_injects_context(self, tmp_path: Path) -> None:
         # startup now injects just like compact/clear — hook fires on all sources
-        memlora_dir = tmp_path / "memlora"
+        cognikernel_dir = tmp_path / "cognikernel"
         project_path = tmp_path / "proj3"
         project_path.mkdir()
 
-        cfg = Config(memlora_dir=memlora_dir)
+        cfg = Config(cognikernel_dir=cognikernel_dir)
         init_project(project_path, config=cfg)
 
         payload = {"source": "startup", "cwd": str(project_path)}
-        result = _run_hook(payload, env_overrides={"MEMLORA_DIR": str(memlora_dir)})
+        result = _run_hook(payload, env_overrides={"COGNIKERNEL_DIR": str(cognikernel_dir)})
 
         assert result.returncode == 0
         data = json.loads(result.stdout)
@@ -101,13 +101,13 @@ class TestSessionStartHookSubprocess:
         assert result.stdout.strip() == ""
 
     def test_uninitialised_project_produces_no_output(self, tmp_path: Path) -> None:
-        memlora_dir = tmp_path / "memlora"
-        # Project path exists on disk but was never memlora-initialised
+        cognikernel_dir = tmp_path / "cognikernel"
+        # Project path exists on disk but was never cognikernel-initialised
         project_path = tmp_path / "ghost_proj"
         project_path.mkdir()
 
         payload = {"source": "compact", "cwd": str(project_path)}
-        result = _run_hook(payload, env_overrides={"MEMLORA_DIR": str(memlora_dir)})
+        result = _run_hook(payload, env_overrides={"COGNIKERNEL_DIR": str(cognikernel_dir)})
 
         assert result.returncode == 0
         assert result.stdout.strip() == ""
@@ -133,15 +133,15 @@ class TestSessionStartHookSubprocess:
         assert result.returncode == 0
 
     def test_additional_context_contains_project_name(self, tmp_path: Path) -> None:
-        memlora_dir = tmp_path / "memlora"
+        cognikernel_dir = tmp_path / "cognikernel"
         project_path = tmp_path / "wonderproject"
         project_path.mkdir()
 
-        cfg = Config(memlora_dir=memlora_dir)
+        cfg = Config(cognikernel_dir=cognikernel_dir)
         init_project(project_path, config=cfg)
 
         payload = {"source": "compact", "cwd": str(project_path)}
-        result = _run_hook(payload, env_overrides={"MEMLORA_DIR": str(memlora_dir)})
+        result = _run_hook(payload, env_overrides={"COGNIKERNEL_DIR": str(cognikernel_dir)})
 
         assert result.returncode == 0
         data = json.loads(result.stdout)

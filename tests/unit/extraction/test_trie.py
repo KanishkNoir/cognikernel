@@ -1,6 +1,6 @@
 """Tests for the Aho-Corasick trie scanner."""
-from memlora.extraction.tokenize import tokenize
-from memlora.extraction.trie import TrieScanner, TrieMatch, get_scanner, _word_boundary
+from cognikernel.extraction.tokenize import tokenize
+from cognikernel.extraction.trie import TrieScanner, TrieMatch, get_scanner, _word_boundary
 
 
 class TestSignalDetection:

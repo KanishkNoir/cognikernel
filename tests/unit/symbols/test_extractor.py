@@ -1,6 +1,6 @@
 """Unit tests for the Python AST symbol extractor."""
 import pytest
-from memlora.symbols.extractor import (
+from cognikernel.symbols.extractor import (
     PythonASTExtractor,
     SymbolNode,
     SymbolEdge,

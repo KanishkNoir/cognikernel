@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from memlora.storage.symbol_files import (
+from cognikernel.storage.symbol_files import (
     CoverageStats,
     SymbolFile,
     coverage_stats,

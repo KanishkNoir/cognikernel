@@ -4,8 +4,8 @@ import sqlite3
 
 import pytest
 
-from memlora.storage.evidence import store_evidence
-from memlora.storage.jobs import (
+from cognikernel.storage.evidence import store_evidence
+from cognikernel.storage.jobs import (
     TERMINAL_STATES,
     ack_stage,
     claim_next_job,

@@ -1,7 +1,7 @@
 """Tests for description and rationale sanitization."""
 import pytest
 
-from memlora.extraction.sanitize import (
+from cognikernel.extraction.sanitize import (
     is_question_description,
     sanitize_description,
     sanitize_rationale,
@@ -121,7 +121,7 @@ class TestIsQuestionDescription:
 
 # ── J5 data contracts ─────────────────────────────────────────────────────────
 
-from memlora.extraction.sanitize import is_context_dependent_fragment
+from cognikernel.extraction.sanitize import is_context_dependent_fragment
 
 
 class TestJ5Sanitation:

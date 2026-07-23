@@ -16,19 +16,19 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Make the source tree importable as `memlora.*`
+# Make the source tree importable as `cognikernel.*`
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from memlora.config import Config
-from memlora.extraction.authority import (
+from cognikernel.config import Config
+from cognikernel.extraction.authority import (
     ASSISTANT_DECIDED,
     USER_STATED,
 )
-from memlora.extraction.hashing import compute_content_hash
-from memlora.integration.session import init_project, render_state
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
-from memlora.storage.events import Event, insert_event
+from cognikernel.extraction.hashing import compute_content_hash
+from cognikernel.integration.session import init_project, render_state
+from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.storage.events import Event, insert_event
 
 
 def _seed(conn: sqlite3.Connection, project_id: str, session_id: str) -> None:
@@ -103,14 +103,14 @@ def _seed(conn: sqlite3.Connection, project_id: str, session_id: str) -> None:
 def main() -> int:
     tmp_root = Path(tempfile.mkdtemp(prefix="tier1_smoke_"))
     try:
-        memlora_dir = tmp_root / "memlora_data"
-        os.environ["MEMLORA_DIR"] = str(memlora_dir)
+        cognikernel_dir = tmp_root / "cognikernel_data"
+        os.environ["COGNIKERNEL_DIR"] = str(cognikernel_dir)
 
         project_path = tmp_root / "synthetic_project"
         project_path.mkdir()
         # Fix 1 reproducer: per-project strict-mode overlay.
-        (project_path / ".memlora").mkdir()
-        (project_path / ".memlora" / "config.toml").write_text(
+        (project_path / ".cognikernel").mkdir()
+        (project_path / ".cognikernel" / "config.toml").write_text(
             'hook_policy = "strict"\n', encoding="utf-8"
         )
 

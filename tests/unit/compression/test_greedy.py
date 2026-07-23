@@ -1,12 +1,12 @@
 """Tests for greedy knapsack fill and field-level compression."""
 import pytest
-from memlora.compression.greedy import (
+from cognikernel.compression.greedy import (
     _MANDATORY_TOKEN_LIMIT,
     _MANDATORY_TYPES,
     greedy_fill,
 )
-from memlora.compression.token_count import estimate_tokens
-from memlora.storage.events import Event
+from cognikernel.compression.token_count import estimate_tokens
+from cognikernel.storage.events import Event
 
 
 def _make_event(
@@ -102,7 +102,7 @@ class TestGreedyFill:
         assert "APPROACH_ABANDONED_DO_NOT_RETRY" in _MANDATORY_TYPES
 
     def test_mandatory_authorities_constant(self) -> None:
-        from memlora.compression.greedy import _MANDATORY_AUTHORITIES
+        from cognikernel.compression.greedy import _MANDATORY_AUTHORITIES
         assert "user_stated" in _MANDATORY_AUTHORITIES
 
     def test_user_stated_thread_survives_over_assistant_musing(self) -> None:

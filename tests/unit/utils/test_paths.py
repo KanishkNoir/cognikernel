@@ -1,11 +1,11 @@
-"""Tests for memlora.utils.paths — canonical path normalization (Stage C2)."""
+"""Tests for cognikernel.utils.paths — canonical path normalization (Stage C2)."""
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from memlora.utils.paths import canonicalize_path, is_bare_basename
+from cognikernel.utils.paths import canonicalize_path, is_bare_basename
 
 
 # ── empty inputs ─────────────────────────────────────────────────────────────

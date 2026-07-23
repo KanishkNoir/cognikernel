@@ -1,4 +1,4 @@
-"""Tests for memlora.integration.session._compute_hot_files.
+"""Tests for cognikernel.integration.session._compute_hot_files.
 
 The function aggregates COMPONENT_STATUS events into the `### Most active
 files` injection section. It must defensively reject bare-basename rows so
@@ -7,8 +7,8 @@ injection.
 """
 from __future__ import annotations
 
-from memlora.integration.session import _compute_hot_files
-from memlora.storage.events import Event
+from cognikernel.integration.session import _compute_hot_files
+from cognikernel.storage.events import Event
 
 
 def _component(path: str, mentions: int = 2, intent: str = "") -> Event:

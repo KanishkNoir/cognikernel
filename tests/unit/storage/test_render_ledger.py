@@ -5,8 +5,8 @@ import sqlite3
 
 import pytest
 
-from memlora.storage.migrations import run_migrations
-from memlora.storage.render_ledger import record_rendered, rendered_event_ids
+from cognikernel.storage.migrations import run_migrations
+from cognikernel.storage.render_ledger import record_rendered, rendered_event_ids
 
 PID = "a" * 16
 
@@ -59,9 +59,9 @@ def test_missing_table_fails_open() -> None:
 
 def test_render_ex_reports_survivors() -> None:
     """The _ex variant returns the post-enforcement event set (ledger source)."""
-    from memlora.injection.ordering import make_injection_context
-    from memlora.injection.template import render_with_budget_enforcement_ex
-    from memlora.storage.events import Event
+    from cognikernel.injection.ordering import make_injection_context
+    from cognikernel.injection.template import render_with_budget_enforcement_ex
+    from cognikernel.storage.events import Event
 
     events = [
         Event(project_id=PID, session_id="s", event_type="CONSTRAINT_HARD",

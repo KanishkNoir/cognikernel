@@ -4,8 +4,8 @@ Uses the shared `conn` fixture from conftest.py (real migrated DB) so the full
 schema including symbol_files (added in C0 migration 008) is available.
 """
 import pytest
-from memlora.symbols.extractor import SymbolNode, SymbolEdge, SymbolUpdate
-from memlora.symbols.store import apply_symbol_update, load_symbol_nodes, load_symbol_edges
+from cognikernel.symbols.extractor import SymbolNode, SymbolEdge, SymbolUpdate
+from cognikernel.symbols.store import apply_symbol_update, load_symbol_nodes, load_symbol_edges
 
 
 def _node(path: str, name: str, pid: str = "p1") -> SymbolNode:

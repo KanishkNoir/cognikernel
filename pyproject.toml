@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "memlora-edge"
+name = "cognikernel"
 version = "0.1.0"
 description = "CogniKernel — persistent, structured project memory for Claude Code and Codex"
 readme = "README.md"
@@ -44,10 +44,10 @@ Issues = "https://github.com/KanishkNoir/cognikernel/issues"
 Changelog = "https://github.com/KanishkNoir/cognikernel/releases"
 
 [project.scripts]
-memlora = "memlora.integration.cli:main"
+cognikernel = "cognikernel.integration.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/memlora"]
+packages = ["src/cognikernel"]
 
 [dependency-groups]
 dev = [
@@ -61,7 +61,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 
 [tool.importlinter]
-root_packages = ["memlora"]
+root_packages = ["cognikernel"]
 
 # Main pipeline: each layer may only import from layers below it.
 [[tool.importlinter.contracts]]
@@ -69,47 +69,47 @@ name = "Main pipeline layers"
 type = "layers"
 # storage sits ABOVE compression: storage.projections ranks events using
 # compression's centrality/weight math, and compression imports nothing from
-# storage (the domain model Event lives in memlora.model, below both). The
+# storage (the domain model Event lives in cognikernel.model, below both). The
 # previous order (compression above storage) was aspirational and mis-declared —
 # it was never enforced because the import-linter run aborted on a typo'd
 # contract (see the removed observability note below).
 layers = [
-    "memlora.integration",
-    "memlora.injection",
-    "memlora.storage",
-    "memlora.compression",
+    "cognikernel.integration",
+    "cognikernel.injection",
+    "cognikernel.storage",
+    "cognikernel.compression",
 ]
 
 # Extraction feeds storage only — must not reach forward into the pipeline.
 [[tool.importlinter.contracts]]
 name = "Extraction forbidden upstream imports"
 type = "forbidden"
-source_modules = ["memlora.extraction"]
+source_modules = ["cognikernel.extraction"]
 forbidden_modules = [
-    "memlora.injection",
-    "memlora.compression",
-    "memlora.integration",
-    "memlora.delta",
+    "cognikernel.injection",
+    "cognikernel.compression",
+    "cognikernel.integration",
+    "cognikernel.delta",
 ]
 
 # Delta merge feeds storage only — must not reach forward or sideways.
 [[tool.importlinter.contracts]]
 name = "Delta forbidden upstream imports"
 type = "forbidden"
-source_modules = ["memlora.delta"]
+source_modules = ["cognikernel.delta"]
 forbidden_modules = [
-    "memlora.injection",
-    "memlora.compression",
-    "memlora.integration",
-    "memlora.extraction",
+    "cognikernel.injection",
+    "cognikernel.compression",
+    "cognikernel.integration",
+    "cognikernel.extraction",
 ]
 
 # NOTE (audit P2): there used to be an "Observability does not import stage
-# modules" contract whose source_modules pointed at "memlora.observability" — a
+# modules" contract whose source_modules pointed at "cognikernel.observability" — a
 # module that never existed. import-linter aborts the ENTIRE run when a contract
 # names a missing module ("Module '...' does not exist."), so this typo silently
 # disabled enforcement of every contract above. It was removed rather than
-# retargeted: the real observer module is memlora.telemetry, and its purpose
+# retargeted: the real observer module is cognikernel.telemetry, and its purpose
 # (render_cost.render_cost_report) is to invoke integration.session.render_state
 # and measure the rendered block — telemetry legitimately depends on the
 # integration + injection stages it observes, so a "telemetry imports no stage

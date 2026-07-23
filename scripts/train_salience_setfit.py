@@ -15,7 +15,7 @@ Eval:     the SAME fixed original-distribution held-out as scripts/_b1_twin_ab.p
 
 Outputs:
   models/salience_setfit/                    the fine-tuned SetFit model (body + head)
-  src/memlora/extraction/heads/salience_v2.npz   the head as a (385, C) W matrix,
+  src/cognikernel/extraction/heads/salience_v2.npz   the head as a (385, C) W matrix,
           column order == salience.LABELS, for the existing numpy inference path.
           (Runtime body-ONNX export + re-embed wiring is WS-D2.)
 
@@ -38,7 +38,7 @@ sys.path.insert(0, str(_ROOT / "src"))
 FIX = _ROOT / "tests" / "fixtures"
 _BASE = "BAAI/bge-small-en-v1.5"
 _MODEL_DIR = _ROOT / "models" / "salience_setfit"
-_HEAD_OUT = _ROOT / "src" / "memlora" / "extraction" / "heads" / "salience_v2.npz"
+_HEAD_OUT = _ROOT / "src" / "cognikernel" / "extraction" / "heads" / "salience_v2.npz"
 
 LABELS = ("NOISE", "DECISION", "CONSTRAINT_HARD", "CONSTRAINT_SOFT",
           "APPROACH_ABANDONED_DO_NOT_RETRY", "THREAD")

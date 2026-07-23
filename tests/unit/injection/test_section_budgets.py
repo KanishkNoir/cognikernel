@@ -1,6 +1,6 @@
 """Tests for per-section budget enforcement in the injection template."""
-from memlora.config import SectionBudgets
-from memlora.injection.template import (
+from cognikernel.config import SectionBudgets
+from cognikernel.injection.template import (
     InjectionContext,
     _enforce_section_budget,
     _render_decisions,
@@ -8,7 +8,7 @@ from memlora.injection.template import (
     count_tokens_accurate,
     render_injection,
 )
-from memlora.storage.events import Event
+from cognikernel.storage.events import Event
 
 
 def _event(

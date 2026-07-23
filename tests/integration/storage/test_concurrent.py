@@ -7,9 +7,9 @@ import threading
 import time
 from pathlib import Path
 
-from memlora.storage.connection import get_connection
-from memlora.storage.events import Event, insert_event, get_events_for_projection
-from memlora.storage.migrations import run_migrations
+from cognikernel.storage.connection import get_connection
+from cognikernel.storage.events import Event, insert_event, get_events_for_projection
+from cognikernel.storage.migrations import run_migrations
 
 
 def _make_db(tmp_path: Path, name: str = "concurrent.db") -> Path:

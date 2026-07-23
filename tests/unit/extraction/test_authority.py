@@ -1,9 +1,9 @@
-"""Tests for memlora.extraction.authority — A-4 helper module."""
+"""Tests for cognikernel.extraction.authority — A-4 helper module."""
 from __future__ import annotations
 
 import pytest
 
-from memlora.extraction.authority import (
+from cognikernel.extraction.authority import (
     ASSISTANT_ANSWER_TO_QUESTION,
     ASSISTANT_DECIDED,
     CONFIRMING_AUTHORITIES,

@@ -1,18 +1,18 @@
-"""Tests for memlora.integration.session_start — SessionStart hook logic."""
+"""Tests for cognikernel.integration.session_start — SessionStart hook logic."""
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from memlora.config import Config
-from memlora.integration.session import init_project
-from memlora.integration.session_start import handle_compact_event, handle_session_start
+from cognikernel.config import Config
+from cognikernel.integration.session import init_project
+from cognikernel.integration.session_start import handle_compact_event, handle_session_start
 
 
 @pytest.fixture
 def cfg(tmp_path: Path) -> Config:
-    return Config(memlora_dir=tmp_path / "memlora")
+    return Config(cognikernel_dir=tmp_path / "cognikernel")
 
 
 @pytest.fixture
@@ -64,21 +64,21 @@ class TestHandleCompactEvent:
 
 class TestProjectOverlayPickup:
     """Regression: session_start must load Config with project_path so the
-    per-project `.memlora/config.toml` overlay (e.g. hook_policy="strict")
+    per-project `.cognikernel/config.toml` overlay (e.g. hook_policy="strict")
     flows into the rendered injection. The original bug was a no-arg
     `Config.load()` call that silently dropped strict-mode rendering."""
 
     def test_strict_overlay_renders_tool_policy_section(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        memlora_dir = tmp_path / "memlora_data"
-        monkeypatch.setenv("MEMLORA_DIR", str(memlora_dir))
+        cognikernel_dir = tmp_path / "cognikernel_data"
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(cognikernel_dir))
 
         project_path = tmp_path / "myproject"
         project_path.mkdir()
         # Per-project overlay: enable strict mode for this project only.
-        (project_path / ".memlora").mkdir()
-        (project_path / ".memlora" / "config.toml").write_text(
+        (project_path / ".cognikernel").mkdir()
+        (project_path / ".cognikernel" / "config.toml").write_text(
             'hook_policy = "strict"\n', encoding="utf-8"
         )
 
@@ -97,12 +97,12 @@ class TestProjectOverlayPickup:
     ) -> None:
         """Counter-test: with no overlay, default is 'advisory' and the Tool
         Policy section is correctly absent."""
-        memlora_dir = tmp_path / "memlora_data"
-        monkeypatch.setenv("MEMLORA_DIR", str(memlora_dir))
+        cognikernel_dir = tmp_path / "cognikernel_data"
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(cognikernel_dir))
 
         project_path = tmp_path / "myproject"
         project_path.mkdir()
-        # No .memlora/config.toml — should default to advisory mode.
+        # No .cognikernel/config.toml — should default to advisory mode.
         init_project(project_path)
 
         result = handle_session_start(str(project_path))

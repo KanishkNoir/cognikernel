@@ -1,5 +1,5 @@
 """Tests for the sentence tokenizer."""
-from memlora.extraction.tokenize import tokenize, Sentence
+from cognikernel.extraction.tokenize import tokenize, Sentence
 
 
 class TestCodeBlocks:
@@ -153,7 +153,7 @@ class TestLabelValueLines:
     threshold all merged into one blob and died in the salience head)."""
 
     def test_consecutive_label_lines_stay_separate(self):
-        from memlora.extraction.tokenize import tokenize
+        from cognikernel.extraction.tokenize import tokenize
         text = ("Assistant:\n"
                 "Open threshold: 3 consecutive connection errors\n"
                 "Recovery window: 30 s (configurable per provider)\n"
@@ -166,7 +166,7 @@ class TestLabelValueLines:
         assert not any("Open threshold" in s and "Recovery window" in s for s in sents)
 
     def test_label_line_with_trailing_sentence_splits(self):
-        from memlora.extraction.tokenize import tokenize
+        from cognikernel.extraction.tokenize import tokenize
         text = ("Assistant:\n"
                 "Max attempts: 2 (one failover). Do not retry the same deployment.\n")
         sents = [s.text for s in tokenize(text)]
@@ -174,7 +174,7 @@ class TestLabelValueLines:
         assert any(s.startswith("Do not retry") for s in sents)
 
     def test_normal_prose_with_midline_colon_not_split(self):
-        from memlora.extraction.tokenize import tokenize
+        from cognikernel.extraction.tokenize import tokenize
         text = ("Assistant:\n"
                 "We considered the following options: rotate keys or shard the pool,\n"
                 "and decided the latter is simpler to operate.\n")

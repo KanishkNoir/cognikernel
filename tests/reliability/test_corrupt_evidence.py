@@ -8,9 +8,9 @@ leave the events table corrupt or half-written.
 """
 from __future__ import annotations
 
-from memlora.storage.connection import get_connection
-from memlora.storage.evidence import store_evidence
-from memlora.storage.jobs import enqueue_extraction
+from cognikernel.storage.connection import get_connection
+from cognikernel.storage.evidence import store_evidence
+from cognikernel.storage.jobs import enqueue_extraction
 
 
 def _enqueue_raw(project, session_id: str, blob: bytes) -> int:
@@ -21,7 +21,7 @@ def _enqueue_raw(project, session_id: str, blob: bytes) -> int:
 
 class TestCorruptEvidence:
     def test_binary_garbage_does_not_crash_worker(self, project) -> None:
-        from memlora.integration.session import process_jobs
+        from cognikernel.integration.session import process_jobs
 
         _enqueue_raw(project, "sess-garbage", b"\x00\x01\x02 not json \xff\xfe rubbish")
 
@@ -38,7 +38,7 @@ class TestCorruptEvidence:
         assert stuck == 0, "corrupt-evidence job left the queue wedged"
 
     def test_truncated_jsonl_is_handled(self, project) -> None:
-        from memlora.integration.session import process_jobs
+        from cognikernel.integration.session import process_jobs
 
         # Valid first line, second line cut off mid-JSON (a killed capture).
         truncated = (

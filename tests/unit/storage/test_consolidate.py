@@ -1,7 +1,7 @@
 """J2.3 + J3.1 — golden-record consolidation: canonical pick, lineage, guards."""
 from __future__ import annotations
 
-from memlora.storage.consolidate import consolidate_by_key
+from cognikernel.storage.consolidate import consolidate_by_key
 
 
 def _rec(id_, desc, *, key="", etype="DECISION", authority="assistant_decided",

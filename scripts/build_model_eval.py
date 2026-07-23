@@ -43,12 +43,12 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 random.seed(1106)
 
-from memlora.delta.supersede import jaccard_similarity, normalize_for_overlap
-from memlora.extraction.pipeline import _MEMORY_META_RE, _CONTENT_WORD_RE, _MIN_CONTENT_WORDS
-from memlora.extraction.sanitize import sanitize_description
-from memlora.extraction.tokenize import is_label_value_line, tokenize
-from memlora.extraction.transcript import transcript_from_source
-from memlora.utils.subject import derive_subject
+from cognikernel.delta.supersede import jaccard_similarity, normalize_for_overlap
+from cognikernel.extraction.pipeline import _MEMORY_META_RE, _CONTENT_WORD_RE, _MIN_CONTENT_WORDS
+from cognikernel.extraction.sanitize import sanitize_description
+from cognikernel.extraction.tokenize import is_label_value_line, tokenize
+from cognikernel.extraction.transcript import transcript_from_source
+from cognikernel.utils.subject import derive_subject
 
 OUT_DIR = Path("research/model_eval")
 
@@ -61,7 +61,7 @@ SENTENCE_STORES = {
     "gamma":     "792ba53c22a9ceba",
     "mob_c":     "9d61801554d730b8",
 }
-PROJECTS_DIR = Path.home() / ".memlora" / "projects"
+PROJECTS_DIR = Path.home() / ".cognikernel" / "projects"
 
 # ── gold-fact matchers (question-guarded positives) ──────────────────────────
 # (project, expected_label, matcher) — matcher over the sanitized lowercase text.

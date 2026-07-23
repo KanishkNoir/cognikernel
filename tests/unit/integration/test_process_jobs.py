@@ -17,14 +17,14 @@ from unittest.mock import patch
 
 import pytest
 
-from memlora.storage.connection import get_connection, get_db_path, hash_project_path
-from memlora.storage.cursors import get_cursor
-from memlora.storage.evidence import store_evidence
-from memlora.storage.jobs import (
+from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.storage.cursors import get_cursor
+from cognikernel.storage.evidence import store_evidence
+from cognikernel.storage.jobs import (
     claim_next_job, enqueue_extraction, fail_job,
     get_job, list_jobs, recover_stuck_running_jobs, replay_dead_letter,
 )
-from memlora.storage.migrations import run_migrations
+from cognikernel.storage.migrations import run_migrations
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -32,9 +32,9 @@ from memlora.storage.migrations import run_migrations
 def _make_project(tmp_path: Path):
     project_path = tmp_path / "proj"
     project_path.mkdir()
-    from memlora.integration.session import init_project
+    from cognikernel.integration.session import init_project
     import os
-    os.environ.setdefault("MEMLORA_DISABLE_AUTO_WARM", "1")
+    os.environ.setdefault("COGNIKERNEL_DISABLE_AUTO_WARM", "1")
     init_project(str(project_path))
     return project_path
 
@@ -122,8 +122,8 @@ class TestCrashAndReplay:
     def test_process_jobs_replays_timeout_dead_letters(self, tmp_path):
         """process_jobs promotes TIMEOUT dead-letters (process-killed) → processed."""
         project_path = _make_project(tmp_path)
-        from memlora.integration.session import session_capture, process_jobs
-        from memlora.config import Config
+        from cognikernel.integration.session import session_capture, process_jobs
+        from cognikernel.config import Config
 
         raw = _jsonl(10)
         session_id = "test-session-replay"
@@ -155,8 +155,8 @@ class TestCrashAndReplay:
         """Gamma post-mortem F3: EXTRACTOR_BUG dead-letters must stay dead —
         auto-replaying them forever masks real bugs and burns CPU."""
         project_path = _make_project(tmp_path)
-        from memlora.integration.session import session_capture, process_jobs
-        from memlora.config import Config
+        from cognikernel.integration.session import session_capture, process_jobs
+        from cognikernel.config import Config
 
         raw = _jsonl(10)
         result = session_capture(str(project_path), "test-poison", raw)
@@ -179,14 +179,14 @@ class TestCrashAndReplay:
         """Gamma post-mortem F2: a second worker must exit immediately when the
         project lock is held (worker storm prevention)."""
         project_path = _make_project(tmp_path)
-        from memlora.config import Config
-        from memlora.integration.session import process_jobs, _acquire_worker_lock
+        from cognikernel.config import Config
+        from cognikernel.integration.session import process_jobs, _acquire_worker_lock
 
         # Hold the lock under the SAME root process_jobs resolves from config, so
         # the second worker actually sees it (audit P2: lock dir follows config).
         cfg = Config.load(project_path=str(project_path))
         pid = hash_project_path(str(project_path))
-        lock = _acquire_worker_lock(pid, memlora_dir=cfg.memlora_dir)
+        lock = _acquire_worker_lock(pid, cognikernel_dir=cfg.cognikernel_dir)
         assert lock is not None
         try:
             summary = process_jobs(str(project_path))
@@ -195,18 +195,18 @@ class TestCrashAndReplay:
         finally:
             lock.unlink(missing_ok=True)
 
-    def test_worker_lock_follows_configured_memlora_dir(self, tmp_path, monkeypatch):
-        """Audit P2: the lock lives under the configured memlora_dir, never a
-        hardcoded ~/.memlora — needed for read-only homes and relocated data."""
-        monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
-        from memlora.config import Config
-        from memlora.integration.session import _acquire_worker_lock
+    def test_worker_lock_follows_configured_cognikernel_dir(self, tmp_path, monkeypatch):
+        """Audit P2: the lock lives under the configured cognikernel_dir, never a
+        hardcoded ~/.cognikernel — needed for read-only homes and relocated data."""
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+        from cognikernel.config import Config
+        from cognikernel.integration.session import _acquire_worker_lock
 
         cfg = Config.load()
-        lock = _acquire_worker_lock("pidX", memlora_dir=cfg.memlora_dir)
+        lock = _acquire_worker_lock("pidX", cognikernel_dir=cfg.cognikernel_dir)
         try:
             assert lock is not None
-            assert lock.parent == cfg.memlora_dir / "locks"
+            assert lock.parent == cfg.cognikernel_dir / "locks"
             assert str(tmp_path / "data") in str(lock)
         finally:
             lock.unlink(missing_ok=True)
@@ -215,7 +215,7 @@ class TestCrashAndReplay:
         """Gamma post-mortem F4: identical content after cursor advance must not
         re-store the full transcript (sha collision, burned ids)."""
         project_path = _make_project(tmp_path)
-        from memlora.integration.session import session_capture, process_jobs
+        from cognikernel.integration.session import session_capture, process_jobs
 
         raw = _jsonl(10)
         r1 = session_capture(str(project_path), "test-nonew", raw)
@@ -232,14 +232,14 @@ class TestCaptureSpeed:
     def test_session_capture_is_fast(self, tmp_path, monkeypatch):
         """session_capture must complete well under 500ms — it's the hook fast path.
 
-        MEMLORA_DIR is isolated so the timing measures capture itself, not the
+        COGNIKERNEL_DIR is isolated so the timing measures capture itself, not the
         machine's real store population (resolve_project_id's alias scan on a
-        new project walks projects_dir; against a populated real ~/.memlora
+        new project walks projects_dir; against a populated real ~/.cognikernel
         that is machine-state-dependent noise, not capture cost).
         """
-        monkeypatch.setenv("MEMLORA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
         project_path = _make_project(tmp_path)
-        from memlora.integration.session import session_capture
+        from cognikernel.integration.session import session_capture
 
         raw = _jsonl(50)  # simulate a mid-session JSONL
         start = time.monotonic()
@@ -252,8 +252,8 @@ class TestCaptureSpeed:
     def test_session_capture_does_not_write_events(self, tmp_path):
         """Capture must not write any events — processing is deferred to worker."""
         project_path = _make_project(tmp_path)
-        from memlora.integration.session import session_capture
-        from memlora.config import Config
+        from cognikernel.integration.session import session_capture
+        from cognikernel.config import Config
 
         raw = _jsonl(20)
         session_capture(str(project_path), "test-no-events", raw)
@@ -274,8 +274,8 @@ class TestCursorAdvance:
     def test_process_jobs_advances_cursor(self, tmp_path):
         """After process_jobs, the ingest cursor must reflect the full line count."""
         project_path = _make_project(tmp_path)
-        from memlora.integration.session import session_capture, process_jobs
-        from memlora.config import Config
+        from cognikernel.integration.session import session_capture, process_jobs
+        from cognikernel.config import Config
 
         raw = _jsonl(30)
         line_count = len([ln for ln in raw.splitlines() if ln.strip()])
@@ -302,7 +302,7 @@ class TestOrphanRecovery:
         db = tmp_path / "test.db"
         conn = sqlite3.connect(str(db)); conn.row_factory = sqlite3.Row
         run_migrations(conn)
-        from memlora.storage.jobs import recover_orphaned_jobs, claim_next_job
+        from cognikernel.storage.jobs import recover_orphaned_jobs, claim_next_job
 
         ev_id = store_evidence(conn, "p", "s", "transcript", b"data")
         enqueue_extraction(conn, "p", "s", ev_id, "extract.transcript")
@@ -317,7 +317,7 @@ class TestOrphanRecovery:
         db = tmp_path / "test.db"
         conn = sqlite3.connect(str(db)); conn.row_factory = sqlite3.Row
         run_migrations(conn)
-        from memlora.storage.jobs import recover_orphaned_jobs, claim_next_job
+        from cognikernel.storage.jobs import recover_orphaned_jobs, claim_next_job
 
         ev_id = store_evidence(conn, "p", "s", "transcript", b"data")
         enqueue_extraction(conn, "p", "s", ev_id, "extract.transcript")
