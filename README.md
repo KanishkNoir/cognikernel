@@ -27,6 +27,41 @@ is the coding agent you already run — CogniKernel makes it remember.
 
 ---
 
+## The fine-tuned models
+
+Two small encoder models do the actual thinking behind CogniKernel — not a keyword
+list, not an LLM call:
+
+| Model | What it decides | Why it's an encoder, not an LLM |
+|---|---|---|
+| **`salience_v2`** | For every sentence in a session transcript: is this worth keeping, and what type — `DECISION`, `CONSTRAINT_HARD`/`SOFT`, `APPROACH_ABANDONED_DO_NOT_RETRY`, or noise? This is the model that decides *what gets remembered.* | A fine-tuned SetFit classifier (bge-small backbone, ~130 MB ONNX) runs this on CPU in milliseconds. An LLM doing the same job costs an API call and real latency on every session — CogniKernel spends neither. |
+| **`supersession_xenc`** | Does this new fact *replace* an existing one (a decision changed, a constraint was relaxed), or does it just restate what's already stored? This is the model behind latest-wins consolidation. | Same constraint: this fires on every capture. A cross-encoder scores it locally in milliseconds instead of round-tripping to a model API. |
+
+**Validated on held-out data, not vibes.** Each model is scored against a frozen
+evaluation set mined from real captured project stores that the training data never
+sees — retraining on the eval set is a standing rule violation, not a shortcut we
+occasionally allow. Because the underlying task (is this sentence a decision, or just
+description?) is itself genuinely ambiguous at the margin, we also measure how much
+*two independent human labelers* agree with each other on the same sentences, and hold
+the model to that ceiling rather than to a naive 100%. The model's minority classes
+(rare event types with few historical examples) are tracked and grown deliberately,
+because a thin eval slice can hide the exact class that most needs work.
+
+**They're optional but on by default — here's the fail-open contract.** `memlora init`
+writes a per-project config that already selects the fine-tuned path
+(`extractor = "v2-broad"`, `cross_encoder_supersession = true`). What's missing after
+`init` is the ~270 MB of model weights themselves — that's what
+`memlora install-heads` fetches. Until you run it, CogniKernel works, but degrades
+both decisions to a deterministic keyword/lexical fallback (weaker: it can miss
+decisions phrased outside its trigger vocabulary, and it can't catch a paraphrased
+correction lexical matching misses) — `memlora doctor` names this state explicitly
+rather than leaving it invisible (see below). Nothing breaks either way — that's
+the fail-open design — but the fine-tuned path is the better-quality one, and the
+one new projects are configured to use by default. See [Quickstart](#quickstart) to
+install them.
+
+---
+
 ## The memory loop
 
 Everything CogniKernel does is one loop: **observe → extract → consolidate →
@@ -70,14 +105,16 @@ recalls; the spine underneath keeps both honest.
 
 CogniKernel attaches to a session at four points. Each is fail-open — if memory
 is unavailable or errors, the hook logs at `WARNING`, returns cleanly, and the
-session continues.
+session continues. `salience_v2` and `supersession_xenc` (above) do the
+classification behind Capture and Session block; nothing here is a hardcoded
+keyword list unless the fallback path is active.
 
-| Surface | Hook | Authority | What it does |
-|---|---|---|---|
-| **Session block** | `SessionStart` | advisory | injects the canonical decisions/constraints/skeleton block |
-| **CK-1 recall** | `UserPromptSubmit` | advisory | surfaces prompt-relevant memory, dual-evidence gated, dedup'd via render ledger |
-| **Read/Edit gate** | `PreToolUse` | **hard / JIT** | read-efficiency gate on Read/Grep; **just-in-time prohibition surfacing** on Write/Edit (K2) |
-| **Capture** | `Stop` | side-effect | extracts and persists decisions — you never write memory to CLAUDE.md by hand |
+| Surface | Hook | Authority | What it does | Why you care |
+|---|---|---|---|---|
+| **Session block** | `SessionStart` | advisory | injects the canonical decisions/constraints/skeleton block | a new session already knows what the last one decided — no "let me re-read the codebase to remember where we were" |
+| **CK-1 recall** | `UserPromptSubmit` | advisory | surfaces prompt-relevant memory, dual-evidence gated, dedup'd via render ledger | ask about a subsystem and the relevant prior decision rides in with your prompt, unasked |
+| **Read/Edit gate** | `PreToolUse` | **hard / JIT** | read-efficiency gate on Read/Grep; **just-in-time prohibition surfacing** on Write/Edit (K2) | the agent gets warned *at the moment it's about to violate a past decision*, not three files later when you notice |
+| **Capture** | `Stop` | side-effect | extracts and persists decisions — you never write memory to CLAUDE.md by hand | you never write down what you decided; the next session already has it |
 
 ---
 
@@ -203,16 +240,45 @@ block + MCP recall.
 ## Quickstart
 
 ```sh
+# 1. Install the package
 uv sync                      # core (lexical-only)
-uv sync --extra embedding    # + dense retrieval (fastembed + numpy)
+uv sync --extra embedding    # + dense retrieval (fastembed + numpy) — recommended
 
-uv run memlora init .            # register this project + install hooks
-uv run memlora doctor .          # subsystem health
+# 2. Register the project (writes .mcp.json, hooks, and a per-project config that
+#    already selects the fine-tuned extraction path — see below)
+uv run memlora init .
 
-uv run memlora install-heads     # optional: trained encoder heads (~270 MB download);
-                                 # without them extraction/supersession fall back to
-                                 # the legacy/lexical path — everything still works
+# 3. Install the fine-tuned encoder heads — the models described above
+uv run memlora install-heads     # ~270 MB, one-time, sha256-verified
+
+# 4. Confirm everything is wired up
+uv run memlora doctor .
 ```
+
+Step 3 is the one easiest to skip and most worth not skipping: `memlora init`
+already configured this project to use `salience_v2` and `supersession_xenc`
+(`extractor = "v2-broad"`, `cross_encoder_supersession = true` in
+`.memlora/config.toml`) — `install-heads` is what actually supplies the model
+weights those settings call for. Skip it and CogniKernel still runs, just on the
+weaker deterministic fallback (fail-open, not a hard error). The download pulls
+from the [`heads-v1` release](https://github.com/KanishkNoir/cognikernel/releases/tag/heads-v1)
+by default; pass `--source <dir>` to install from a local `models/` export instead,
+or `--no-download` to skip the network fetch and rely on the fallback deliberately.
+
+Step 4 actually tells you which path is active — `memlora doctor`'s subsystem
+health block reports `salience_head` and `supersession_head` by name:
+
+```
+-- subsystem health -----------------------------------------
+  [OK] salience_head    : installed, loads from ~/.memlora/models/salience_v2
+  [OK] supersession_head: installed, loads from ~/.memlora/models/supersession_xenc
+```
+
+If you skipped `install-heads` (or ran `uv sync` without `--extra embedding`,
+which is where the ONNX runtime itself comes from), the same lines say
+`not installed` / `onnxruntime/tokenizers not installed` and name the exact
+command to fix it — this is always informational, never a `doctor --strict`
+failure, since the legacy fallback is a fully supported mode.
 
 Then start a Claude Code session in the project — the memory block appears
 automatically at session start, and decisions are captured when the session ends.

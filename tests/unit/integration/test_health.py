@@ -15,7 +15,9 @@ from memlora.config import Config
 from memlora.integration.health import (
     check_config,
     check_embedding,
+    check_salience_head,
     check_schema_version,
+    check_supersession_head,
     check_worker_queue,
     run_health_checks,
 )
@@ -43,6 +45,47 @@ class TestHealthChecks:
         # Declared deps — present in a properly provisioned environment.
         assert checks["fts5"].ok, checks["fts5"].detail
         assert checks["symbols"].ok, checks["symbols"].detail
+        # Config() defaults to extractor="legacy" / cross_encoder_supersession=False,
+        # so both encoder-head checks report "not requested" and are healthy.
+        assert checks["salience_head"].ok and "not requested" in checks["salience_head"].detail
+        assert checks["supersession_head"].ok and "not requested" in checks["supersession_head"].detail
+
+    def test_salience_head_requested_but_not_installed_is_still_healthy(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Status-only (H-heads): a project asking for v2-broad before anyone has
+        run `install-heads` (the default state for every freshly-init'd project)
+        must never read as unhealthy — only the legacy-vs-fine-tuned status
+        differs."""
+        monkeypatch.setenv("MEMLORA_V2_BODY_DIR", str(tmp_path / "nowhere"))
+        check = check_salience_head(Config(extractor="v2-broad"))
+        assert check.ok
+        assert "not installed" in check.detail
+        assert "install-heads" in check.detail
+
+    def test_supersession_head_requested_but_not_installed_is_still_healthy(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("MEMLORA_XENC_BODY_DIR", str(tmp_path / "nowhere"))
+        check = check_supersession_head(Config(cross_encoder_supersession=True))
+        assert check.ok
+        assert "not installed" in check.detail
+        assert "install-heads" in check.detail
+
+    def test_salience_head_artifacts_present_reports_installed(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Artifact detection is independent of whether onnxruntime/tokenizers
+        (the `embedding` extra) happen to be importable in this environment —
+        assert only on the branch that's environment-invariant."""
+        body_dir = tmp_path / "salience_v2"
+        body_dir.mkdir()
+        (body_dir / "body.onnx").write_bytes(b"")
+        (body_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("MEMLORA_V2_BODY_DIR", str(body_dir))
+        check = check_salience_head(Config(extractor="v2-broad"))
+        assert check.ok
+        assert "not installed" not in check.detail
 
     def test_schema_mismatch_is_unhealthy(self, tmp_path: Path) -> None:
         db = _migrated_db(tmp_path)

@@ -122,6 +122,93 @@ def check_worker_queue(conn: sqlite3.Connection, project_id: str) -> HealthCheck
     )
 
 
+def _encoder_engine_available() -> bool:
+    """onnxruntime + tokenizers ride in transitively via the `embedding` extra
+    (fastembed); a project can have model artifacts installed and still lack
+    the runtime to load them if it only ran `uv sync` (core)."""
+    import importlib.util
+    return (
+        importlib.util.find_spec("onnxruntime") is not None
+        and importlib.util.find_spec("tokenizers") is not None
+    )
+
+
+def check_salience_head(config: Config) -> HealthCheck:
+    """Is the fine-tuned salience_v2 encoder actually loadable?
+
+    Status-only, like check_codex: not having the heads installed is a
+    supported, fail-open mode (`memlora init` requests v2-broad by default
+    for every new project, well before anyone has run `install-heads`), so
+    this never fails --strict on its own. It exists purely so the gap between
+    "the config asked for the fine-tuned path" and "it's actually running"
+    is visible instead of silently falling back to legacy.
+    """
+    if config.extractor not in ("v2", "v2-broad"):
+        return HealthCheck(
+            "salience_head", True,
+            f"not requested (extractor={config.extractor!r}) — legacy keyword path active",
+        )
+    try:
+        from memlora.extraction import salience_v2
+    except Exception as exc:
+        return HealthCheck("salience_head", False, f"module import failed ({exc})")
+    engine_ok = _encoder_engine_available()
+    body_dir = salience_v2._body_dir()
+    artifacts_ok = (
+        salience_v2._HEAD_PATH.exists()
+        and (body_dir / "body.onnx").exists()
+        and (body_dir / "tokenizer.json").exists()
+    )
+    if artifacts_ok and engine_ok:
+        return HealthCheck("salience_head", True, f"installed, loads from {body_dir}")
+    if not artifacts_ok:
+        return HealthCheck(
+            "salience_head", True,
+            f"not installed — extraction falls back to legacy "
+            f"(run `memlora install-heads`; expected at {body_dir})",
+        )
+    return HealthCheck(
+        "salience_head", True,
+        "weights present but onnxruntime/tokenizers not installed — extraction "
+        "falls back to legacy (run `uv sync --extra embedding`)",
+    )
+
+
+def check_supersession_head(config: Config) -> HealthCheck:
+    """Is the fine-tuned supersession cross-encoder actually loadable?
+
+    Status-only — see check_salience_head's docstring; the same fail-open
+    reasoning applies (cross_encoder_supersession is also on by default from
+    `memlora init`, ahead of `install-heads`).
+    """
+    if not config.cross_encoder_supersession:
+        return HealthCheck(
+            "supersession_head", True,
+            "not requested (cross_encoder_supersession=false) — lexical/cosine gate active",
+        )
+    try:
+        from memlora.delta import supersede_xenc
+    except Exception as exc:
+        return HealthCheck("supersession_head", False, f"module import failed ({exc})")
+    engine_ok = _encoder_engine_available()
+    body_dir = supersede_xenc._body_dir()
+    artifacts_ok = (body_dir / "body.onnx").exists() and (body_dir / "tokenizer.json").exists()
+    if artifacts_ok and engine_ok:
+        threshold_note = "" if (body_dir / "threshold.json").exists() else " (default threshold, no threshold.json)"
+        return HealthCheck("supersession_head", True, f"installed, loads from {body_dir}{threshold_note}")
+    if not artifacts_ok:
+        return HealthCheck(
+            "supersession_head", True,
+            f"not installed — supersession falls back to the lexical+cosine gate "
+            f"(run `memlora install-heads`; expected at {body_dir})",
+        )
+    return HealthCheck(
+        "supersession_head", True,
+        "weights present but onnxruntime/tokenizers not installed — supersession "
+        "falls back to the lexical+cosine gate (run `uv sync --extra embedding`)",
+    )
+
+
 def check_codex(config: Config) -> HealthCheck:
     """Cross-platform capture wiring (Sprint L). Codex is optional, so its absence
     is HEALTHY (like embedding disabled) — this surfaces whether sync *can* run."""
@@ -154,6 +241,8 @@ def run_health_checks(
         check_schema_version(conn),
         check_fts(conn),
         check_embedding(config),
+        check_salience_head(config),
+        check_supersession_head(config),
         check_symbol_extraction(),
         check_worker_queue(conn, project_id),
         check_codex(config),

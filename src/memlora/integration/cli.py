@@ -1171,9 +1171,10 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
     with get_connection(db_path) as conn:
         checks = run_health_checks(conn, project_id, config,
                                    project_path=args.project_path)
+    name_width = max((len(c.name) for c in checks), default=12)
     for c in checks:
         mark = "OK" if c.ok else "!!"
-        print(f"  [{mark}] {c.name:<12}: {c.detail}")
+        print(f"  [{mark}] {c.name:<{name_width}}: {c.detail}")
     unhealthy = [c for c in checks if not c.ok]
 
     print()
