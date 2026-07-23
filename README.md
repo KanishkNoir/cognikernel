@@ -150,7 +150,9 @@ Lexical-primary, with dense as a fused signal — never pure vector:
 ## What it saves you
 
 Benchmarked in a three-arm comparison — CogniKernel vs flat curated notes vs no
-memory — with real agent sessions across four multi-session projects:
+memory — with real agent sessions across four multi-session projects. Full
+methodology, per-project tables, and the honest caveats (including where
+CogniKernel ties or loses) are in [`docs/benchmark.md`](docs/benchmark.md):
 
 - **File reads: the universal win.** The CogniKernel arm made the fewest file
   reads in *every* project — typically **2–4× fewer** (23 vs 63, 16 vs 47/53,
