@@ -600,13 +600,29 @@ def _cmd_install_heads(args: argparse.Namespace) -> None:
           "(optional) cross_encoder_supersession = true.")
 
 
+# A CK-managed hook command references the package (current name or the legacy
+# pre-rename `memlora`) AND a hook indicator — either the module subcommand form
+# (`-m cognikernel hook-stop`) or the shim-script form (`cognikernel_stop_hook.py`).
+# Matching every form is what lets re-init REPLACE its own hooks instead of
+# appending a duplicate set when the invocation form changed — e.g. across the
+# memlora→cognikernel rename, or a module↔script-shim switch. Recognizing only the
+# current exact string silently double-registered every hook on such a re-init.
+_CK_HOOK_PKG_NAMES = ("cognikernel", "memlora")
+_CK_HOOK_MARKERS = ("hook-", "_hook")
+
+
+def _is_ck_hook_command(command: str) -> bool:
+    c = command.lower()
+    return any(p in c for p in _CK_HOOK_PKG_NAMES) and any(m in c for m in _CK_HOOK_MARKERS)
+
+
 def _is_ck_hook_group(group: dict) -> bool:
     """True when every command in a settings.json hook group is CK-managed."""
     hooks = group.get("hooks") if isinstance(group, dict) else None
     if not isinstance(hooks, list) or not hooks:
         return False
     return all(
-        isinstance(h, dict) and "-m cognikernel hook-" in str(h.get("command", ""))
+        isinstance(h, dict) and _is_ck_hook_command(str(h.get("command", "")))
         for h in hooks
     )
 

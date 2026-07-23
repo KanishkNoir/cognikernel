@@ -151,6 +151,40 @@ def test_init_preserves_user_hooks_and_rewrites_ck_hooks(
     assert len(ck_stop_groups) == 1
 
 
+def test_init_replaces_legacy_form_ck_hooks_without_duplicating(
+    init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
+) -> None:
+    """Regression: CK hooks registered under an OLD invocation form must be
+    recognized and REPLACED on re-init, not preserved-and-appended into a
+    duplicate set. This is what broke across the memlora→cognikernel rename:
+    pre-existing `-m memlora hook-*` groups (and `scripts/*_hook.py` shims) were
+    unrecognized, so re-init double-registered every hook."""
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "cognikernel_data"))
+
+    settings_dir = Path(init_args.project_path) / ".claude"
+    settings_dir.mkdir(parents=True)
+    settings_path = settings_dir / "settings.json"
+    legacy_module = {"hooks": [{"type": "command", "command": "python -m memlora hook-stop"}]}
+    legacy_shim = {"hooks": [{"type": "command",
+                              "command": "python C:/x/scripts/cognikernel_pretool_hook.py"}]}
+    settings_path.write_text(
+        json.dumps({"hooks": {"Stop": [legacy_module], "PreToolUse": [legacy_shim]}}),
+        encoding="utf-8",
+    )
+
+    _cmd_init(init_args)
+
+    hooks = json.loads(settings_path.read_text(encoding="utf-8"))["hooks"]
+    stop_cmds = [h["command"] for g in hooks["Stop"] for h in g["hooks"]]
+    pre_cmds = [h["command"] for g in hooks["PreToolUse"] for h in g["hooks"]]
+    # Legacy forms are gone (recognized as CK-managed and dropped), not duplicated.
+    assert not any("memlora" in c for c in stop_cmds)
+    assert not any("_hook.py" in c for c in pre_cmds)
+    # Exactly one current CK group per event — no accumulation.
+    assert len(hooks["Stop"]) == 1 and stop_cmds[0].endswith("-m cognikernel hook-stop")
+    assert len(hooks["PreToolUse"]) == 1 and pre_cmds[0].endswith("-m cognikernel hook-pretool")
+
+
 def test_init_idempotent_does_not_overwrite_existing_project_config(
     init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
 ) -> None:
