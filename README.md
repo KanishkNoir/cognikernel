@@ -23,6 +23,51 @@ is the coding agent you already run — CogniKernel makes it remember.
 
 ---
 
+## Quickstart
+
+**Install from [PyPI](https://pypi.org/project/cognikernel/):**
+
+```sh
+pip install "cognikernel[embedding]"   # recommended: + dense retrieval & the fine-tuned encoder runtime
+# or: pip install cognikernel          # core (lexical-only)
+```
+
+Prefer an isolated global CLI? `pipx install "cognikernel[embedding]"` or `uv tool install "cognikernel[embedding]"`.
+
+**Set up a project** — run once from the project root:
+
+```sh
+cognikernel init .            # register the project + install hooks and MCP for Claude Code and Codex
+cognikernel install-heads     # download the fine-tuned encoder models (~270 MB, one-time, sha256-verified)
+cognikernel doctor .          # verify everything is wired up
+```
+
+Then just **start a Claude Code session in the project.** Decisions are captured
+automatically when the session ends and injected as a compact memory block at the
+next session start — nothing else to do. (`install-heads` is optional but
+recommended: without it, extraction falls back to a weaker lexical path, and
+`doctor` tells you which is active — see [Setup details](#setup-details).)
+
+**What you get, out of the box:**
+
+- **Automatic capture & recall** — decisions, constraints, and abandoned
+  approaches are extracted at session end and injected next time. You never
+  hand-write memory to `CLAUDE.md`.
+- **Cross-tool memory** — one store serves Claude Code *and* Codex working in the
+  same directory ([Cross-platform](#cross-platform-codex)).
+- **Action-time guardrails** — a prior "don't do X" surfaces at the moment you're
+  about to do X, not three files later (Claude Code).
+- **Read efficiency** — an injected AST skeleton means the agent re-reads far
+  fewer files ([What it saves you](#what-it-saves-you)).
+- **MCP tools** for targeted use: `recall` · `find_related` · `skeleton` ·
+  `get_session_state`.
+- **CLI**: `init` · `doctor` · `install-heads` · `codex-sync` · `show` · `reset`
+  (full list under [Interfaces](#interfaces)).
+- **No LLM, no cloud, no keys** — everything runs locally; nothing leaves your
+  machine.
+
+---
+
 ## The fine-tuned models
 
 Two small encoder models do the actual thinking behind CogniKernel — not a keyword
@@ -237,36 +282,25 @@ block + MCP recall.
 
 ---
 
-## Quickstart
+## Setup details
 
-```sh
-# 1. Install the package
-uv sync                      # core (lexical-only)
-uv sync --extra embedding    # + dense retrieval (fastembed + numpy) — recommended
+The [Quickstart](#quickstart) above is the whole flow; this expands on the two
+steps worth understanding.
 
-# 2. Register the project (writes .mcp.json, hooks, and a per-project config that
-#    already selects the fine-tuned extraction path — see below)
-uv run cognikernel init .
-
-# 3. Install the fine-tuned encoder heads — the models described above
-uv run cognikernel install-heads     # ~270 MB, one-time, sha256-verified
-
-# 4. Confirm everything is wired up
-uv run cognikernel doctor .
-```
-
-Step 3 is the one easiest to skip and most worth not skipping: `cognikernel init`
-already configured this project to use `salience_v2` and `supersession_xenc`
+**`install-heads` is the easiest to skip and most worth not skipping.**
+`cognikernel init` already configured the project to use the fine-tuned path
 (`extractor = "v2-broad"`, `cross_encoder_supersession = true` in
 `.cognikernel/config.toml`) — `install-heads` is what actually supplies the model
 weights those settings call for. Skip it and CogniKernel still runs, just on the
 weaker deterministic fallback (fail-open, not a hard error). The download pulls
 from the [`heads-v1` release](https://github.com/KanishkNoir/cognikernel/releases/tag/heads-v1)
-by default; pass `--source <dir>` to install from a local `models/` export instead,
-or `--no-download` to skip the network fetch and rely on the fallback deliberately.
+and is sha256-verified; pass `--source <dir>` to install from a local `models/`
+export instead, or `--no-download` to rely on the fallback deliberately. The
+fine-tuned runtime (onnxruntime + tokenizers) ships with the `[embedding]` extra,
+so install with `pip install "cognikernel[embedding]"` for the full path.
 
-Step 4 actually tells you which path is active — `cognikernel doctor`'s subsystem
-health block reports `salience_head` and `supersession_head` by name:
+**`cognikernel doctor` tells you which path is active** — its subsystem-health
+block reports `salience_head` and `supersession_head` by name:
 
 ```
 -- subsystem health -----------------------------------------
@@ -274,14 +308,14 @@ health block reports `salience_head` and `supersession_head` by name:
   [OK] supersession_head: installed, loads from ~/.cognikernel/models/supersession_xenc
 ```
 
-If you skipped `install-heads` (or ran `uv sync` without `--extra embedding`,
-which is where the ONNX runtime itself comes from), the same lines say
-`not installed` / `onnxruntime/tokenizers not installed` and name the exact
-command to fix it — this is always informational, never a `doctor --strict`
-failure, since the legacy fallback is a fully supported mode.
+If you skipped `install-heads` (or installed core-only, without the `[embedding]`
+extra that provides the ONNX runtime), the same lines say `not installed` and
+name the exact command to fix it — always informational, never a `doctor
+--strict` failure, since the legacy fallback is a fully supported mode.
 
-Then start a Claude Code session in the project — the memory block appears
-automatically at session start, and decisions are captured when the session ends.
+**Working from a clone instead of PyPI?** Substitute `uv sync --extra embedding`
+for the install and prefix the commands with `uv run` (e.g. `uv run cognikernel
+init .`).
 
 ---
 
