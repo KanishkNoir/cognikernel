@@ -160,12 +160,14 @@ CogniKernel ties or loses) are in [`docs/benchmark.md`](docs/benchmark.md):
   block + AST skeleton carried the whole repo's shape. Fewer reads means fewer
   tool round-trips and more of the context window left for actual work — your
   session gets *longer* before compaction, not just cheaper.
-- **Tokens: up to ~20% cheaper where memory matters.** Price-weighted token
-  cost (cache-write 1.25×, cache-read 0.1×, output 5×) came out **18–23% lower**
-  on projects with evolving decisions and cross-file dependencies — and roughly
-  a wash on small implementation-heavy projects where the code itself is cheap
-  to re-read. We publish the honest number, not the raw-token one (raw sums
-  look ~30–40% better, but ~95% of any session's bill is discounted cache-read).
+- **Tokens: ~30–40% leaner than auto-memory where memory matters.** On projects
+  with evolving decisions and cross-file dependencies, CogniKernel used roughly
+  **30–40% fewer tokens** than a native auto-memory arm — and stays ahead once
+  price-weighted (cache-read is billed 0.1×, so ~95% of any session's bill is
+  discounted cache-read; the weighted edge is real but smaller than the raw
+  figure). Roughly a wash on small implementation-heavy projects. Precise
+  per-project figures are pending a single-model re-benchmark — see
+  [`docs/benchmark.md`](docs/benchmark.md).
 - **Recall instead of re-derivation.** Where memory earns its keep is projects
   whose state is too large, too evolving, or too long-lived to re-derive
   cheaply: the agent starts already knowing the decisions, constraints, and

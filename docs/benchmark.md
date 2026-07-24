@@ -11,12 +11,17 @@ how, and where CogniKernel does and does not help.**
 > and project fixtures are not published. Read the numbers as *strong
 > directional evidence*, not a leaderboard score.
 >
-> **Two measurement vintages.** Correctness (QA) and the causal honor suite were
-> **freshly measured on the current stack (July 2026)** after the encoder
-> re-tuning and the edit-time-binding fixes landed. The **efficiency figures
-> (file reads, raw token totals) are carried from the earlier same-script run**
-> — the flat-notes/no-memory arms were not re-run on the newer scripts, so treat
-> reads/tokens as a stable-but-older snapshot. Where this matters it's flagged.
+> **Two measurement vintages, two agent models.** Correctness (QA) and the
+> causal honor suite were **freshly measured on the current stack (July 2026)**
+> after the encoder re-tuning and edit-time-binding fixes; the efficiency figures
+> are carried from the earlier same-script run. Critically, those runs used
+> **two different agent models** (the earlier three-arm benchmark on one, the
+> later CogniKernel-arm runs on a newer one). Because token *consumption* is
+> highly model-dependent — different tokenizers, different verbosity — **we do
+> not publish precise per-project token numbers here**; they would conflate two
+> models. We report the token result as a **direction and a range** and defer
+> exact figures to a single-model re-benchmark. File-read counts (a behavioral
+> metric, far less model-sensitive) and correctness are reported concretely.
 
 ---
 
@@ -30,8 +35,10 @@ across sessions** (Relay: 92 vs. 70 vs. 0) and **ties the flat arms where the
 codebase is small or cheap to re-read** (Taskflow ~96 vs. 97; Conductor ~98 vs.
 100) — with, in those tie cases, the added benefits of fewer reads, zero manual
 upkeep, and the fewest genuine cross-session mistakes of any arm (1, vs. 4 for
-flat notes). Token cost is lower than flat notes on all four projects and lower
-than no-memory on three, roughly a wash on the implementation-heavy one.
+flat notes). On token cost, CogniKernel runs roughly **30–40% leaner than the
+auto-memory arm** on the recall/dependency projects and is about a wash on
+implementation-heavy work (precise figures deferred to a single-model
+re-benchmark — see the note above).
 
 ---
 
@@ -96,11 +103,10 @@ per-token rates, because the four classes cost wildly different amounts:
 | Output | 5× |
 
 This matters: **~95% of every arm's bill is discounted cache-read.** A raw token
-sum is dominated by the cheapest class and *overstates* savings. In our runs,
-raw sums made CogniKernel look ~30–40% cheaper; price-weighted, the real edge is
-the ~18–23% figure below on the recall/dependency projects, and roughly a wash
-on implementation-heavy work. **If a memory tool advertises a raw-token
-reduction, ask what it looks like weighted.**
+sum is dominated by the cheapest class and *overstates* savings. The ~30–40%
+raw reduction on the recall/dependency projects shrinks once price-weighted —
+still a real edge there, and roughly a wash on implementation-heavy work. **If a
+memory tool advertises a raw-token reduction, ask what it looks like weighted.**
 
 ---
 
@@ -131,22 +137,24 @@ recovered the same contract only by **re-opening 47–53 files** (~10–15% unai
 
 ### 2. Token cost
 
-Raw token totals from telemetry (millions). CogniKernel is lowest vs. flat notes
-on **all four** projects, and lowest vs. no-memory on three:
+**Direction, not a precise table** — see the vintage/model note at the top for
+why we're not publishing exact per-project token figures yet (the runs span two
+agent models with different token footprints).
 
-| Project | CogniKernel | Flat notes | No memory |
-|---|---|---|---|
-| Taskflow | **4.23M** | 6.29M | 5.93M |
-| Relay | **17.0M** | 28.95M | collapse |
-| Toolbelt | **19.95M** | 27.58M | 32.68M |
-| Conductor | 22.92M | 28.67M | **20.71M** |
+What holds across the runs we have:
 
-Price-weighted (per the cost model above), the advantage is **~18–23% on the
-recall (Relay) and dependency (Toolbelt) projects** — where memory earns its
-keep — and **roughly a wash on the implementation-heavy Conductor**, where a
-no-memory run is actually a touch cheaper (20.71M vs. 22.92M raw): little needs
-recalling, so CogniKernel's injected block and its caching add cost without a
-recall payoff. We report that honestly.
+- On the **recall (Relay) and dependency (Toolbelt) projects** — where memory
+  earns its keep — CogniKernel used roughly **30–40% fewer raw tokens than the
+  auto-memory arm**, and came out ahead price-weighted as well (the honest
+  price-weighted edge is smaller than the raw figure, because ~95% of every
+  session's tokens are discounted cache-read — see the cost model above).
+- On **small / implementation-heavy work (Taskflow, Conductor)** it's roughly a
+  **wash**: little needs recalling, so CogniKernel's injected block and caching
+  add cost without a recall payoff — on one project a no-memory run was actually
+  a touch cheaper. We report that honestly.
+
+Exact per-project numbers will be published after a **single-model
+re-benchmark** so every arm is measured on the same agent.
 
 ### 3. Answer fidelity / correctness
 
