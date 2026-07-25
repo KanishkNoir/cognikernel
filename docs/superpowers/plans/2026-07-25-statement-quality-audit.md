@@ -846,7 +846,33 @@ git add .gitignore && git commit -m "chore: gitignore statement-audit pools"
 Run: `uv run python scripts/audit_statement_quality.py --n 60 --stratum clean`
 Expected: prints corpus totals (6,434 statements across 45 contributing stores; 163 store files scanned, 118 holding no typed statements) and writes three files under `research/statement_audit/`.
 
-- [ ] **Step 3: Label the pool**
+- [ ] **Step 3 — AMENDED during execution (human decision): LLM pre-labels, human verifies a subset**
+
+The original step had the human label all 60. The human elected instead to have
+hosted models pre-label, with human verification of a subset. **What this costs
+is stated plainly, because it changes what the number means:** the reported rate
+becomes a model's notion of "defective", anchored to human judgment only on the
+verified subset and only as strongly as the measured agreement. The
+pre-registered gate is decided on that basis, and the writeup must say so.
+
+Why it is nonetheless defensible: the same pattern (teacher-written, human
+spot-checked) is already the spec's design for Phase B gold data, and
+`scripts/build_cot_sft.py` established the precedent in this repo.
+
+**This does not touch the no-LLM promise.** That is a *runtime* constraint —
+nothing leaves the machine during a session, no key needed to use CogniKernel.
+This is offline eval construction. Verified: the wheel packages only
+`src/cognikernel` (`pyproject.toml:50`), so nothing under `scripts/` ships.
+
+**Sub-step 3a — three models label all 60 independently.** See Task 5A below.
+
+**Sub-step 3b — human verifies a stratified 20.** The verification file is
+generated from the pool, blinded to the models' answers, and labeled by hand
+using the codebook. Agreement is then reported as Cohen's kappa per model
+against the human subset. **If model-human kappa is poor, the model labels do
+not stand** and the branch falls back to full human labeling.
+
+- [ ] **Step 3 (original, retained for reference): Label the pool**
 
 Open `research/statement_audit/pool_<stamp>.jsonl`. For each row, fill `labels` using the codebook at the top of this plan. Judge each statement standalone — do not open the source transcript.
 
@@ -922,3 +948,61 @@ Not tasked here. It reuses every script above with `--n 400 --stratum all` plus 
 - Any generator, teacher API call, or `.env` change — Phase B, gated on the ≥20% threshold.
 - Fixing skeleton path truncation (`xtraction/`, `rc/memlora/`) or `.uv-cache` entries appearing in the skeleton. These are real bugs found during the audit but they are string-slicing and scope defects, not generation gaps. File separately.
 - Any change to `salience_v2`, `supersession_xenc`, the taxonomy, or `src/cognikernel/`.
+
+---
+
+### Task 5A: LLM pre-labeling (added during execution)
+
+**Files:**
+- Create: `scripts/audit_label_llm.py`
+- Modify: `tests/eval/test_statement_audit.py` (append)
+
+**Interfaces produced:**
+- `build_prompt(row: dict) -> list[dict]` — chat messages carrying the codebook + one statement
+- `parse_labels(raw: str) -> tuple[list[str], str]` — `(labels, notes)`; raises `ValueError` on unparseable or off-codebook output
+- `main()` — CLI writing one labeler file per model
+
+**Transport facts, verified live against the API — do not re-derive:**
+- Together is OpenAI-compatible: use the `openai` SDK with
+  `base_url="https://api.together.xyz/v1"`, key from `TOGETHER_API_KEY`.
+  Do **not** use `urllib` — Cloudflare fingerprint-blocks it with a bare
+  `403 error code: 1010` that looks like an auth failure but is not.
+  (`openai` is not a project dependency; run with `uv run --with openai`.)
+- **`max_tokens` must be generous (1024).** DeepSeek-V4-Pro and Kimi-K2.6 are
+  reasoning models that spend hidden thinking tokens before any visible output.
+  Measured: at `max_tokens=50` DeepSeek returned `finish_reason="length"` with
+  *truncated* JSON, and cognitrace (`src/cognitrace/harness/reader.py:50-58`)
+  documents the worse case — empty content that reads as a confident answer
+  rather than an error. A trivial `{"labels":["CLEAN"]}` reply cost 39 output
+  tokens on DeepSeek, 74 on Kimi, 85 on gpt-oss.
+- `temperature=0`. Do **not** pass `seed` — Together ignores it (see
+  cognitrace `reader.py:247`).
+- **The `/v1/models` catalog lists non-serverless models.** `zai-org/GLM-5`,
+  `zai-org/GLM-4.7`, and `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8` all return
+  `400 model_not_available` and need a dedicated endpoint. Verified serverless:
+  `deepseek-ai/DeepSeek-V4-Pro`, `moonshotai/Kimi-K2.6`, `openai/gpt-oss-120b`.
+
+**Requirements:**
+1. Read the blinded pool (`id`, `event_type`, `text`) — never the meta sidecar.
+2. For each of the three models, emit
+   `research/statement_audit/labels_<model-slug>_<stamp>.jsonl` in **exactly the
+   pool schema** (`id`, `event_type`, `text`, `labels`, `notes`), so
+   `scripts/audit_report.py --labeler-b` consumes it unchanged.
+3. The codebook goes in the prompt **verbatim** from this plan's codebook table,
+   including the "judge the statement standalone" instruction. Record the
+   prompt's SHA-256 in a manifest (as cognitrace's `prompt_fingerprints()` does)
+   so a prompt edit cannot silently change what the number means.
+4. On-disk response cache keyed by `sha256(model + prompt)` so a re-run or an
+   added model never re-spends on work already done.
+5. Retry with full-jitter backoff honouring any `retry-after` header.
+6. `parse_labels` enforces the codebook: `CLEAN` exclusive, `OTHER` requires a
+   note, unknown codes rejected. One corrective retry on a violation, then
+   record the item as a parse failure. **Report the parse-failure rate** — a
+   model that cannot follow the codebook is not a usable labeler.
+7. Write a manifest recording model ids, prompt SHA, pool filename, counts, and
+   parse-failure rate per model.
+
+**Constraints:** no new *project* dependency (`openai` is invoked ad-hoc via
+`uv run --with`); never write to `~/.cognikernel/`; do not modify
+`scripts/audit_statement_quality.py`, `scripts/audit_report.py`, or
+`src/cognikernel/`; outputs are gitignored under `research/`.
