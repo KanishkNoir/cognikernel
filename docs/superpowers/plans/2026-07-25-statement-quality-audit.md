@@ -977,10 +977,19 @@ Not tasked here. It reuses every script above with `--n 400 --stratum all` plus 
   tokens on DeepSeek, 74 on Kimi, 85 on gpt-oss.
 - `temperature=0`. Do **not** pass `seed` — Together ignores it (see
   cognitrace `reader.py:247`).
-- **The `/v1/models` catalog lists non-serverless models.** `zai-org/GLM-5`,
-  `zai-org/GLM-4.7`, and `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8` all return
-  `400 model_not_available` and need a dedicated endpoint. Verified serverless:
-  `deepseek-ai/DeepSeek-V4-Pro`, `moonshotai/Kimi-K2.6`, `openai/gpt-oss-120b`.
+- **The `/v1/models` catalog lists non-serverless models, and version suffixes
+  matter.** `zai-org/GLM-5`, `zai-org/GLM-5.1`, `zai-org/GLM-4.7`, and
+  `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8` all return `400 model_not_available`
+  and need a dedicated endpoint — but **`zai-org/GLM-5.2` is serverless and
+  works** (confirmed against a working call in the sibling CogniTrace project).
+  An initial sweep missed it purely because the listing was truncated before it
+  sorted in; do not conclude a family is unavailable from one id.
+  Verified serverless and used as labelers: `deepseek-ai/DeepSeek-V4-Pro`,
+  `moonshotai/Kimi-K2.6`, `openai/gpt-oss-120b`, `zai-org/GLM-5.2`.
+- Measured reasoning overhead on a trivial `{"labels":["CLEAN"]}` reply:
+  DeepSeek 39 output tokens, Kimi 74, gpt-oss 85, **GLM-5.2 197**. GLM-5.2 alone
+  would truncate under any cap below ~200, which is why the 1024 floor is not
+  merely cautious.
 
 **Requirements:**
 1. Read the blinded pool (`id`, `event_type`, `text`) — never the meta sidecar.
