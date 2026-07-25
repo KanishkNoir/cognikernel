@@ -196,3 +196,34 @@ def test_heuristic_miss_rate_counts_human_defects_heuristic_missed():
     got = report.heuristic_miss_rate(rows, meta)
     assert got["human_defective"] == 2
     assert got["missed_by_heuristic"] == 1
+
+
+def test_load_labeled_rejects_unknown_codes(tmp_path):
+    p = _labeled(tmp_path, [
+        {"id": "e5", "event_type": "DECISION", "text": "x",
+         "labels": ["WRONG_TYPE"]},
+        {"id": "f6", "event_type": "DECISION", "text": "y",
+         "labels": ["NOT_A_REAL_CODE"]},
+    ])
+    with pytest.raises(ValueError, match="f6"):
+        report.load_labeled(p)
+
+
+def test_load_labeled_reports_every_problem_at_once(tmp_path):
+    p = _labeled(tmp_path, [
+        {"id": "g7", "event_type": "DECISION", "text": "x", "labels": []},
+        {"id": "h8", "event_type": "DECISION", "text": "y",
+         "labels": ["CLEAN", "COMPOUND"]},
+        {"id": "i9", "event_type": "DECISION", "text": "z",
+         "labels": ["OTHER"], "notes": ""},
+    ])
+    with pytest.raises(ValueError) as exc:
+        report.load_labeled(p)
+    message = str(exc.value)
+    assert "g7" in message and "h8" in message and "i9" in message
+
+
+def test_load_labeled_accepts_empty_file(tmp_path):
+    p = tmp_path / "empty.jsonl"
+    p.write_text("", encoding="utf-8")
+    assert report.load_labeled(p) == []

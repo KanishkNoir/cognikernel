@@ -129,6 +129,8 @@ def main() -> None:
     args = ap.parse_args()
 
     rows = load_labeled(args.pool)
+    if not rows:
+        sys.exit(f"no labeled rows in {args.pool} — label the pool first")
     meta_path = args.pool.with_name(args.pool.name.replace("pool_", "pool_meta_"))
     meta = {}
     if meta_path.exists():
