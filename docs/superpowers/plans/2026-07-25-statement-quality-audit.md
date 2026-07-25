@@ -968,7 +968,19 @@ Not tasked here. It reuses every script above with `--n 400 --stratum all` plus 
   Do **not** use `urllib` — Cloudflare fingerprint-blocks it with a bare
   `403 error code: 1010` that looks like an auth failure but is not.
   (`openai` is not a project dependency; run with `uv run --with openai`.)
-- **`max_tokens` must be generous (1024).** DeepSeek-V4-Pro and Kimi-K2.6 are
+- **`max_tokens` must be generous — 8192, NOT 1024.** *(Corrected after the
+  first run. The original 1024 figure below was calibrated on a trivial smoke
+  prompt and proved badly too low for the real codebook prompt: 167 of 341
+  cached responses returned `finish_reason=length`, 162 of them with empty
+  content. Every model's largest successful completion sat at the ceiling —
+  DeepSeek 1021, Kimi 1016, GLM-5.2 974 — against medians of 600–800, the
+  signature of a binding cap severing the tail. Worse, the loss was
+  **non-random**: items needing more reasoning truncated, so surviving labels
+  skewed toward CLEAN and would have biased the defect rate downward, pushing
+  the pre-registered gate toward a false "abandon". Kimi lost 82% of its rows.
+  The cache key must also include `max_tokens`, or raising the cap silently
+  replays the stale truncated responses.)*
+- Original (superseded) rationale for a generous cap: DeepSeek-V4-Pro and Kimi-K2.6 are
   reasoning models that spend hidden thinking tokens before any visible output.
   Measured: at `max_tokens=50` DeepSeek returned `finish_reason="length"` with
   *truncated* JSON, and cognitrace (`src/cognitrace/harness/reader.py:50-58`)
