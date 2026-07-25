@@ -5,26 +5,32 @@ This is offline eval construction, not a runtime feature: nothing here ships
 in the `cognikernel` package or runs during a CogniKernel session. It costs
 real API tokens and needs `TOGETHER_API_KEY`.
 
-Each of the three models labels every row in the pool independently. A model
-whose reply cannot be parsed against the codebook gets one corrective retry;
-if that also fails, the row is recorded as a parse failure (in the manifest)
-and omitted from that model's output file, rather than written with an
-invalid/empty label that would corrupt every downstream row via
-`audit_report.load_labeled`'s all-or-nothing validation. A model with a high
-parse-failure rate is not a usable labeler — report the rate, don't hide it.
+Each model labels every row in the pool independently. A reply that fails to
+parse against the codebook for a genuine reason (malformed JSON, an unknown
+code, CLEAN mixed with other codes, OTHER without a note) gets one corrective
+retry; a reply that was truncated (`finish_reason == "length"`) does NOT get
+that retry, since a codebook-correction message cannot produce tokens the
+model never generated — it is recorded as a failure directly. Either way, if
+the row ends up unresolved it is omitted from that model's output file rather
+than written with an invalid/empty label that would corrupt every downstream
+row via `audit_report.load_labeled`'s all-or-nothing validation. A model with
+a high parse-failure rate is not a usable labeler — report the rate, and
+whether it is truncation or a real codebook violation, don't hide either.
 
 Reads : research/statement_audit/pool_<stamp>.jsonl   (id, event_type, text only
         — never the pool_meta_<stamp>.jsonl sidecar; that carries blinding data)
 Writes: research/statement_audit/labels_<model-slug>_<stamp>.jsonl (pool schema,
         consumable unchanged by `scripts/audit_report.py --labeler-b`)
         research/statement_audit/manifest_<stamp>.json (models, prompt SHA-256,
-        pool filename, counts, per-model parse-failure rate)
+        pool filename, counts, per-model parse-failure and truncation rate)
         research/statement_audit/llm_cache/<sha256>.json (response cache,
-        keyed by sha256(model + prompt), so a re-run never re-spends)
+        keyed by sha256(model + prompt + max_tokens + temperature), so a
+        re-run, an added model, or a changed --max-tokens never re-spends
+        on work already done)
 
 Usage: uv run --with openai python scripts/audit_label_llm.py [--pool PATH]
            [--models deepseek-ai/DeepSeek-V4-Pro,moonshotai/Kimi-K2.6,openai/gpt-oss-120b,zai-org/GLM-5.2]
-           [--limit N]
+           [--max-tokens 8192] [--limit N]
 """
 from __future__ import annotations
 
@@ -47,14 +53,19 @@ TOGETHER_BASE_URL = "https://api.together.xyz/v1"
 MODELS = ("deepseek-ai/DeepSeek-V4-Pro", "moonshotai/Kimi-K2.6", "openai/gpt-oss-120b",
           "zai-org/GLM-5.2")
 
-# DeepSeek-V4-Pro and Kimi-K2.6 are reasoning models that spend hidden
-# thinking tokens before any visible output. At max_tokens=50, DeepSeek
-# returned finish_reason="length" with truncated JSON; the worse failure mode
-# (empty content that parses as a confident wrong answer) is avoided by a
-# generous cap. A trivial {"labels":["CLEAN"]} reply cost 39 output tokens on
-# DeepSeek, 74 on Kimi, 85 on gpt-oss — 1024 is cheap headroom, not a signal
-# we expect to use.
-_MAX_COMPLETION_TOKENS = 1024
+# DeepSeek-V4-Pro, Kimi-K2.6 and GLM-5.2 are reasoning models that spend
+# hidden thinking tokens before any visible output. An initial 1024 cap was
+# calibrated on a trivial smoke prompt ("reply with this JSON") rather than
+# the real prompt carrying the full 9-code codebook, which makes these models
+# think much harder: a live 60-row run showed max successful completions of
+# 1021/1016/974 tokens (essentially AT the 1024 ceiling) with medians of
+# 600-800, and every parse failure on 3 of 4 models was verified as
+# finish_reason="length" with EMPTY content on both attempts — token
+# starvation, not a codebook-following defect. 8192 is ~8x the observed
+# median, with headroom for the unobserved tail. Configurable via --max-tokens
+# because this number is a measured-then-corrected estimate, not a constant.
+_DEFAULT_MAX_TOKENS = 8192
+_TEMPERATURE = 0
 _MAX_ATTEMPTS = 6
 _BACKOFF_BASE_S = 2.0
 _BACKOFF_CAP_S = 30.0
@@ -277,18 +288,28 @@ def retry_call(fn, *, max_attempts: int = _MAX_ATTEMPTS, base: float = _BACKOFF_
     raise last  # type: ignore[misc]
 
 
-def _prompt_cache_key(model: str, messages: list[dict]) -> str:
-    payload = model + json.dumps(messages, sort_keys=True, ensure_ascii=False)
+def _prompt_cache_key(model: str, messages: list[dict], max_tokens: int,
+                      temperature: float = _TEMPERATURE) -> str:
+    """sha256(model + prompt + generation params). max_tokens and temperature
+    are part of the key (not just model + prompt) so that raising the cap to
+    fix truncation cannot silently replay a stale truncated response cached
+    under the old cap — a cache hit under a new max_tokens is only a hit if
+    every param that could change the output matches too."""
+    payload = json.dumps({"model": model, "messages": messages,
+                          "max_tokens": max_tokens, "temperature": temperature},
+                         sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _call_model(model: str, messages: list[dict], cache_dir: Path) -> tuple[str, str]:
+def _call_model(model: str, messages: list[dict], cache_dir: Path,
+                max_tokens: int) -> tuple[str, str]:
     """(content, finish_reason) for (model, messages), via an on-disk cache
-    keyed by sha256(model + prompt) so a re-run or an added model never
-    re-spends on work already done. finish_reason is surfaced (not just
-    logged) so a truncated ("length") reply can be told apart from a genuine
-    codebook violation when the parse-failure rate is reported."""
-    key = _prompt_cache_key(model, messages)
+    keyed by sha256(model + prompt + max_tokens + temperature) so a re-run,
+    an added model, or a raised cap never re-spends on work already done.
+    finish_reason is surfaced (not just logged) so a truncated ("length")
+    reply can be told apart from a genuine codebook violation when the
+    parse-failure rate is reported."""
+    key = _prompt_cache_key(model, messages, max_tokens)
     cache_file = cache_dir / f"{key}.json"
     if cache_file.exists():
         cached = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -298,8 +319,8 @@ def _call_model(model: str, messages: list[dict], cache_dir: Path) -> tuple[str,
 
     def _once():
         return client.chat.completions.create(
-            model=model, messages=messages, temperature=0,
-            max_tokens=_MAX_COMPLETION_TOKENS,
+            model=model, messages=messages, temperature=_TEMPERATURE,
+            max_tokens=max_tokens,
         )
 
     resp = retry_call(_once)
@@ -311,29 +332,39 @@ def _call_model(model: str, messages: list[dict], cache_dir: Path) -> tuple[str,
         "model": model,
         "content": content,
         "finish_reason": finish_reason,
+        "max_tokens": max_tokens,
+        "temperature": _TEMPERATURE,
         "usage_in": getattr(usage, "prompt_tokens", 0) or 0,
         "usage_out": getattr(usage, "completion_tokens", 0) or 0,
     }, ensure_ascii=False), encoding="utf-8")
     return content, finish_reason
 
 
-def _label_one(row: dict, model: str, cache_dir: Path) -> tuple[dict | None, bool, list[str]]:
+def _label_one(row: dict, model: str, cache_dir: Path,
+               max_tokens: int) -> tuple[dict | None, bool, list[str]]:
     """Label one pool row with one model.
 
-    Returns (output_row, parse_failed, finish_reasons). On a codebook
-    violation, one corrective retry is made; if that also fails, output_row
-    is None and the row is omitted from the output file entirely — writing
-    it with an empty or invalid label would corrupt the whole file under
-    audit_report.load_labeled's all-or-nothing validation. finish_reasons
-    lets the caller separate "model can't follow the codebook" from "1024
-    tokens wasn't enough" (finish_reason == "length") in the failure count.
+    Returns (output_row, parse_failed, finish_reasons). On a genuine parse or
+    codebook violation, one corrective retry is made; if that also fails,
+    output_row is None and the row is omitted from the output file entirely
+    — writing it with an empty or invalid label would corrupt the whole file
+    under audit_report.load_labeled's all-or-nothing validation.
+
+    The corrective retry is skipped when the first attempt's finish_reason
+    is "length": a codebook-correction message cannot produce tokens the
+    model never generated, so retrying there only doubles the spend without
+    any chance of success. That row is recorded as a failure directly.
+    finish_reasons lets the caller separate "model can't follow the
+    codebook" from "ran out of completion tokens" in the failure count.
     """
     messages = build_prompt(row)
-    raw, fr1 = _call_model(model, messages, cache_dir)
+    raw, fr1 = _call_model(model, messages, cache_dir, max_tokens)
     finish_reasons = [fr1]
     try:
         labels, notes = parse_labels(raw)
     except ValueError as first_err:
+        if fr1 == "length":
+            return None, True, finish_reasons
         correction = messages + [
             {"role": "assistant", "content": raw},
             {"role": "user", "content": (
@@ -343,7 +374,7 @@ def _label_one(row: dict, model: str, cache_dir: Path) -> tuple[dict | None, boo
                 "CLEAN alone if it applies, and a non-empty note if OTHER is used."
             )},
         ]
-        raw2, fr2 = _call_model(model, correction, cache_dir)
+        raw2, fr2 = _call_model(model, correction, cache_dir, max_tokens)
         finish_reasons.append(fr2)
         try:
             labels, notes = parse_labels(raw2)
@@ -372,6 +403,8 @@ def main() -> None:
                     help="pool jsonl (default: most recent research/statement_audit/pool_*.jsonl)")
     ap.add_argument("--models", default=",".join(MODELS))
     ap.add_argument("--limit", type=int, default=None, help="label only the first N rows (debug)")
+    ap.add_argument("--max-tokens", type=int, default=_DEFAULT_MAX_TOKENS,
+                    help="completion token cap per call (default 8192; see module docstring)")
     args = ap.parse_args()
 
     pool_path = args.pool or _latest_pool()
@@ -399,8 +432,8 @@ def main() -> None:
         "pool_file": str(pool_path),
         "n_rows": len(rows),
         "system_prompt_sha256": hashlib.sha256(_SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
-        "temperature": 0,
-        "max_tokens": _MAX_COMPLETION_TOKENS,
+        "temperature": _TEMPERATURE,
+        "max_tokens": args.max_tokens,
         "models": models,
         "per_model": {},
     }
@@ -412,7 +445,7 @@ def main() -> None:
         failed_ids: list[str] = []
         truncated_ids: list[str] = []
         for row in rows:
-            labeled, failed, finish_reasons = _label_one(row, model, CACHE_DIR)
+            labeled, failed, finish_reasons = _label_one(row, model, CACHE_DIR, args.max_tokens)
             if any(fr == "length" for fr in finish_reasons):
                 truncated_ids.append(row["id"])
             if failed:

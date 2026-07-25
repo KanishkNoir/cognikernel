@@ -305,3 +305,10 @@ def test_parse_labels_allows_multiple_non_clean_codes():
     labels, notes = llm.parse_labels(
         '{"labels": ["COMPOUND", "MISSING_SUBJECT"], "notes": ""}')
     assert set(labels) == {"COMPOUND", "MISSING_SUBJECT"}
+
+
+def test_prompt_cache_key_varies_with_max_tokens():
+    # A cap change (e.g. raising max_tokens to fix truncation) must not
+    # silently hit a cache entry generated under the old, lower cap.
+    msgs = llm.build_prompt({"id": "x", "event_type": "DECISION", "text": "t"})
+    assert llm._prompt_cache_key("m", msgs, 1024) != llm._prompt_cache_key("m", msgs, 8192)
