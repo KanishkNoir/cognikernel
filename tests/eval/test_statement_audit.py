@@ -151,3 +151,48 @@ def test_cohens_kappa_degenerate_column_is_none_not_crash():
     # Neither labeler ever used the code — kappa undefined, must not divide by zero
     k = report.cohens_kappa([set(), set()], [set(), set()], ("NEVER",))
     assert k["NEVER"] is None
+
+
+def _labeled(tmp_path, rows):
+    p = tmp_path / "pool.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    return p
+
+
+def test_load_labeled_rejects_unlabeled_rows(tmp_path):
+    p = _labeled(tmp_path, [
+        {"id": "a1", "event_type": "DECISION", "text": "x", "labels": ["CLEAN"]},
+        {"id": "b2", "event_type": "DECISION", "text": "y", "labels": []},
+    ])
+    with pytest.raises(ValueError, match="b2"):
+        report.load_labeled(p)
+
+
+def test_defect_rate_counts_any_non_clean_code():
+    rows = [{"labels": ["CLEAN"]}, {"labels": ["WRONG_TYPE"]},
+            {"labels": ["COMPOUND", "MISSING_SUBJECT"]}, {"labels": ["CLEAN"]}]
+    assert report.defect_rate(rows) == (2, 4)
+
+
+def test_clean_is_exclusive_and_rejected_when_mixed(tmp_path):
+    p = _labeled(tmp_path, [{"id": "c3", "event_type": "DECISION", "text": "z",
+                             "labels": ["CLEAN", "WRONG_TYPE"]}])
+    with pytest.raises(ValueError, match="c3"):
+        report.load_labeled(p)
+
+
+def test_other_requires_a_note(tmp_path):
+    p = _labeled(tmp_path, [{"id": "d4", "event_type": "DECISION", "text": "z",
+                             "labels": ["OTHER"], "notes": ""}])
+    with pytest.raises(ValueError, match="d4"):
+        report.load_labeled(p)
+
+
+def test_heuristic_miss_rate_counts_human_defects_heuristic_missed():
+    rows = [{"id": "a", "labels": ["WRONG_TYPE"]}, {"id": "b", "labels": ["CLEAN"]},
+            {"id": "c", "labels": ["COMPOUND"]}]
+    meta = {"a": {"heuristic": []}, "b": {"heuristic": []},
+            "c": {"heuristic": ["NOT_DURABLE"]}}
+    got = report.heuristic_miss_rate(rows, meta)
+    assert got["human_defective"] == 2
+    assert got["missed_by_heuristic"] == 1
