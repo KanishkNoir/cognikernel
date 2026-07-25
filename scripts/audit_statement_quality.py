@@ -94,10 +94,12 @@ def iter_statements(store_dir: Path) -> Iterator[dict]:
                 yield {"store": Path(db).stem, "event_type": event_type, "text": text}
 
 
-def statement_id(store: str, text: str) -> str:
-    """Stable id for one statement. Store-scoped so identical text in two
-    projects stays two rows — cross-project repetition is itself a finding."""
-    return hashlib.sha256(f"{store}\x00{text}".encode("utf-8")).hexdigest()[:12]
+def statement_id(store: str, text: str, occurrence: int = 0) -> str:
+    """Stable id for one statement occurrence. Store-scoped so identical text in
+    two projects stays two rows, and occurrence-scoped so identical text repeated
+    within one store does not collapse to a single id."""
+    return hashlib.sha256(
+        f"{store}\x00{text}\x00{occurrence}".encode("utf-8")).hexdigest()[:12]
 
 
 def stratified_sample(rows: list[dict], n: int, stratum: str, seed: int) -> list[dict]:
@@ -119,9 +121,9 @@ def stratified_sample(rows: list[dict], n: int, stratum: str, seed: int) -> list
         by_type[r["event_type"]].append(r)
 
     rng = random.Random(seed)
-    for bucket in by_type.values():
-        bucket.sort(key=lambda r: (r["store"], r["text"]))  # stable pre-shuffle order
-        rng.shuffle(bucket)
+    for t in sorted(by_type):
+        by_type[t].sort(key=lambda r: (r["store"], r["text"]))
+        rng.shuffle(by_type[t])
 
     out: list[dict] = []
     types = sorted(by_type)
@@ -160,10 +162,14 @@ def main() -> None:
 
     pool_path = OUT_DIR / f"pool_{stamp}.jsonl"
     meta_path = OUT_DIR / f"pool_meta_{stamp}.jsonl"
+    occurrence_counts: dict[tuple[str, str], int] = collections.defaultdict(int)
     with pool_path.open("w", encoding="utf-8") as pf, \
          meta_path.open("w", encoding="utf-8") as mf:
         for r in sample:
-            sid = statement_id(r["store"], r["text"])
+            key = (r["store"], r["text"])
+            occurrence = occurrence_counts[key]
+            occurrence_counts[key] += 1
+            sid = statement_id(r["store"], r["text"], occurrence)
             # BLINDED: labeler sees only id, type, text. No store, no heuristic.
             pf.write(json.dumps({"id": sid, "event_type": r["event_type"],
                                  "text": r["text"], "labels": [], "notes": ""},

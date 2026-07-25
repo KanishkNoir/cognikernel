@@ -97,3 +97,18 @@ def test_clean_stratum_excludes_heuristically_flagged():
 
 def test_stratified_sample_caps_at_available_rows():
     assert len(audit.stratified_sample(_rows(2), n=500, stratum="all", seed=1)) == 8
+
+
+def test_statement_id_distinguishes_repeated_text_in_one_store():
+    a = audit.statement_id("store1", "same text", 0)
+    b = audit.statement_id("store1", "same text", 1)
+    assert a != b
+    assert audit.statement_id("store1", "same text") == a  # default occurrence=0
+
+
+def test_stratified_sample_is_order_independent():
+    rows = _rows()
+    shuffled = list(reversed(rows))
+    a = audit.stratified_sample(rows, n=20, stratum="all", seed=7)
+    b = audit.stratified_sample(shuffled, n=20, stratum="all", seed=7)
+    assert [r["text"] for r in a] == [r["text"] for r in b]
