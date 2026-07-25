@@ -92,3 +92,103 @@ def iter_statements(store_dir: Path) -> Iterator[dict]:
                 continue
             if text:
                 yield {"store": Path(db).stem, "event_type": event_type, "text": text}
+
+
+def statement_id(store: str, text: str) -> str:
+    """Stable id for one statement. Store-scoped so identical text in two
+    projects stays two rows — cross-project repetition is itself a finding."""
+    return hashlib.sha256(f"{store}\x00{text}".encode("utf-8")).hexdigest()[:12]
+
+
+def stratified_sample(rows: list[dict], n: int, stratum: str, seed: int) -> list[dict]:
+    """Deterministic sample balanced across event_type.
+
+    stratum: "clean" (heuristic found nothing) | "flagged" | "all".
+    Returns fewer than n when the pool is smaller. Round-robins across types so
+    a rare type (APPROACH_ABANDONED) is not swamped by DECISION.
+    """
+    if stratum == "clean":
+        pool = [r for r in rows if not classify_heuristic(r["text"])]
+    elif stratum == "flagged":
+        pool = [r for r in rows if classify_heuristic(r["text"])]
+    else:
+        pool = list(rows)
+
+    by_type: dict[str, list[dict]] = collections.defaultdict(list)
+    for r in pool:
+        by_type[r["event_type"]].append(r)
+
+    rng = random.Random(seed)
+    for bucket in by_type.values():
+        bucket.sort(key=lambda r: (r["store"], r["text"]))  # stable pre-shuffle order
+        rng.shuffle(bucket)
+
+    out: list[dict] = []
+    types = sorted(by_type)
+    while len(out) < n and any(by_type[t] for t in types):
+        for t in types:
+            if by_type[t] and len(out) < n:
+                out.append(by_type[t].pop())
+    return out
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--n", type=int, default=60, help="statements to sample")
+    ap.add_argument("--stratum", choices=("clean", "flagged", "all"), default="clean")
+    ap.add_argument("--seed", type=int, default=1106)
+    ap.add_argument("--store-dir", type=Path, default=STORE_DIR)
+    args = ap.parse_args()
+
+    rows = list(iter_statements(args.store_dir))
+    if not rows:
+        sys.exit(f"no statements found under {args.store_dir}")
+
+    counts = collections.Counter()
+    per_type = collections.defaultdict(collections.Counter)
+    for r in rows:
+        hits = classify_heuristic(r["text"])
+        for h in hits:
+            counts[h] += 1
+            per_type[r["event_type"]][h] += 1
+        counts["_any" if hits else "_none"] += 1
+        per_type[r["event_type"]]["_any" if hits else "_none"] += 1
+
+    sample = stratified_sample(rows, args.n, args.stratum, args.seed)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    pool_path = OUT_DIR / f"pool_{stamp}.jsonl"
+    meta_path = OUT_DIR / f"pool_meta_{stamp}.jsonl"
+    with pool_path.open("w", encoding="utf-8") as pf, \
+         meta_path.open("w", encoding="utf-8") as mf:
+        for r in sample:
+            sid = statement_id(r["store"], r["text"])
+            # BLINDED: labeler sees only id, type, text. No store, no heuristic.
+            pf.write(json.dumps({"id": sid, "event_type": r["event_type"],
+                                 "text": r["text"], "labels": [], "notes": ""},
+                                ensure_ascii=False) + "\n")
+            mf.write(json.dumps({"id": sid, "store": r["store"],
+                                 "heuristic": sorted(classify_heuristic(r["text"])),
+                                 "stratum": args.stratum, "seed": args.seed},
+                                ensure_ascii=False) + "\n")
+
+    summary = {
+        "stamp": stamp, "stores_scanned": len(set(r["store"] for r in rows)),
+        "statements_total": len(rows), "sampled": len(sample),
+        "stratum": args.stratum, "seed": args.seed,
+        "heuristic_counts": dict(counts),
+        "heuristic_by_type": {k: dict(v) for k, v in per_type.items()},
+    }
+    (OUT_DIR / f"heuristic_{stamp}.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8")
+
+    print(f"statements: {len(rows)} across {summary['stores_scanned']} stores")
+    print(f"heuristic flagged: {counts['_any']} "
+          f"({100 * counts['_any'] / len(rows):.1f}%)")
+    print(f"\nwrote {pool_path}  ({len(sample)} to label)")
+    print(f"wrote {meta_path}  (do NOT open before labeling)")
+
+
+if __name__ == "__main__":
+    main()

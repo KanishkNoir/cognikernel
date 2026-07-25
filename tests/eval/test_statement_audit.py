@@ -54,3 +54,46 @@ def test_classify_heuristic_passes_clean_statements():
 def test_classify_heuristic_returns_only_codebook_codes():
     got = audit.classify_heuristic("Now update it. |.")
     assert got <= set(audit.DEFECT_CODES)
+
+
+def _rows(n_per_type=25):
+    out = []
+    for t in ("DECISION", "CONSTRAINT_HARD", "CONSTRAINT_SOFT",
+              "APPROACH_ABANDONED_DO_NOT_RETRY"):
+        for i in range(n_per_type):
+            out.append({"store": f"s{i % 3}", "event_type": t,
+                        "text": f"The {t.lower()} number {i} is recorded plainly here."})
+    return out
+
+
+def test_statement_id_is_stable_and_store_scoped():
+    a = audit.statement_id("store1", "same text")
+    assert a == audit.statement_id("store1", "same text")
+    assert a != audit.statement_id("store2", "same text")
+    assert len(a) == 12
+
+
+def test_stratified_sample_is_deterministic_under_seed():
+    rows = _rows()
+    first = audit.stratified_sample(rows, n=20, stratum="all", seed=7)
+    second = audit.stratified_sample(rows, n=20, stratum="all", seed=7)
+    assert [r["text"] for r in first] == [r["text"] for r in second]
+    assert audit.stratified_sample(rows, n=20, stratum="all", seed=8) != first
+
+
+def test_stratified_sample_balances_event_types():
+    got = audit.stratified_sample(_rows(), n=20, stratum="all", seed=1)
+    counts = collections.Counter(r["event_type"] for r in got)
+    assert len(got) == 20
+    assert max(counts.values()) - min(counts.values()) <= 1
+
+
+def test_clean_stratum_excludes_heuristically_flagged():
+    rows = _rows() + [{"store": "s9", "event_type": "DECISION",
+                       "text": "Now update the router config."}]
+    got = audit.stratified_sample(rows, n=30, stratum="clean", seed=3)
+    assert all(audit.classify_heuristic(r["text"]) == set() for r in got)
+
+
+def test_stratified_sample_caps_at_available_rows():
+    assert len(audit.stratified_sample(_rows(2), n=500, stratum="all", seed=1)) == 8
