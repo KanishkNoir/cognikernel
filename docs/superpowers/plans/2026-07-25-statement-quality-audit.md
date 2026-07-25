@@ -844,7 +844,7 @@ git add .gitignore && git commit -m "chore: gitignore statement-audit pools"
 - [ ] **Step 2: Generate the clean-bucket pilot pool**
 
 Run: `uv run python scripts/audit_statement_quality.py --n 60 --stratum clean`
-Expected: prints corpus totals (~6,400 statements across ~163 stores) and writes three files under `research/statement_audit/`.
+Expected: prints corpus totals (6,434 statements across 45 contributing stores; 163 store files scanned, 118 holding no typed statements) and writes three files under `research/statement_audit/`.
 
 - [ ] **Step 3: Label the pool**
 

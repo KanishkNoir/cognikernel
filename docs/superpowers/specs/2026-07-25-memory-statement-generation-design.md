@@ -19,20 +19,29 @@ sentence happened to appear in the transcript.
 
 ### Preliminary audit (scaffolding — must be redone properly)
 
-A heuristic sweep of **163 project stores / 6,434 active statements**
-(`DECISION`, `CONSTRAINT_HARD`, `CONSTRAINT_SOFT`, `APPROACH_ABANDONED`):
+A heuristic sweep of **6,434 active statements** (`DECISION`, `CONSTRAINT_HARD`,
+`CONSTRAINT_SOFT`, `APPROACH_ABANDONED`) drawn from **45 contributing project
+stores**. 163 store files were scanned in total; 118 of them hold no typed
+statements at all — mostly ephemeral `ck-honor-exec-*` benchmark projects. All
+163 opened cleanly and none were skipped, so the sweep is complete rather than
+undercounted.
 
 | Defect class (surface heuristics) | Rate |
 |---|---|
-| dangling anaphora / deictic opener | 4.3% |
-| workflow narration | 3.8% |
-| fragment (<5 words) | 2.1% |
-| meta-talk about CogniKernel itself | 1.5% |
-| markdown / table / box-drawing artifact | 0.4% |
-| **any surface flag** | **11.9%** |
+| `DANGLING_REFERENCE` — anaphora / deictic / discourse opener | 4.5% |
+| `NOT_DURABLE` — workflow narration, status chatter | 3.8% |
+| `NOT_A_STATEMENT` — fragment, table row, markdown debris | 2.5% |
+| `META_TALK` — about CogniKernel itself, not the host project | 1.5% |
+| **any surface flag** | **12.1%** (778 / 6,434) |
 
-By type: `APPROACH_ABANDONED` 18.3%, `DECISION` 15.7%, `CONSTRAINT_SOFT` 10.9%,
-`CONSTRAINT_HARD` 6.3%.
+By type: `APPROACH_ABANDONED` 18.6%, `DECISION` 15.7%, `CONSTRAINT_SOFT` 10.9%,
+`CONSTRAINT_HARD` 6.2%.
+
+*(Figures are from the productionised `scripts/audit_statement_quality.py`,
+`research/statement_audit/heuristic_20260725-193802.json`. They supersede an
+earlier scratchpad estimate of 11.9% / "163 stores" — the regex set gained three
+patterns, and the store count now reports contributing stores rather than files
+scanned.)*
 
 **Those heuristics measure a lower bound and must not be quoted as the result.**
 A manual read of 11 statements from the bucket the heuristics called *clean*
@@ -79,7 +88,7 @@ run, and a stratified human preference study.
 > Phase A publishes alone.
 
 Phase A is worth doing on its own terms regardless of the outcome: a
-statement-quality audit of 6,434 real stored statements across 163 stores, with
+statement-quality audit of 6,434 real stored statements across 45 stores, with
 two-labeler agreement, is a contribution in itself and fits this branch's
 framing — measuring where CogniKernel underperforms — without needing the
 generator to justify it.
