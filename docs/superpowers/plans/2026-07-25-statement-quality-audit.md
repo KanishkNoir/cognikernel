@@ -6,7 +6,7 @@
 
 **Architecture:** Two standalone research scripts following the `scripts/model_eval.py` pattern — one sweeps all project stores and emits a blinded, stratified labeling pool; one reads completed human labels and computes rates, confidence intervals, and inter-labeler agreement. Pure helper functions live at module top and are covered by a pytest gate in `tests/eval/`. No `src/cognikernel/` changes: this is research tooling, and the shipped package is guarded by import-linter layer contracts.
 
-**Tech Stack:** Python 3.11/3.12, stdlib only (`sqlite3`, `json`, `re`, `random`, `statistics`, `math`), pytest. No new dependencies, no network, no API keys.
+**Tech Stack:** Python 3.11/3.12, stdlib only (`sqlite3`, `json`, `re`, `random`, `math`, `hashlib`, `collections`), pytest. No new dependencies, no network, no API keys.
 
 ## Global Constraints
 
@@ -30,7 +30,7 @@ Copied from `docs/superpowers/specs/2026-07-25-memory-statement-generation-desig
 | `scripts/audit_statement_quality.py` (create) | Sweep stores → classify by heuristic → stratified sample → write blinded pool + sidecar meta + heuristic summary |
 | `scripts/audit_report.py` (create) | Read completed labels → defect rates, Wilson CIs, Cohen's kappa, heuristic miss rate → results JSON + printed report |
 | `tests/eval/test_statement_audit.py` (create) | pytest gate over the pure helpers in both scripts |
-| `research/statement_audit/` (create, gitignored outputs) | pool, meta, labels, results |
+| `research/statement_audit/` (create) | pool + meta (gitignored — raw project memory), heuristic summary and results JSON (committed) |
 | `docs/superpowers/specs/2026-07-25-memory-statement-generation-design.md` (modify, Task 6) | record the A0 outcome and the decision |
 
 Scripts are not a package (nothing in `tests/` imports `scripts/` today), so the test loads them by path with `importlib.util`. This avoids adding `scripts/__init__.py` and changing how 40+ existing scripts resolve.
