@@ -118,5 +118,7 @@ checkpoints/
 .pytest_tmp/
 analysis_gcogni/
 
-# statement-audit pools contain raw project memory
+# statement-audit pools contain raw project memory.
+# Redundant under the blanket research/ rule above -- kept as defence-in-depth,
+# and stays load-bearing if research/ is ever narrowed to track eval sets.
 research/statement_audit/pool*.jsonl

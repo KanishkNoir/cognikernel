@@ -862,12 +862,30 @@ Do **not** open `pool_meta_<stamp>.jsonl` while labeling — it carries the heur
 Run: `uv run python scripts/audit_report.py research/statement_audit/pool_<stamp>.jsonl`
 Expected: per-code and per-type tables, the heuristic miss rate, and a results JSON.
 
-- [ ] **Step 5: Commit the results (not the pool)**
+- [ ] **Step 5: Do NOT commit the audit outputs — transcribe the numbers instead**
 
-```bash
-git add research/statement_audit/results_*.json research/statement_audit/heuristic_*.json
-git commit -m "chore(audit): A0 pilot results"
-```
+**Amended during execution (human ruling).** This step originally said to commit
+`results_*.json` and `heuristic_*.json`. That contradicted an established repo
+convention discovered mid-execution: `.gitignore:4` ignores **all** of
+`research/`, and zero files under it are tracked anywhere — including
+`research/model_eval/salience_eval.jsonl`, the frozen 416-row eval. Research data
+stays out of git here.
+
+So: audit outputs remain on disk only. The authoritative numbers are transcribed
+into the **tracked spec** in Task 6, which is what a later reader cites. Record
+the source filenames (`heuristic_<stamp>.json`, `results_<stamp>.json`) in the
+spec so the on-disk artifact behind each number is identifiable.
+
+Known cost, stated rather than hidden: the raw results are not reproducible from
+a fresh clone. Re-running `scripts/audit_statement_quality.py` reproduces the
+*sweep* deterministically (fixed seed), but not the human labels — those exist
+only in the local pool file. **Back up the labeled pool outside the repo before
+anything runs `git clean -fdx`.**
+
+The `research/statement_audit/pool*.jsonl` rule added in Step 1 is redundant
+under the blanket `research/` rule. Keep it anyway: it is defence-in-depth for a
+file containing raw project memory, and it stays load-bearing if `research/` is
+ever narrowed to track eval sets.
 
 ---
 
