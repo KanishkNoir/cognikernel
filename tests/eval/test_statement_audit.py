@@ -312,3 +312,145 @@ def test_prompt_cache_key_varies_with_max_tokens():
     # silently hit a cache entry generated under the old, lower cap.
     msgs = llm.build_prompt({"id": "x", "event_type": "DECISION", "text": "t"})
     assert llm._prompt_cache_key("m", msgs, 1024) != llm._prompt_cache_key("m", msgs, 8192)
+
+
+verify = _load("audit_verify_subset")
+
+
+def test_vote_bin_counts_defectives():
+    """vote_bin counts labelers who marked defective (any non-CLEAN code)."""
+    # All four marked CLEAN
+    assert verify.vote_bin([set() for _ in range(4)]) == 0
+    # One marked defective
+    assert verify.vote_bin([{"DANGLING_REFERENCE"}, set(), set(), set()]) == 1
+    # Two marked defective
+    assert verify.vote_bin([{"COMPOUND"}, {"WRONG_TYPE"}, set(), set()]) == 2
+    # All four marked defective (different codes)
+    assert verify.vote_bin([{"DANGLING_REFERENCE"}, {"WRONG_TYPE"},
+                            {"COMPOUND"}, {"OTHER"}]) == 4
+
+
+def test_vote_bin_clean_only_is_not_defective():
+    """vote_bin recognizes that CLEAN-only means not defective."""
+    # A set with only CLEAN should be treated as clean (no defect)
+    assert verify.vote_bin([{"CLEAN"}, set(), set(), set()]) == 0
+    assert verify.vote_bin([{"CLEAN"}, {"CLEAN"}, {"CLEAN"}, {"CLEAN"}]) == 0
+
+
+def test_proportional_allocation_sums_to_n():
+    """proportional_allocation allocates exactly n slots when possible."""
+    bin_counts = {0: 50, 1: 3, 2: 2, 3: 2, 4: 1}  # total 58
+    alloc = verify.proportional_allocation(bin_counts, 20)
+    assert sum(alloc.values()) == 20
+
+
+def test_proportional_allocation_no_empty_bin_if_has_members():
+    """proportional_allocation gives every non-empty bin at least 1 if possible."""
+    bin_counts = {0: 50, 1: 3, 2: 2, 3: 2, 4: 1}
+    alloc = verify.proportional_allocation(bin_counts, 20)
+    for bin_id, count in bin_counts.items():
+        if count > 0:
+            assert alloc[bin_id] > 0, f"bin {bin_id} has members but got 0 allocation"
+
+
+def test_proportional_allocation_caps_at_bin_size():
+    """proportional_allocation never allocates more than a bin has members."""
+    bin_counts = {0: 50, 1: 3, 2: 2, 3: 2, 4: 1}
+    alloc = verify.proportional_allocation(bin_counts, 20)
+    for bin_id, count in bin_counts.items():
+        assert alloc[bin_id] <= count
+
+
+def test_proportional_allocation_smaller_n_than_bins():
+    """proportional_allocation with n < number of bins uses largest-remainder."""
+    bin_counts = {0: 50, 1: 3, 2: 2, 3: 2, 4: 1}
+    alloc = verify.proportional_allocation(bin_counts, 5)
+    assert sum(alloc.values()) == 5
+    # Smallest bins should still get allocated
+    assert alloc[4] > 0  # bin with 1 member
+
+
+def test_proportional_allocation_n_zero():
+    """proportional_allocation with n=0 returns all zeros."""
+    bin_counts = {0: 50, 1: 3}
+    alloc = verify.proportional_allocation(bin_counts, 0)
+    assert all(v == 0 for v in alloc.values())
+
+
+def test_proportional_allocation_total_less_than_n():
+    """proportional_allocation caps sum at total members when n > total."""
+    bin_counts = {0: 5, 1: 3, 2: 2}  # total 10
+    alloc = verify.proportional_allocation(bin_counts, 20)
+    assert sum(alloc.values()) == 10
+
+
+def test_select_subset_is_deterministic():
+    """select_subset returns same result under same seed."""
+    rows_by_bin = {0: ["a", "b", "c"], 1: ["d", "e"], 2: ["f", "g", "h"]}
+    alloc = {0: 2, 1: 1, 2: 1}
+    first = verify.select_subset(rows_by_bin, alloc, seed=42)
+    second = verify.select_subset(rows_by_bin, alloc, seed=42)
+    assert first == second
+
+
+def test_select_subset_differs_under_different_seed():
+    """select_subset returns different result with different seed."""
+    rows_by_bin = {0: ["a", "b", "c"], 1: ["d", "e"], 2: ["f", "g", "h"]}
+    alloc = {0: 2, 1: 1, 2: 1}
+    first = verify.select_subset(rows_by_bin, alloc, seed=42)
+    second = verify.select_subset(rows_by_bin, alloc, seed=43)
+    # Could theoretically collide, but extremely unlikely with these inputs
+    assert first != second
+
+
+def test_select_subset_order_independent():
+    """select_subset is independent of dict/list ordering."""
+    rows_by_bin = {0: ["a", "b", "c"], 1: ["d", "e"], 2: ["f", "g", "h"]}
+    rows_by_bin_rev = {2: ["h", "g", "f"], 1: ["e", "d"], 0: ["c", "b", "a"]}
+    alloc = {0: 2, 1: 1, 2: 1}
+    first = verify.select_subset(rows_by_bin, alloc, seed=42)
+    second = verify.select_subset(rows_by_bin_rev, alloc, seed=42)
+    assert first == second
+
+
+def test_select_subset_respects_allocation():
+    """select_subset selects exactly the allocated number from each bin."""
+    rows_by_bin = {0: list("abcdefghij"), 1: list("klmnopqrst"), 2: list("uvwxyz")}
+    alloc = {0: 3, 1: 2, 2: 1}
+    selected = verify.select_subset(rows_by_bin, alloc, seed=100)
+    assert len(selected) == 6
+    # Verify all selections are from the right bins (rough check)
+    bin0 = set("abcdefghij")
+    bin1 = set("klmnopqrst")
+    bin2 = set("uvwxyz")
+    from_bin0 = sum(1 for s in selected if s in bin0)
+    from_bin1 = sum(1 for s in selected if s in bin1)
+    from_bin2 = sum(1 for s in selected if s in bin2)
+    assert from_bin0 == 3
+    assert from_bin1 == 2
+    assert from_bin2 == 1
+
+
+def test_verify_rows_has_exactly_five_keys():
+    """verify_rows emits rows with exactly the five pool-schema keys."""
+    pool_by_id = {
+        "id1": {"id": "id1", "event_type": "DECISION", "text": "Some text.",
+                "labels": [], "notes": ""},
+        "id2": {"id": "id2", "event_type": "CONSTRAINT_HARD", "text": "Another.",
+                "labels": [], "notes": ""},
+    }
+    selected_ids = ["id1", "id2"]
+    rows = verify.verify_rows(selected_ids, pool_by_id)
+    assert len(rows) == 2
+    for row in rows:
+        assert set(row.keys()) == {"id", "event_type", "text", "labels", "notes"}
+        assert row["labels"] == []
+
+
+def test_verify_rows_fails_if_id_missing_from_pool():
+    """verify_rows exits loudly if a selected id is not in the pool."""
+    pool_by_id = {"id1": {"id": "id1", "event_type": "DECISION", "text": "x",
+                          "labels": [], "notes": ""}}
+    selected_ids = ["id1", "id_missing"]
+    with pytest.raises(SystemExit):
+        verify.verify_rows(selected_ids, pool_by_id)
