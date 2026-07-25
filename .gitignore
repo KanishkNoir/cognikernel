@@ -117,3 +117,6 @@ checkpoints/
 .bench_dbs/
 .pytest_tmp/
 analysis_gcogni/
+
+# statement-audit pools contain raw project memory
+research/statement_audit/pool*.jsonl
