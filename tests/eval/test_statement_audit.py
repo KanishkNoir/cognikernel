@@ -31,6 +31,7 @@ def _load(name: str):
 
 
 audit = _load("audit_statement_quality")
+report = _load("audit_report")
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -112,3 +113,41 @@ def test_stratified_sample_is_order_independent():
     a = audit.stratified_sample(rows, n=20, stratum="all", seed=7)
     b = audit.stratified_sample(shuffled, n=20, stratum="all", seed=7)
     assert [r["text"] for r in a] == [r["text"] for r in b]
+
+
+def test_wilson_ci_known_value():
+    # 15/60 = 0.25; Wilson 95% CI is approx (0.158, 0.372)
+    lo, hi = report.wilson_ci(15, 60)
+    assert lo == pytest.approx(0.158, abs=0.002)
+    assert hi == pytest.approx(0.372, abs=0.002)
+
+
+def test_wilson_ci_handles_zero_and_full():
+    # At p=0 the centre and half-width are mathematically equal, so the bound is
+    # 0 up to float error — assert with a tolerance, not ==.
+    assert report.wilson_ci(0, 30)[0] == pytest.approx(0.0, abs=1e-9)
+    assert report.wilson_ci(30, 30)[1] == pytest.approx(1.0, abs=1e-9)
+
+
+def test_wilson_ci_empty_sample_is_full_interval():
+    assert report.wilson_ci(0, 0) == (0.0, 1.0)
+
+
+def test_cohens_kappa_perfect_agreement():
+    a = [{"WRONG_TYPE"}, set(), {"COMPOUND"}, set()]
+    k = report.cohens_kappa(a, list(a), ("WRONG_TYPE", "COMPOUND"))
+    assert k["WRONG_TYPE"] == pytest.approx(1.0)
+    assert k["_mean"] == pytest.approx(1.0)
+
+
+def test_cohens_kappa_chance_agreement_is_zero():
+    # A says code on first half, B says code on alternating items -> ~chance
+    a = [{"X"}, {"X"}, set(), set()]
+    b = [{"X"}, set(), {"X"}, set()]
+    assert report.cohens_kappa(a, b, ("X",))["X"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_cohens_kappa_degenerate_column_is_none_not_crash():
+    # Neither labeler ever used the code — kappa undefined, must not divide by zero
+    k = report.cohens_kappa([set(), set()], [set(), set()], ("NEVER",))
+    assert k["NEVER"] is None
