@@ -227,3 +227,81 @@ def test_load_labeled_accepts_empty_file(tmp_path):
     p = tmp_path / "empty.jsonl"
     p.write_text("", encoding="utf-8")
     assert report.load_labeled(p) == []
+
+
+llm = _load("audit_label_llm")
+
+
+def test_build_prompt_carries_codebook_and_statement():
+    row = {"id": "x1", "event_type": "DECISION", "text": "Some statement text."}
+    msgs = llm.build_prompt(row)
+    assert msgs[0]["role"] == "system"
+    for code in ("DANGLING_REFERENCE", "NOT_A_STATEMENT", "WRONG_TYPE", "NOT_DURABLE",
+                 "META_TALK", "COMPOUND", "MISSING_SUBJECT", "OTHER", "CLEAN"):
+        assert code in msgs[0]["content"]
+    assert "standalone" in msgs[0]["content"].lower()
+    assert msgs[-1]["role"] == "user"
+    assert "Some statement text." in msgs[-1]["content"]
+    assert "DECISION" in msgs[-1]["content"]
+
+
+def test_parse_labels_accepts_plain_json():
+    labels, notes = llm.parse_labels('{"labels": ["CLEAN"], "notes": ""}')
+    assert labels == ["CLEAN"]
+    assert notes == ""
+
+
+def test_parse_labels_extracts_json_from_fenced_prose():
+    raw = ('Sure, here is my answer:\n```json\n'
+           '{"labels": ["WRONG_TYPE"], "notes": ""}\n```\nLet me know if you need more.')
+    labels, notes = llm.parse_labels(raw)
+    assert labels == ["WRONG_TYPE"]
+
+
+def test_parse_labels_prefers_last_json_object_when_several():
+    raw = ('First I considered {"labels": ["CLEAN"]} but on reflection, '
+           '{"labels": ["COMPOUND"], "notes": ""}')
+    labels, notes = llm.parse_labels(raw)
+    assert labels == ["COMPOUND"]
+
+
+def test_parse_labels_rejects_clean_mixed_with_other_codes():
+    with pytest.raises(ValueError):
+        llm.parse_labels('{"labels": ["CLEAN", "COMPOUND"], "notes": ""}')
+
+
+def test_parse_labels_rejects_other_without_a_note():
+    with pytest.raises(ValueError):
+        llm.parse_labels('{"labels": ["OTHER"], "notes": ""}')
+
+
+def test_parse_labels_accepts_other_with_a_note():
+    labels, notes = llm.parse_labels('{"labels": ["OTHER"], "notes": "unclear reason"}')
+    assert labels == ["OTHER"]
+    assert notes == "unclear reason"
+
+
+def test_parse_labels_rejects_unknown_codes():
+    with pytest.raises(ValueError):
+        llm.parse_labels('{"labels": ["NOT_A_REAL_CODE"], "notes": ""}')
+
+
+def test_parse_labels_rejects_unparseable_text():
+    with pytest.raises(ValueError):
+        llm.parse_labels("I'm not able to help with that request.")
+
+
+def test_parse_labels_rejects_empty_response():
+    with pytest.raises(ValueError):
+        llm.parse_labels("")
+
+
+def test_parse_labels_is_case_insensitive_on_codes():
+    labels, notes = llm.parse_labels('{"labels": ["clean"], "notes": ""}')
+    assert labels == ["CLEAN"]
+
+
+def test_parse_labels_allows_multiple_non_clean_codes():
+    labels, notes = llm.parse_labels(
+        '{"labels": ["COMPOUND", "MISSING_SUBJECT"], "notes": ""}')
+    assert set(labels) == {"COMPOUND", "MISSING_SUBJECT"}
