@@ -1031,3 +1031,98 @@ Not tasked here. It reuses every script above with `--n 400 --stratum all` plus 
 `uv run --with`); never write to `~/.cognikernel/`; do not modify
 `scripts/audit_statement_quality.py`, `scripts/audit_report.py`, or
 `src/cognikernel/`; outputs are gitignored under `research/`.
+
+---
+
+## Codebook v2 (pre-registered before use — added during execution)
+
+**Why v2 exists.** v1 produced a robust aggregate defect rate but poor per-code
+agreement (κ 0.17–0.55 against the codebook author, *worse* than the models'
+0.34–0.58 with each other). Diagnosing the actual disagreements on the 20
+five-labeler statements showed the failure is **not** taxonomy overlap, which
+was the first hypothesis:
+
+| Confusion | Count |
+|---|---|
+| `CLEAN` ↔ `WRONG_TYPE` | 20 |
+| `CLEAN` ↔ `DANGLING_REFERENCE` | 15 |
+| `CLEAN` ↔ `NOT_A_STATEMENT` | 13 |
+| `CLEAN` ↔ `MISSING_SUBJECT` | 8 |
+| `DANGLING_REFERENCE` ↔ `WRONG_TYPE` | 6 |
+| `COMPOUND` ↔ `DANGLING_REFERENCE` | 6 |
+| `NOT_A_STATEMENT` ↔ `WRONG_TYPE` | 5 |
+
+The dominant disagreement is **whether a statement is defective at all**, not
+which defect applies — a *severity threshold* problem. Of items where any
+labeler applied `WRONG_TYPE`, 0% were unanimous; likewise `NOT_A_STATEMENT`,
+`COMPOUND`, `MISSING_SUBJECT`, `NOT_DURABLE`. Even `CLEAN` was unanimous only
+23% of the time. v1's instruction — "judge standalone: is it correct and
+comprehensible" — is an aesthetic judgment, not a test.
+
+v2 changes exactly two things. Codes and their definitions are otherwise
+**unchanged**, so v1 and v2 results are comparable.
+
+### v2 addition 1 — the bright line (replaces "correct and comprehensible")
+
+> Mark a statement **defective only if** injecting this exact text into a future
+> session as authoritative project memory would cause a competent agent to **act
+> wrongly, or be unable to act**. Mild awkwardness, terseness, or informality
+> that still conveys the fact correctly is `CLEAN`.
+
+Anchoring examples, which are part of the instrument:
+
+- `CLEAN` — *"The cap constant lives next to the slot registry so it's easy to
+  find and tune."* Informal, but an agent can act on it.
+- `CLEAN` — *"No component may mutate config at runtime."* Terse and complete.
+- **Defective** — *"With it, you see three sibling spans with relay.attempt=0,1,2."*
+  An agent cannot resolve "it", so it cannot act.
+- **Defective** — *"Non-zero temperature means the caller explicitly wants
+  non-deterministic output."* Filed as `CONSTRAINT_HARD`; an agent would enforce
+  a definition as if it were a rule.
+
+### v2 addition 2 — precedence (first match wins; `COMPOUND` is additive)
+
+Apply in order and stop at the first that matches, *except* `COMPOUND`, which
+may be added to any:
+
+1. **`NOT_DURABLE`** — if it should never have been stored, nothing else applies.
+2. **`NOT_A_STATEMENT`** — if it is not a proposition, type-correctness is moot.
+3. **`DANGLING_REFERENCE` / `MISSING_SUBJECT`** — if the referent cannot be
+   recovered from the text, the fact cannot be evaluated for type.
+4. **`WRONG_TYPE`** — reserved for a well-formed, resolvable statement filed
+   under the wrong label.
+5. **`META_TALK`** — about the tooling rather than the host project.
+6. **`OTHER`** — none of the above; requires a note.
+7. **`COMPOUND`** — additive; mark alongside whichever of the above applies.
+
+This ordering directly targets the 6 `DANGLING_REFERENCE`↔`WRONG_TYPE` and 5
+`NOT_A_STATEMENT`↔`WRONG_TYPE` collisions: a statement whose referent is
+unrecoverable is coded for *that*, never for the type it was filed under.
+
+### Task 5C — the controlled comparison
+
+**This is an experiment, not a re-label.** Identical pool, identical four
+models, identical temperature and seed; **only the instrument changes.**
+
+- v1 must remain selectable and reproducible: add `--codebook {v1,v2}`
+  defaulting to `v2`, keeping v1's text byte-identical. Do not edit v1 in place.
+- v1 label files and manifests are **evidence** — never overwrite or delete them.
+- The prompt SHA changes, so cache keys change and all 240 calls are fresh. That
+  is intended, not a cache bug.
+- Report v1 vs v2 side by side: aggregate defect rate, pairwise inter-model κ
+  (binary and per-code), and per-code unanimity.
+
+**Pre-registered reading, fixed before the numbers are seen:**
+
+> **v2 is an improvement** if mean pairwise per-code κ rises materially (≥0.10)
+> **and** per-code unanimity rises, while the aggregate defect rate stays inside
+> v1's confidence interval — i.e. the instrument got more reliable without
+> moving the measurement.
+>
+> **If the aggregate rate moves outside v1's CI**, v2 did not merely sharpen the
+> instrument, it changed what is being measured. Report that plainly and do not
+> silently prefer whichever number is more convenient.
+>
+> **If κ does not improve**, the construct is ambiguous beyond what a codebook
+> fixes. Phase A then reports agreement-bounded results rather than a point
+> estimate, and Phase B gold needs a different elicitation method entirely.
