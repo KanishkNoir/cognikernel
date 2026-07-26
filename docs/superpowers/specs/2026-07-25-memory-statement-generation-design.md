@@ -110,7 +110,7 @@ Before committing to the full 400:
 This is the highest-value action available and nothing else should start before
 it.
 
-### A0 interim outcome — LLM pre-labels only (human verification pending)
+### A0 outcome — LLM pre-labels (superseded by the verified result below)
 
 **Status: the gate is NOT yet decided.** These are model labels. The
 pre-registered rule requires human-anchored labels, and the human verification
@@ -171,6 +171,73 @@ surviving labels skewed toward `CLEAN` — a non-random loss that would have
 biased the rate *downward*. Re-run at 8192, completion went from 11/60 to 59/60
 on the worst-affected model. Artifacts: `manifest_20260726-004114.json`
 (superseded 1024-cap run kept as evidence at `manifest_20260725-234313.json`).
+
+---
+
+### A0 VERDICT — gate cleared, Phase A proceeds
+
+**Decision: RUN FULL PHASE A.** Emitted by `scripts/audit_report.py --gate A0`
+against the pre-registered three-way rule (≥25% run full Phase A / <15% abandon
+/ between → extend the pilot to n=150).
+
+| | Rate | 95% CI (Wilson) |
+|---|---|---|
+| Verification subset, 20 statements | **14/20 = 70.0%** | **48.1 – 85.5** |
+
+The CI's lower bound is 48.1% against a 25% threshold. Every model reading
+clears it too, including the deliberately pessimistic unanimous-only 39.7%
+[28.1 – 52.5]. Five labelers span 56.7% – 70.0% on a bucket the surface
+heuristics called clean.
+
+**Who labeled the verification subset, and why that limits the claim.** The 20
+were labeled by Claude (Opus 5) — **the author of this codebook**, not an
+independent human. This was the user's explicit decision after the concern was
+raised. It cuts both ways: it makes the rate corroboration *weaker* than a third
+party's would be, and it makes the low per-code agreement below *more* damning,
+since agreement with the instrument's own author should be the easy case. Any
+publication must state this. Full Phase A still requires a genuinely independent
+second labeler.
+
+**Agreement against that subset:**
+
+| Model | Agree | κ (defective/clean) | κ (per-code) |
+|---|---|---|---|
+| Kimi-K2.6 | 17/20 | 0.66 | 0.18 |
+| GLM-5.2 | 15/20 | 0.48 | 0.55 |
+| gpt-oss-120b | 15/20 | 0.43 | 0.24 |
+| DeepSeek-V4-Pro | 15/20 | 0.38 | 0.17 |
+
+**The finding that changes Phase B's design.** Per-code κ against the codebook's
+author (0.17 – 0.55) is *worse* than the models' agreement with each other
+(0.34 – 0.58). The models agree with one another about which code applies more
+than they agree with the person who wrote the codebook. That indicts the
+**instrument**, not the labelers: the codebook is underspecified at the
+`WRONG_TYPE` / `NOT_A_STATEMENT` / `NOT_DURABLE` boundaries, where a statement
+like *"Per-Request Timeout There are three distinct timeout values, not one."*
+(a heading fused to a sentence, which is also not a soft constraint) satisfies
+two codes with no precedence rule to choose between them.
+
+**Consequences, which must not be collapsed into one:**
+
+1. **The aggregate defect rate is sound and the gate is cleared.** Phase A is
+   worth running.
+2. **These labels cannot serve as Phase B gold.** A generator's target needs
+   per-code reliability, and κ≈0.2 is noise. **Before the full 400 are labeled,
+   the codebook needs precedence rules between overlapping codes and sharper
+   `WRONG_TYPE` boundaries** — otherwise that effort buys an unreliable
+   instrument.
+
+This is the same conclusion `salience_v2`'s evaluation reached from the other
+direction: the judgment is genuinely ambiguous at the margin, which is why the
+project holds models to a human-agreement ceiling rather than to 100%.
+
+**Heuristic miss rate is not reported**, and deliberately so. The pilot pool was
+drawn from `stratum=clean` — selected to contain only heuristic-negative rows —
+so "how often did the heuristic miss a defect" is 100% by construction and
+carries no information. A whole-branch review found the tool would have printed
+and persisted exactly that number through a path-resolution bug; both the bug
+and the circularity are now fixed, and the tool refuses the number rather than
+publishing it.
 
 ---
 
