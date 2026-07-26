@@ -110,6 +110,68 @@ Before committing to the full 400:
 This is the highest-value action available and nothing else should start before
 it.
 
+### A0 interim outcome — LLM pre-labels only (human verification pending)
+
+**Status: the gate is NOT yet decided.** These are model labels. The
+pre-registered rule requires human-anchored labels, and the human verification
+of a 20-statement subset has not been done. Recorded here so the evidence exists
+before the decision, not as the decision.
+
+Four hosted models (`DeepSeek-V4-Pro`, `Kimi-K2.6`, `gpt-oss-120b`, `GLM-5.2`)
+independently labeled the 60-statement pilot pool, drawn entirely from the
+bucket the surface heuristics called **clean**. 58 statements were labeled by
+all four.
+
+| Reading | Rate | 95% CI (Wilson) |
+|---|---|---|
+| DeepSeek-V4-Pro | 40/60 = 66.7% | 54.1 – 77.3 |
+| Kimi-K2.6 | 40/59 = 67.8% | 55.1 – 78.3 |
+| GLM-5.2 | 40/59 = 67.8% | 55.1 – 78.3 |
+| gpt-oss-120b | 34/60 = 56.7% | 44.1 – 68.4 |
+| **majority (≥3 of 4)** | **35/58 = 60.3%** | **47.5 – 71.9** |
+| most conservative (unanimous 4/4 only) | 23/58 = 39.7% | 28.1 – 52.5 |
+
+**Every reading clears the pre-registered 25% threshold with its CI excluding
+it** — including the deliberately pessimistic unanimous-only reading, whose
+lower bound is 28.1%. If human verification agrees even approximately, Phase A
+proceeds.
+
+This also confirms the §0 thesis quantitatively: the surface heuristics flag
+12.1% of the corpus, but 57–68% of what they call *clean* is judged defective.
+The heuristics are a severe undercount, exactly as predicted, and the n=11
+hand-read estimate of 35–50% was if anything conservative.
+
+**The load-bearing caveat.** Inter-model agreement is only *moderate*: binary
+defective/clean Cohen's κ across the six pairs is 0.30, 0.35, 0.42, 0.45, 0.49,
+0.77 (mean ≈0.46); per-code mean κ is 0.34–0.58. Models were unanimous on 32 of
+58 statements and split on 26. Per-code counts diverge sharply —
+`DANGLING_REFERENCE` 11–26, `WRONG_TYPE` 8–19, `COMPOUND` 3–12.
+
+Two conclusions follow, and they must not be collapsed:
+
+1. **The aggregate rate is robust.** Four architecturally distinct models that
+   disagree about *which* statements are broken still converge on most of them
+   being broken.
+2. **Per-item and per-code labels are NOT reliable enough to serve as Phase B
+   gold.** At κ 0.3–0.5 they cannot define the target a generator is trained or
+   evaluated against. Phase B gold needs human labels or a materially better
+   instrument.
+
+This mirrors what `salience_v2`'s own evaluation already established: the
+underlying judgment is genuinely ambiguous at the margin, which is why the
+project holds models to a human-agreement ceiling rather than to 100%.
+
+**Method caveat, stated for the record.** The original design had a human label
+all 60. The human elected LLM pre-labeling with verification of a subset, so the
+reported rate is a model construct anchored to human judgment only through that
+subset and only as strongly as the measured agreement. A first run at
+`max_tokens=1024` had to be discarded: 167 of 341 responses truncated with empty
+content, and because harder statements consume more reasoning tokens, the
+surviving labels skewed toward `CLEAN` — a non-random loss that would have
+biased the rate *downward*. Re-run at 8192, completion went from 11/60 to 59/60
+on the worst-affected model. Artifacts: `manifest_20260726-004114.json`
+(superseded 1024-cap run kept as evidence at `manifest_20260725-234313.json`).
+
 ---
 
 ### Phase A deliverable — the audit, done properly
