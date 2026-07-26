@@ -4,15 +4,17 @@
 
 **Goal:** Measure how often CogniKernel's stored memory statements are defective, with human labels, so the go/no-go threshold for building a generator is decided by evidence rather than by a hunch from 11 hand-read examples.
 
-**Architecture:** Two standalone research scripts following the `scripts/model_eval.py` pattern — one sweeps all project stores and emits a blinded, stratified labeling pool; one reads completed human labels and computes rates, confidence intervals, and inter-labeler agreement. Pure helper functions live at module top and are covered by a pytest gate in `tests/eval/`. No `src/cognikernel/` changes: this is research tooling, and the shipped package is guarded by import-linter layer contracts.
+**Architecture:** Four standalone research scripts following the `scripts/model_eval.py` pattern (two were added mid-execution — see Task 5A and Task 5B) — one sweeps all project stores and emits a blinded, stratified labeling pool; one reads completed human labels and computes rates, confidence intervals, and inter-labeler agreement. Pure helper functions live at module top and are covered by a pytest gate in `tests/eval/`. No `src/cognikernel/` changes: this is research tooling, and the shipped package is guarded by import-linter layer contracts.
 
-**Tech Stack:** Python 3.11/3.12, stdlib only (`sqlite3`, `json`, `re`, `random`, `math`, `hashlib`, `collections`), pytest. No new dependencies, no network, no API keys.
+**Tech Stack:** Python 3.11/3.12, stdlib only (`sqlite3`, `json`, `re`, `random`, `math`, `hashlib`, `collections`), pytest. No new *project* dependencies.
+
+> **Amended during execution.** This originally read "no network, no API keys". Task 5A (LLM pre-labeling, added on the human's decision) calls the Together API via the `openai` SDK invoked ad-hoc with `uv run --with openai`. `openai` is deliberately NOT a project dependency, and the wheel packages only `src/cognikernel`, so nothing under `scripts/` ships — CogniKernel's no-LLM-at-runtime promise is untouched.
 
 ## Global Constraints
 
 Copied from `docs/superpowers/specs/2026-07-25-memory-statement-generation-design.md`:
 
-- **Phase B (eval + generator) is out of scope.** This plan stops at a measured number and a documented decision. Do not build a generator, do not call a teacher API, do not touch `.env`.
+- **Phase B (eval + generator) is out of scope.** This plan stops at a measured number and a documented decision. Do not build a generator. *(Amended: the original clause "do not call a teacher API, do not touch `.env`" was superseded by Task 5A, which reads `TOGETHER_API_KEY` from the gitignored `.env` for offline labeling. The prohibition still holds for anything that would ship or run at session time.)*
 - **Pre-registered Phase A gate:** Phase B proceeds only if the human-labeled defect rate on `DECISION` + `APPROACH_ABANDONED_DO_NOT_RETRY` is **≥ 20%**.
 - **Pre-registered Phase A0 gate** (set here, before any number is seen): run full Phase A if the clean-bucket defect rate is **≥ 25%**; abandon the branch if **< 15%**; if between, extend the pilot to n=150 before deciding. Record the decision in writing before proceeding either way.
 - **Heuristics are a proxy, never the result.** Every reported defect rate must come from human labels. The heuristic sweep is reported only alongside its measured miss rate against those labels.
@@ -29,7 +31,9 @@ Copied from `docs/superpowers/specs/2026-07-25-memory-statement-generation-desig
 |---|---|
 | `scripts/audit_statement_quality.py` (create) | Sweep stores → classify by heuristic → stratified sample → write blinded pool + sidecar meta + heuristic summary |
 | `scripts/audit_report.py` (create) | Read completed labels → defect rates, Wilson CIs, Cohen's kappa, heuristic miss rate → results JSON + printed report |
-| `tests/eval/test_statement_audit.py` (create) | pytest gate over the pure helpers in both scripts |
+| `scripts/audit_label_llm.py` (create, Task 5A) | four hosted LLMs independently label the pool against the pre-registered codebook |
+| `scripts/audit_verify_subset.py` (create, Task 5B) | blinded, proportionally-allocated human-verification subset |
+| `tests/eval/test_statement_audit.py` (create) | pytest gate over the pure helpers in all four scripts |
 | `research/statement_audit/` (create) | pool + meta (gitignored — raw project memory), heuristic summary and results JSON (committed) |
 | `docs/superpowers/specs/2026-07-25-memory-statement-generation-design.md` (modify, Task 6) | record the A0 outcome and the decision |
 
@@ -864,7 +868,7 @@ nothing leaves the machine during a session, no key needed to use CogniKernel.
 This is offline eval construction. Verified: the wheel packages only
 `src/cognikernel` (`pyproject.toml:50`), so nothing under `scripts/` ships.
 
-**Sub-step 3a — three models label all 60 independently.** See Task 5A below.
+**Sub-step 3a — four models label all 60 independently.** See Task 5A below.
 
 **Sub-step 3b — human verifies a stratified 20.** The verification file is
 generated from the pool, blinded to the models' answers, and labeled by hand
