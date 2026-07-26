@@ -68,13 +68,26 @@ def classify_heuristic(text: str) -> set[str]:
     return hits
 
 
-def iter_statements(store_dir: Path) -> Iterator[dict]:
-    """Yield active typed statements from every store, read-only."""
+def iter_statements(store_dir: Path, skipped: list[str] | None = None) -> Iterator[dict]:
+    """Yield active typed statements from every store, read-only.
+
+    `skipped`, if given, is appended with the store id (filename stem, same
+    form as `store` in the yielded rows — never the full home-directory
+    path) of every store that could not be read (failed to open, or lacked
+    the events table/column), so the caller can record how many stores were
+    silently excluded from the sweep.
+    Without this, a published statements/stores count rests on a guard
+    (`except sqlite3.Error: continue`) with no diagnostic — a future
+    corruption or schema drift could quietly shrink the corpus and nobody
+    would know.
+    """
     placeholders = ",".join("?" * len(TYPES))
     for db in sorted(glob.glob(str(store_dir / "*.db"))):
         try:
             conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         except sqlite3.Error:
+            if skipped is not None:
+                skipped.append(Path(db).stem)
             continue  # a store that won't open is skipped, not fatal
         try:
             rows = conn.execute(
@@ -82,6 +95,8 @@ def iter_statements(store_dir: Path) -> Iterator[dict]:
                 f"WHERE event_type IN ({placeholders}) AND archived=0", TYPES
             ).fetchall()
         except sqlite3.Error:
+            if skipped is not None:
+                skipped.append(Path(db).stem)
             continue  # older schema without this table/column
         finally:
             conn.close()
@@ -95,9 +110,16 @@ def iter_statements(store_dir: Path) -> Iterator[dict]:
 
 
 def statement_id(store: str, text: str, occurrence: int = 0) -> str:
-    """Stable id for one statement occurrence. Store-scoped so identical text in
-    two projects stays two rows, and occurrence-scoped so identical text repeated
-    within one store does not collapse to a single id."""
+    """Id for one statement occurrence, RUN-LOCAL not corpus-stable.
+
+    Store-scoped so identical text in two projects stays two rows, and
+    occurrence-scoped so identical text repeated within one store does not
+    collapse to a single id. The `occurrence` counter is assigned by the
+    order duplicate text is encountered within the *sampled* rows for this
+    run (see `occurrence_counts` in main()), not by position in the full
+    corpus — so the same duplicated text can get a different id under a
+    different sample or seed. Do not treat this id as a durable identifier
+    across runs."""
     return hashlib.sha256(
         f"{store}\x00{text}\x00{occurrence}".encode("utf-8")).hexdigest()[:12]
 
@@ -142,7 +164,8 @@ def main() -> None:
     ap.add_argument("--store-dir", type=Path, default=STORE_DIR)
     args = ap.parse_args()
 
-    rows = list(iter_statements(args.store_dir))
+    skipped_stores: list[str] = []
+    rows = list(iter_statements(args.store_dir, skipped=skipped_stores))
     if not rows:
         sys.exit(f"no statements found under {args.store_dir}")
 
@@ -181,6 +204,8 @@ def main() -> None:
 
     summary = {
         "stamp": stamp, "stores_scanned": len(set(r["store"] for r in rows)),
+        "stores_skipped": len(skipped_stores),
+        "stores_skipped_paths": skipped_stores,
         "statements_total": len(rows), "sampled": len(sample),
         "stratum": args.stratum, "seed": args.seed,
         "heuristic_counts": dict(counts),
@@ -189,7 +214,9 @@ def main() -> None:
     (OUT_DIR / f"heuristic_{stamp}.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8")
 
-    print(f"statements: {len(rows)} across {summary['stores_scanned']} stores")
+    print(f"statements: {len(rows)} across {summary['stores_scanned']} stores "
+          f"({summary['stores_skipped']} stores skipped — failed to open or "
+          f"lacked the events table)")
     print(f"heuristic flagged: {counts['_any']} "
           f"({100 * counts['_any'] / len(rows):.1f}%)")
     print(f"\nwrote {pool_path}  ({len(sample)} to label)")

@@ -118,7 +118,10 @@ checkpoints/
 .pytest_tmp/
 analysis_gcogni/
 
-# statement-audit pools contain raw project memory.
+# statement-audit pools, the sealed verify answer key, and the LLM response
+# cache contain raw project memory / spoil blinding if opened early.
 # Redundant under the blanket research/ rule above -- kept as defence-in-depth,
 # and stays load-bearing if research/ is ever narrowed to track eval sets.
 research/statement_audit/pool*.jsonl
+research/statement_audit/verify_key_*.json
+research/statement_audit/llm_cache/

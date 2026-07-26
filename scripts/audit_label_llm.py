@@ -1,4 +1,4 @@
-"""Phase A statement-quality audit — three hosted LLMs independently pre-label
+"""Phase A statement-quality audit — four hosted LLMs independently pre-label
 the blinded pool against the fixed codebook (Task 5A, sub-step 3a).
 
 This is offline eval construction, not a runtime feature: nothing here ships
@@ -313,7 +313,16 @@ def _call_model(model: str, messages: list[dict], cache_dir: Path,
     cache_file = cache_dir / f"{key}.json"
     if cache_file.exists():
         cached = json.loads(cache_file.read_text(encoding="utf-8"))
-        return cached["content"], cached.get("finish_reason", "")
+        # The sha256 key already binds max_tokens/temperature, so a hash
+        # collision is the only way this could fail — but "the key must have
+        # matched" is exactly the assumption a future re-key (already
+        # attempted once on this branch) could break. Re-validate the
+        # recorded params explicitly and treat any mismatch or missing field
+        # (e.g. a pre-max_tokens-keying orphan entry) as a cache miss rather
+        # than silently serving a stale generation.
+        if (cached.get("max_tokens") == max_tokens
+                and cached.get("temperature") == _TEMPERATURE):
+            return cached["content"], cached.get("finish_reason", "")
 
     client = _together_client()
 
@@ -469,8 +478,9 @@ def main() -> None:
             "parse_failure_rate": rate,
             # finish_reason == "length" on any attempt for this row: a
             # truncated reply, not necessarily a codebook violation. Reported
-            # separately so max_tokens=1024 headroom can be checked before
-            # blaming the model for the parse-failure rate above.
+            # separately so the configured --max-tokens headroom (default
+            # 8192; see module docstring) can be checked before blaming the
+            # model for the parse-failure rate above.
             "truncated_response_count": len(truncated_ids),
             "truncated_response_ids": truncated_ids,
             "parse_failures_caused_by_truncation": len(failed_and_truncated),

@@ -15,6 +15,7 @@ from __future__ import annotations
 import collections
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,46 @@ def test_statement_id_distinguishes_repeated_text_in_one_store():
     b = audit.statement_id("store1", "same text", 1)
     assert a != b
     assert audit.statement_id("store1", "same text") == a  # default occurrence=0
+
+
+def test_iter_statements_counts_skipped_stores(tmp_path):
+    """A store that fails to open, or that lacks the events table, must be
+    counted via `skipped` -- the published statements/stores figures rest on
+    a bare `except sqlite3.Error: continue` with no diagnostic otherwise, so
+    a future corruption or schema drift could silently undercount."""
+    import sqlite3
+
+    good = tmp_path / "good.db"
+    conn = sqlite3.connect(good)
+    conn.execute("CREATE TABLE events (event_type TEXT, payload TEXT, archived INTEGER)")
+    conn.execute("INSERT INTO events VALUES (?, ?, 0)",
+                ("DECISION", json.dumps({"description": "A clean decision statement here."})))
+    conn.commit()
+    conn.close()
+
+    bad_schema = tmp_path / "bad_schema.db"
+    conn = sqlite3.connect(bad_schema)
+    conn.execute("CREATE TABLE other (x INTEGER)")
+    conn.commit()
+    conn.close()
+
+    corrupt = tmp_path / "corrupt.db"
+    corrupt.write_text("not a real sqlite file", encoding="utf-8")
+
+    skipped: list[str] = []
+    rows = list(audit.iter_statements(tmp_path, skipped=skipped))
+    assert len(rows) == 1
+    assert len(skipped) == 2
+    # Recorded as store ids (filename stems), matching `store` on the
+    # yielded rows -- never the full ~/.cognikernel/projects/... path.
+    assert set(skipped) == {"bad_schema", "corrupt"}
+    assert not any(str(tmp_path) in s for s in skipped)
+
+
+def test_iter_statements_skipped_defaults_to_no_tracking(tmp_path):
+    """Passing no `skipped` list must not change behaviour (backward compat)."""
+    rows = list(audit.iter_statements(tmp_path))
+    assert rows == []
 
 
 def test_stratified_sample_is_order_independent():
@@ -229,6 +270,211 @@ def test_load_labeled_accepts_empty_file(tmp_path):
     assert report.load_labeled(p) == []
 
 
+def test_resolve_meta_path_does_not_guess_for_non_pool_filename(tmp_path):
+    """CRITICAL regression test: a filename not starting with 'pool_' (e.g.
+    a verify_*.jsonl) must never have its meta sidecar guessed — a naive
+    .replace("pool_", "pool_meta_") on such a name is a no-op and used to
+    silently resolve back to the input file itself, fabricating a 100%
+    heuristic-miss-rate from label rows read as their own 'meta'."""
+    p = tmp_path / "verify_20260726-011519.claude-labeled.jsonl"
+    resolved = report.resolve_meta_path(p, None)
+    assert resolved is None
+    assert resolved != p
+
+
+def test_resolve_meta_path_derives_sidecar_for_pool_prefixed_filename(tmp_path):
+    p = tmp_path / "pool_20260725-193802.jsonl"
+    resolved = report.resolve_meta_path(p, None)
+    assert resolved == tmp_path / "pool_meta_20260725-193802.jsonl"
+    assert resolved != p
+
+
+def test_resolve_meta_path_explicit_flag_always_wins(tmp_path):
+    p = tmp_path / "pool_x.jsonl"
+    explicit = tmp_path / "custom_meta.jsonl"
+    assert report.resolve_meta_path(p, explicit) == explicit
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+
+def test_heuristic_miss_rate_suppressed_as_circular_on_clean_stratum(
+        tmp_path, monkeypatch, capsys):
+    """A stratum=clean pool was selected to contain only heuristic-negative
+    rows, so 'how often did the heuristic miss a defect' is 100% by
+    construction and uninformative. The report must say so, not print a
+    bare number that looks like a real measurement."""
+    rows = [{"id": f"id{i}", "event_type": "DECISION",
+             "text": f"Statement number {i} recorded plainly here.",
+             "labels": ["WRONG_TYPE"] if i < 2 else ["CLEAN"], "notes": ""}
+            for i in range(5)]
+    pool_path = tmp_path / "pool_x.jsonl"
+    _write_jsonl(pool_path, rows)
+    meta_rows = [{"id": r["id"], "store": "s", "heuristic": [],
+                  "stratum": "clean", "seed": 1} for r in rows]
+    _write_jsonl(tmp_path / "pool_meta_x.jsonl", meta_rows)
+
+    monkeypatch.setattr(report, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["audit_report.py", str(pool_path)])
+    report.main()
+
+    out = capsys.readouterr().out
+    assert "BY CONSTRUCTION" in out
+    assert "not" in out.lower() and "informative" in out.lower()
+    results = json.loads(next(tmp_path.glob("results_*.json")).read_text(encoding="utf-8"))
+    assert results["heuristic_miss_circular_by_construction"] is True
+
+
+def test_heuristic_miss_rate_unavailable_when_meta_ids_are_disjoint(
+        tmp_path, monkeypatch, capsys):
+    """CRITICAL, second route: an explicit --meta pointed at a real-looking
+    but ID-disjoint sidecar must NOT be treated as 'heuristic found nothing
+    for every row' (which is what an absent id defaults to). That is the
+    same fabricated-100% failure mode as the original bug, just reachable
+    through the new --meta flag instead of the auto-derive path."""
+    rows = [{"id": f"id{i}", "event_type": "DECISION",
+             "text": f"Statement number {i} recorded plainly here.",
+             "labels": ["WRONG_TYPE"] if i < 2 else ["CLEAN"], "notes": ""}
+            for i in range(5)]
+    pool_path = tmp_path / "labeled.jsonl"
+    _write_jsonl(pool_path, rows)
+    # Meta with completely different ids — e.g. --meta pointed at the wrong
+    # run's sidecar. Also claims stratum "all" so the clean-stratum guard
+    # cannot be the thing masking this.
+    other_meta = [{"id": f"other{i}", "store": "s", "heuristic": ["NOT_DURABLE"],
+                   "stratum": "all", "seed": 1} for i in range(5)]
+    meta_path = tmp_path / "unrelated_meta.jsonl"
+    _write_jsonl(meta_path, other_meta)
+
+    monkeypatch.setattr(report, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["audit_report.py", str(pool_path),
+                                       "--meta", str(meta_path)])
+    report.main()
+
+    out = capsys.readouterr().out
+    assert "unavailable" in out
+    assert "100.0%" not in out
+    results = json.loads(next(tmp_path.glob("results_*.json")).read_text(encoding="utf-8"))
+    assert results["heuristic_miss"] is None
+    assert results["heuristic_miss_meta_coverage"] == 0
+
+
+def test_heuristic_miss_rate_notes_partial_meta_coverage(tmp_path, monkeypatch, capsys):
+    """When meta covers only some pool rows, the rate must be computed over
+    the covered subset only, with that restriction stated -- not silently
+    treating the uncovered rows as heuristic-clean."""
+    rows = [{"id": f"id{i}", "event_type": "DECISION",
+             "text": f"Statement number {i} recorded plainly here.",
+             "labels": ["WRONG_TYPE"] if i < 2 else ["CLEAN"], "notes": ""}
+            for i in range(5)]
+    pool_path = tmp_path / "labeled.jsonl"
+    _write_jsonl(pool_path, rows)
+    # Only 3 of the 5 pool ids have a meta record.
+    partial_meta = [{"id": rows[i]["id"], "store": "s", "heuristic": [],
+                     "stratum": "all", "seed": 1} for i in range(3)]
+    meta_path = tmp_path / "partial_meta.jsonl"
+    _write_jsonl(meta_path, partial_meta)
+
+    monkeypatch.setattr(report, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["audit_report.py", str(pool_path),
+                                       "--meta", str(meta_path)])
+    report.main()
+
+    out = capsys.readouterr().out
+    assert "3/5" in out
+    results = json.loads(next(tmp_path.glob("results_*.json")).read_text(encoding="utf-8"))
+    assert results["heuristic_miss_meta_coverage"] == 3
+    assert results["heuristic_miss"] is not None
+
+
+def test_gate_a_refuses_on_clean_stratum(tmp_path, monkeypatch, capsys):
+    """Phase A's gate is defined over an unfiltered corpus sample; a
+    stratum=clean pool cannot answer it, so gate A must refuse rather than
+    silently print a verdict for the wrong stratum."""
+    rows = [{"id": f"id{i}", "event_type": "DECISION",
+             "text": f"Statement number {i} recorded plainly here.",
+             "labels": ["CLEAN"], "notes": ""} for i in range(5)]
+    pool_path = tmp_path / "pool_y.jsonl"
+    _write_jsonl(pool_path, rows)
+    meta_rows = [{"id": r["id"], "store": "s", "heuristic": [],
+                  "stratum": "clean", "seed": 1} for r in rows]
+    _write_jsonl(tmp_path / "pool_meta_y.jsonl", meta_rows)
+
+    monkeypatch.setattr(report, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["audit_report.py", str(pool_path), "--gate", "A"])
+    report.main()
+
+    out = capsys.readouterr().out
+    assert "REFUSED" in out
+    results = json.loads(next(tmp_path.glob("results_*.json")).read_text(encoding="utf-8"))
+    assert results["gate"]["verdict"] is None
+    assert results["gate"]["refused"] == "stratum_mismatch"
+
+
+@pytest.mark.parametrize("n_total,n_bad,expected_verdict", [
+    (10, 3, "RUN_FULL_PHASE_A"),  # 3/10 = 30% >= 25%
+    (10, 1, "ABANDON"),           # 1/10 = 10% < 15%
+    (10, 2, "EXTEND_TO_150"),     # 2/10 = 20%, between 15% and 25%
+    (20, 5, "RUN_FULL_PHASE_A"),  # 5/20 = 25.0% exactly -> the >= boundary
+    (20, 3, "EXTEND_TO_150"),     # 3/20 = 15.0% exactly -> NOT < 15%, so extend
+])
+def test_gate_a0_three_way_verdict(tmp_path, monkeypatch, n_total, n_bad, expected_verdict):
+    rows = [{"id": f"id{i}", "event_type": "DECISION",
+             "text": f"Statement number {i} recorded plainly here.",
+             "labels": ["WRONG_TYPE"] if i < n_bad else ["CLEAN"], "notes": ""}
+            for i in range(n_total)]
+    # Deliberately not "pool_"-prefixed so no meta sidecar is auto-derived
+    # (irrelevant to this test, which only exercises the A0 verdict math).
+    pool_path = tmp_path / "labeled_z.jsonl"
+    _write_jsonl(pool_path, rows)
+
+    monkeypatch.setattr(report, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["audit_report.py", str(pool_path), "--gate", "A0"])
+    report.main()
+
+    results = json.loads(next(tmp_path.glob("results_*.json")).read_text(encoding="utf-8"))
+    assert results["gate"]["verdict"] == expected_verdict
+    assert results["gate"]["gate"] == "A0"
+
+
+def test_report_completes_when_derived_meta_sidecar_is_absent(tmp_path, monkeypatch, capsys):
+    """A pool_-prefixed input with no sidecar actually on disk must NOT be
+    fatal -- only an explicit --meta that's missing should sys.exit. The
+    derived-but-absent case falls through to 'miss rate unavailable', same
+    as if no meta had ever been supplied."""
+    rows = [{"id": f"id{i}", "event_type": "DECISION",
+             "text": f"Statement number {i} recorded plainly here.",
+             "labels": ["CLEAN"], "notes": ""} for i in range(5)]
+    pool_path = tmp_path / "pool_nosidecar.jsonl"
+    _write_jsonl(pool_path, rows)
+    # Deliberately do NOT write pool_meta_nosidecar.jsonl.
+
+    monkeypatch.setattr(report, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["audit_report.py", str(pool_path)])
+    report.main()  # must not raise / sys.exit
+
+    out = capsys.readouterr().out
+    assert "unavailable" in out
+    results = json.loads(next(tmp_path.glob("results_*.json")).read_text(encoding="utf-8"))
+    assert results["heuristic_miss"] is None
+
+
+def test_report_exits_when_explicit_meta_is_missing(tmp_path, monkeypatch):
+    """Unlike the derived-default case, a user-named --meta that doesn't
+    exist is the user's mistake to see, so it must fail loudly."""
+    rows = [{"id": "id0", "event_type": "DECISION", "text": "A statement here.",
+             "labels": ["CLEAN"], "notes": ""}]
+    pool_path = tmp_path / "labeled.jsonl"
+    _write_jsonl(pool_path, rows)
+
+    monkeypatch.setattr(report, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["audit_report.py", str(pool_path),
+                                       "--meta", str(tmp_path / "does_not_exist.jsonl")])
+    with pytest.raises(SystemExit):
+        report.main()
+
+
 llm = _load("audit_label_llm")
 
 
@@ -314,6 +560,92 @@ def test_prompt_cache_key_varies_with_max_tokens():
     assert llm._prompt_cache_key("m", msgs, 1024) != llm._prompt_cache_key("m", msgs, 8192)
 
 
+def _fake_openai_client(content: str):
+    """A stand-in for the `openai` client that always returns `content`."""
+    class _Message:
+        pass
+
+    class _Choice:
+        pass
+
+    class _Resp:
+        pass
+
+    class _Completions:
+        @staticmethod
+        def create(**kwargs):
+            msg = _Message()
+            msg.content = content
+            choice = _Choice()
+            choice.message = msg
+            choice.finish_reason = "stop"
+            resp = _Resp()
+            resp.choices = [choice]
+            resp.usage = None
+            return resp
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    return _Client()
+
+
+def test_call_model_serves_cache_hit_when_params_match(tmp_path):
+    """A cache entry whose recorded max_tokens/temperature match the request
+    is served directly (and no network call is attempted -- there is no
+    monkeypatched client here, so a stray call would raise)."""
+    messages = llm.build_prompt({"id": "x", "event_type": "DECISION", "text": "t"})
+    key = llm._prompt_cache_key("model", messages, 8192)
+    good = {"model": "model", "content": "CACHED", "finish_reason": "stop",
+            "max_tokens": 8192, "temperature": 0}
+    (tmp_path / f"{key}.json").write_text(json.dumps(good), encoding="utf-8")
+
+    content, finish_reason = llm._call_model("model", messages, tmp_path, 8192)
+    assert content == "CACHED"
+    assert finish_reason == "stop"
+
+
+def test_call_model_treats_mismatched_max_tokens_as_cache_miss(tmp_path, monkeypatch):
+    """IMPORTANT 5: a cache entry recorded under a different max_tokens must
+    never be served back -- a future re-key (already attempted once on this
+    branch) must not silently replay a stale generation."""
+    messages = llm.build_prompt({"id": "x", "event_type": "DECISION", "text": "t"})
+    key = llm._prompt_cache_key("model", messages, 8192)
+    stale = {"model": "model", "content": "STALE", "finish_reason": "stop",
+             "max_tokens": 1024, "temperature": 0}
+    (tmp_path / f"{key}.json").write_text(json.dumps(stale), encoding="utf-8")
+
+    monkeypatch.setattr(llm, "_together_client", lambda: _fake_openai_client("FRESH"))
+    content, _ = llm._call_model("model", messages, tmp_path, 8192)
+    assert content == "FRESH"
+
+
+def test_call_model_treats_missing_cache_params_as_miss(tmp_path, monkeypatch):
+    """An old-scheme cache entry with no max_tokens/temperature field at all
+    (an orphan from before params were part of the key) must be treated as
+    a miss, not served on the assumption that "no info" means "matches"."""
+    messages = llm.build_prompt({"id": "x", "event_type": "DECISION", "text": "t"})
+    key = llm._prompt_cache_key("model", messages, 8192)
+    orphan = {"model": "model", "content": "OLD", "finish_reason": "stop"}
+    (tmp_path / f"{key}.json").write_text(json.dumps(orphan), encoding="utf-8")
+
+    monkeypatch.setattr(llm, "_together_client", lambda: _fake_openai_client("FRESH2"))
+    content, _ = llm._call_model("model", messages, tmp_path, 8192)
+    assert content == "FRESH2"
+
+
+def test_codebooks_agree_across_scripts():
+    """DEFECT_CODES (audit_statement_quality), CODES (audit_report), and
+    _CODES (audit_label_llm, which also carries CLEAN) are three separately
+    maintained literal tuples with nothing enforcing agreement between them.
+    A drift here would silently change what one script measures relative to
+    the other two without any error."""
+    assert set(audit.DEFECT_CODES) == set(report.CODES) == set(llm._CODES) - {"CLEAN"}
+
+
 verify = _load("audit_verify_subset")
 
 
@@ -382,6 +714,26 @@ def test_proportional_allocation_total_less_than_n():
     bin_counts = {0: 5, 1: 3, 2: 2}  # total 10
     alloc = verify.proportional_allocation(bin_counts, 20)
     assert sum(alloc.values()) == 10
+
+
+def test_proportional_allocation_order_independent():
+    """proportional_allocation's largest-remainder ties must be broken by
+    bin_id, not by dict-insertion order. Upstream, bin_counts insertion
+    order derives from iterating a Python set (`all_files_ids`), which
+    varies with PYTHONHASHSEED — so without an internal sort, the seed
+    would not fully determine the allocation."""
+    bin_counts = {0: 1, 1: 1, 2: 1, 3: 1}  # every remainder ties at 0.5
+    bin_counts_rev = {3: 1, 2: 1, 1: 1, 0: 1}
+    a = verify.proportional_allocation(dict(bin_counts), 2)
+    b = verify.proportional_allocation(dict(bin_counts_rev), 2)
+    assert a == b
+    assert sum(a.values()) == 2
+
+
+def test_model_id_from_label_filename():
+    got = verify.model_id_from_label_filename(
+        "research/statement_audit/labels_deepseek-ai-deepseek-v4-pro_20260726-004114.jsonl")
+    assert got == "deepseek-ai-deepseek-v4-pro"
 
 
 def test_select_subset_is_deterministic():
@@ -454,3 +806,68 @@ def test_verify_rows_fails_if_id_missing_from_pool():
     selected_ids = ["id1", "id_missing"]
     with pytest.raises(SystemExit):
         verify.verify_rows(selected_ids, pool_by_id)
+
+
+def _write_label_files(out_dir: Path, pool_rows: list[dict], models: list[str],
+                       stamp: str, labels_fn) -> None:
+    for m in models:
+        rows = [{"id": r["id"], "event_type": r["event_type"], "text": r["text"],
+                 "labels": labels_fn(m, r), "notes": ""} for r in pool_rows]
+        _write_jsonl(out_dir / f"labels_{m}_{stamp}.jsonl", rows)
+
+
+def test_verify_subset_answer_key_is_model_keyed_and_restricted_to_selected(
+        tmp_path, monkeypatch):
+    """The answer key must be a dict keyed by model id (not a positional,
+    unnamed list built over set-iteration order), with sorted label lists,
+    and restricted to the ids actually selected for human labeling — not
+    every id present in all four label files."""
+    monkeypatch.setattr(verify, "OUT_DIR", tmp_path)
+    pool_rows = [{"id": f"id{i}", "event_type": "DECISION",
+                 "text": f"Statement number {i} recorded plainly here."}
+                for i in range(6)]
+    pool_path = tmp_path / "pool_test.jsonl"
+    _write_jsonl(pool_path, pool_rows)
+
+    models = ["model-a", "model-b", "model-c", "model-d"]
+    stamp = "20260101-000000"
+    _write_label_files(tmp_path, pool_rows, models, stamp,
+                       lambda m, r: ["CLEAN"])
+
+    monkeypatch.setattr(sys, "argv", [
+        "audit_verify_subset.py", "--seed", "1",
+        "--labels-glob", f"labels_*_{stamp}.jsonl", "--pool", str(pool_path)])
+    verify.main()
+
+    key_files = list(tmp_path.glob("verify_key_*.json"))
+    assert len(key_files) == 1
+    key = json.loads(key_files[0].read_text(encoding="utf-8"))
+    verify_files = list(tmp_path.glob("verify_2*.jsonl"))
+    selected = {json.loads(line)["id"]
+               for line in verify_files[0].read_text(encoding="utf-8").splitlines() if line.strip()}
+
+    assert set(key.keys()) == selected  # restricted to selected, not all 6
+    assert len(selected) <= 6
+    for entry in key.values():
+        assert isinstance(entry["labels"], dict)
+        assert set(entry["labels"].keys()) == set(models)
+        for label_list in entry["labels"].values():
+            assert label_list == sorted(label_list)
+
+
+def test_verify_subset_rejects_non_four_label_file_count(tmp_path, monkeypatch):
+    """Once --labels-glob is parameterised, a 5th matching file must still
+    be rejected loudly — silently proceeding would make vote_bin return
+    0..5 and change what 'bin 3' means relative to every prior run."""
+    monkeypatch.setattr(verify, "OUT_DIR", tmp_path)
+    pool_path = tmp_path / "pool_test.jsonl"
+    _write_jsonl(pool_path, [])
+    stamp = "20260101-000000"
+    for i in range(5):
+        _write_jsonl(tmp_path / f"labels_m{i}_{stamp}.jsonl", [])
+
+    monkeypatch.setattr(sys, "argv", [
+        "audit_verify_subset.py",
+        "--labels-glob", f"labels_*_{stamp}.jsonl", "--pool", str(pool_path)])
+    with pytest.raises(SystemExit):
+        verify.main()
