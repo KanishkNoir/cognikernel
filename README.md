@@ -1,25 +1,16 @@
 # CogniKernel
 
-**Persistent, structured project memory for Claude Code — and Codex.** CogniKernel
-watches a coding session through its hook surfaces, extracts the *decisions,
-constraints, and abandoned approaches* worth keeping, consolidates them into an
-event-sourced store, and injects them back as a compact context block the next
-time you work — so the agent stops re-deciding what you already decided. The store
-is keyed on the project path, so memory made in one tool travels to the other.
+[![PyPI](https://img.shields.io/pypi/v/cognikernel.svg)](https://pypi.org/project/cognikernel/)
+[![Downloads](https://static.pepy.tech/badge/cognikernel)](https://pepy.tech/project/cognikernel)
+[![Python](https://img.shields.io/pypi/pyversions/cognikernel.svg)](https://pypi.org/project/cognikernel/)
+[![License](https://img.shields.io/github/license/KanishkNoir/cognikernel.svg)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/KanishkNoir/cognikernel.svg)](https://github.com/KanishkNoir/cognikernel/commits/main)
+[![Stars](https://img.shields.io/github/stars/KanishkNoir/cognikernel.svg?style=flat)](https://github.com/KanishkNoir/cognikernel/stargazers)
 
-It is **not** a vector-database wrapper. It is an event-sourced log of *typed*
-memory with lexical-primary retrieval, write-time consolidation, and a fail-open
-reliability spine designed never to break your session.
-
-**And there is no LLM in the loop.** Most memory tools work by sending your
-transcripts to a generative model to "summarize what mattered" — another API
-key, per-session token cost, added latency, and your session content leaving
-the machine. CogniKernel treats extraction as *classification, not generation*:
-a deterministic sanitize → classify → consolidate pipeline, with two small
-fine-tuned encoder models (~130 MB ONNX, run locally on CPU in milliseconds)
-scoring salience and detecting when a new decision supersedes an old one. No
-API calls, no tokens billed, nothing leaves your machine. The only LLM involved
-is the coding agent you already run — CogniKernel makes it remember.
+**Persistent, structured project memory for Claude Code and Codex (yet...).** Your agent
+stops re-deciding what you already decided. No extra LLM in the loop, no API keys, no
+tokens billed, extraction runs on two small local encoder models, and nothing
+leaves your machine.
 
 ---
 
@@ -47,6 +38,13 @@ automatically when the session ends and injected as a compact memory block at th
 next session start — nothing else to do. (`install-heads` is optional but
 recommended: without it, extraction falls back to a weaker lexical path, and
 `doctor` tells you which is active — see [Setup details](#setup-details).)
+
+**Persistent, structured project memory for Claude Code — and Codex.** 
+CogniKernel watches a coding session through its hook surfaces, extracts the *decisions, constraints, and abandoned approaches* worth keeping, consolidates them into an event-sourced store, and injects them back as a compact context block the next time you work — so the agent stops re-deciding what you already decided.  
+
+The store is keyed on the project path, so memory made in one tool travels to the other. It is **not** a vector-database wrapper. It is an event-sourced log of *typed* memory with lexical-primary retrieval, write-time consolidation, and a fail-open reliability spine designed never to break your session. **And there is no extra LLM in the loop.** Most memory tools work by sending your transcripts to a generative model to "summarize what mattered" — another API key, per-session token cost, added latency, and your session content leaving the machine. 
+
+CogniKernel treats extraction as *classification, not generation*: a deterministic sanitize → classify → consolidate pipeline, with two small fine-tuned encoder models (~130 MB ONNX, run locally on CPU in milliseconds)scoring salience and detecting when a new decision supersedes an old one. No API calls, no tokens billed, nothing leaves your machine. The only LLM involved is the coding agent you already run — CogniKernel makes it remember. 
 
 **What you get, out of the box:**
 
