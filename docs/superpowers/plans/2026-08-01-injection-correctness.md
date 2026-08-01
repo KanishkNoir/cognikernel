@@ -10,6 +10,13 @@
 
 **Verified before writing:** every regex in Tasks 1, 2, and 4 was executed against the exact assertions this plan makes, so the TDD steps fail for the right reason and pass on a correct implementation. One iteration came out of that: an opener-based interrogative heuristic flagged `"What must be redacted: …"` as a question, so D2 now keys on the `?` terminator alone (see the comment in Task 2). API shapes were checked against the codebase too — `Event` validates `event_type` in `__post_init__`, `get_connection` is a context-manager generator, and `tests/conftest.py` already provides migrated `tmp_db` / `conn` fixtures.
 
+**Four corrections from review, already folded in.** Recording them because each was a plausible-looking plan that would have shipped something wrong:
+
+1. Widening the regex alone does **not** make absolute paths work — `canonicalize_path` returns `''` for any absolute path when `project_root` is `None`, so they matched and then vanished at `file_mentions.py:79`. Task 4 now plumbs `project_root` and asserts end-to-end event production, not just regex matching.
+2. D7 **downgrades**, it does not reject (see Deviations §2).
+3. Task 9 filters the **event set**, not the rendered string, so the render ledger cannot over-claim.
+4. Task 8's tripwire counts the five statement types only, so its rate is comparable to the §0.1 baseline.
+
 ## Why one gate (the finding that shaped this plan)
 
 `extraction/sanitize.py` already ships `is_context_dependent_fragment()` and `is_question_description()`. They are wired in only partially:
@@ -637,6 +644,52 @@ class TestPathRecall:
         ]
 
 
+class TestEndToEndEventProduction:
+    """Matching the regex is not enough — an event must actually come out.
+
+    canonicalize_path returns '' for ANY absolute path when project_root is
+    None (paths.py rule 7), and file_mentions drops empty results. So without
+    the project_root plumbing below, absolute paths match the pattern and then
+    vanish silently — a widened regex alone does not fix them.
+    """
+
+    def _paths(self, text: str, project_root: str | None = None) -> list[str]:
+        from cognikernel.extraction.file_mentions import extract_file_mention_events
+        from cognikernel.extraction.tokenize import tokenize
+
+        sentences = tokenize(f"Assistant: {text}")
+        events = extract_file_mention_events(
+            sentences, "p", "s", project_root=project_root
+        )
+        return [e.payload["path"] for e in events]
+
+    def test_relative_path_produces_event(self) -> None:
+        assert "src/storage/connection.py" in self._paths(
+            "I edited src/storage/connection.py today"
+        )
+
+    def test_dotdir_path_produces_event(self) -> None:
+        assert ".claude/settings.json" in self._paths(
+            "I edited .claude/settings.json today"
+        )
+
+    def test_windows_relative_path_produces_event(self) -> None:
+        assert "src/storage/connection.py" in self._paths(
+            r"I edited src\storage\connection.py today"
+        )
+
+    def test_absolute_path_needs_project_root(self) -> None:
+        text = r"I edited C:\proj\src\storage\connection.py today"
+        assert self._paths(text) == []          # no root -> correctly unresolvable
+        assert "src/storage/connection.py" in self._paths(text, project_root=r"C:\proj")
+
+    def test_path_outside_project_root_is_dropped(self) -> None:
+        # Not a project component; dropping it is correct, not a bug.
+        assert self._paths(
+            r"I edited C:\elsewhere\other.py today", project_root=r"C:\proj"
+        ) == []
+
+
 class TestNoTruncation:
     """D1 regression guard. Expected to pass on first run — its job is to fail
     loudly if the 2026-05-10 first-character-strip behaviour ever returns."""
@@ -661,7 +714,7 @@ class TestNoTruncation:
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/unit/extraction/test_file_mentions.py -v`
-Expected: the four `TestPathRecall` shape tests FAIL (empty match list). `TestNoTruncation` should already PASS — that is the point of a regression guard. If it fails, stop and report: a live truncation generator exists after all.
+Expected: the four `TestPathRecall` shape tests FAIL (empty match list); `TestEndToEndEventProduction` fails on the `project_root` keyword not existing. `TestNoTruncation` should already PASS — that is the point of a regression guard. If it fails, stop and report: a live truncation generator exists after all.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -695,10 +748,53 @@ _FILE_PATTERN = re.compile(
 )
 ```
 
+Then plumb `project_root` so absolute paths can resolve. In `file_mentions.py`, add the keyword and pass it through:
+
+```python
+def extract_file_mention_events(
+    sentences: list[Sentence],
+    project_id: str,
+    session_id: str,
+    project_root: str | None = None,
+) -> list[Event]:
+```
+
+and at the canonicalization call (currently line 78):
+
+```python
+            path = canonicalize_path(match.group(0), project_root)
+```
+
+In `extraction/pipeline.py`, add an optional field to `SessionMetadata` (last position, so existing positional construction is unaffected):
+
+```python
+@dataclass
+class SessionMetadata:
+    project_id: str
+    session_id: str
+    started_at: int   # Unix milliseconds
+    ended_at: int     # Unix milliseconds
+    # Absolute path of the project checkout. Optional because not every caller
+    # knows it; when None, absolute paths in the transcript stay unresolvable
+    # and are dropped, which is the pre-existing behaviour.
+    project_root: str | None = None
+```
+
+and forward it at both `extract_file_mention_events(...)` call sites in `_extract_session_impl` (the broad-mode path and the main path):
+
+```python
+        mention_events = extract_file_mention_events(
+            sentences, session_meta.project_id, session_meta.session_id,
+            project_root=session_meta.project_root,
+        )
+```
+
+Finally, set it where the project path is known. In `src/cognikernel/integration/session.py`, find where `SessionMetadata(...)` is constructed and add `project_root=<the project path variable already in scope>`. If no such variable exists there, leave it unset and note it — the other path shapes still work, and absolute-path resolution simply stays off for that caller.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/unit/extraction/test_file_mentions.py -v`
-Expected: PASS, including the Hypothesis property.
+Expected: PASS, including the Hypothesis property and all of `TestEndToEndEventProduction`.
 
 - [ ] **Step 5: Check for over-matching regressions**
 
@@ -708,13 +804,18 @@ Expected: PASS. A widened pattern risks matching prose like "version 3.11" or mo
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/cognikernel/extraction/file_mentions.py tests/unit/extraction/test_file_mentions.py
-git commit -m "fix(extraction): make dotfile, relative, absolute and Windows paths visible
+git add src/cognikernel/extraction/file_mentions.py src/cognikernel/extraction/pipeline.py src/cognikernel/integration/session.py tests/unit/extraction/test_file_mentions.py
+git commit -m "fix(extraction): make dotfile, relative and Windows paths visible
 
 The lookbehind blocked any path preceded by '.', '/' or '\\', and the body
-class carried no backslash, so .claude/*, ./src/*, /abs/* and every Windows
-path produced no match at all. Adds a Hypothesis guard against the legacy
-first-character-strip behaviour."
+class carried no backslash, so .claude/*, ./src/* and every Windows path
+produced no match at all.
+
+Widening the regex alone was not enough for absolute paths: canonicalize_path
+returns '' for any absolute path when project_root is None, so they matched
+and then vanished. SessionMetadata now carries an optional project_root that
+file_mentions threads into canonicalization. Adds a Hypothesis guard against
+the legacy first-character-strip behaviour."
 ```
 
 ---
@@ -950,10 +1051,22 @@ class TestStatementRules:
         v = admit(_event("DECISION", "The dispatcher retries twice before dead-lettering."))
         assert v.action == "admit"
 
-    def test_rejects_subject_less_statement(self) -> None:
+    def test_downgrades_subject_less_statement(self) -> None:
+        # DOWNGRADE, not reject: the harm is that it renders in the block, and
+        # weight collapse already prevents that. Rejecting would also remove it
+        # from recall/find_related, which is strictly more destructive. This
+        # matches the policy pipeline.py already states for context-dependent
+        # fragments ("We DEMOTE (not drop)").
         v = admit(_event("DECISION", "It must not be able to take down the pipeline."))
-        assert v.action == "reject"
+        assert v.action == "downgrade"
         assert v.rule_id == "D7"
+
+    def test_subject_less_downgrade_is_not_applied_twice(self) -> None:
+        # v1/v2 head paths already demote fragments pre-hash (_FRAG_DEMOTE).
+        # The gate must not stack a second multiplier on the same event.
+        e = _event("DECISION", "It must not take down the pipeline.")
+        e.payload["provenance"] = "salience_v2+frag"
+        assert admit(e).action == "admit"
 
     def test_rejects_boilerplate(self) -> None:
         v = admit(_event("CONSTRAINT_HARD", "Pick up the last task as if the break never happened."))
@@ -1111,13 +1224,25 @@ def _admit_inner(event: Event, ground: GroundingContext | None) -> Verdict:
     description = payload.get("description", "") or ""
 
     if event.event_type in _STATEMENT_TYPES:
+        # REJECT for D2/D4: box-drawing artifacts and harness boilerplate carry
+        # no recoverable project content, so keeping them helps nothing.
         for hit in (
             detect_boilerplate(description),
             detect_junk_constraint(description, event.event_type),
-            detect_subject_less(description),
         ):
             if hit is not None:
                 return Verdict("reject", hit.rule_id, hit.note)
+
+        # DOWNGRADE for D7: a subject-less statement still carries a real fact,
+        # just one the reader cannot resolve. The harm is that it occupies the
+        # budget-ranked block; weight collapse fixes exactly that while leaving
+        # it reachable via recall/find_related. Rejecting would delete recoverable
+        # memory. Skipped when the v1/v2 head path already demoted this event
+        # (provenance carries '+frag'), so the multiplier is never applied twice.
+        if "+frag" not in (payload.get("provenance") or ""):
+            hit = detect_subject_less(description)
+            if hit is not None:
+                return Verdict("downgrade", hit.rule_id, hit.note)
 
     if event.event_type in _PATH_TYPES and ground is not None:
         path = payload.get("path", "") or ""
@@ -1134,11 +1259,18 @@ def apply_verdict(event: Event, verdict: Verdict) -> Event:
     """Mutate `event` per a downgrade verdict and return it.
 
     Only 'downgrade' changes the event; 'admit' and 'reject' leave it alone
-    (the caller drops rejects).
+    (the caller drops rejects). The marker key differs by rule so the two
+    downgrade reasons stay distinguishable in the store:
+      D1 -> payload['grounding'] = 'unverified'   (path not in the codebase)
+      D7 -> payload['quality']   = 'context_dependent'
     """
-    if verdict.action == "downgrade":
-        event.weight = (event.weight or 1.0) * _DOWNGRADE_FACTOR
+    if verdict.action != "downgrade":
+        return event
+    event.weight = (event.weight or 1.0) * _DOWNGRADE_FACTOR
+    if verdict.rule_id == "D1":
         event.payload["grounding"] = "unverified"
+    else:
+        event.payload["quality"] = "context_dependent"
     return event
 ```
 
@@ -1161,8 +1293,15 @@ git add src/cognikernel/quality tests/unit/quality/test_gate.py
 git commit -m "feat(quality): admission gate with path grounding
 
 One choke point instead of predicates wired into some extraction paths and
-not others. Unknown paths downgrade rather than drop, so genuinely new files
-survive; only near-miss truncations are rejected."
+not others.
+
+Verdicts are graded by how recoverable the content is. D2 and D4 reject —
+box-drawing artifacts and harness boilerplate carry nothing worth keeping.
+D7 downgrades, matching the policy pipeline.py already states for
+context-dependent fragments: weight collapse keeps them out of the
+budget-ranked block while leaving them reachable via recall. Unknown paths
+downgrade too, so genuinely new files survive; only near-miss truncations
+of a known path are rejected."
 ```
 
 ---
@@ -1422,7 +1561,8 @@ _META = SessionMetadata(project_id="p", session_id="s", started_at=0, ended_at=0
 class TestGateWiring:
     def test_rejected_event_is_not_stored(self, conn: sqlite3.Connection) -> None:
         ids = persist_events(
-            [_event("DECISION", "It must not take down the pipeline.")], conn, _META
+            [_event("CONSTRAINT_HARD", "Pick up the last task as if the break never happened.")],
+            conn, _META,
         )
         assert ids == []
         assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
@@ -1435,10 +1575,22 @@ class TestGateWiring:
 
     def test_rejection_is_counted(self, conn: sqlite3.Connection) -> None:
         persist_events(
-            [_event("DECISION", "It must not take down the pipeline.")], conn, _META
+            [_event("CONSTRAINT_HARD", "Pick up the last task as if the break never happened.")],
+            conn, _META,
         )
         counts = get_rule_counts(conn, "p")
-        assert any(c["rule_id"] == "D7" for c in counts)
+        assert any(c["rule_id"] == "D4" for c in counts)
+
+    def test_subject_less_event_is_stored_but_demoted(self, conn: sqlite3.Connection) -> None:
+        # D7 downgrades rather than rejects: still recallable, but weight
+        # collapsed so it falls off the budget-ranked block.
+        ids = persist_events(
+            [_event("DECISION", "It must not take down the pipeline.")], conn, _META
+        )
+        assert len(ids) == 1
+        row = conn.execute("SELECT payload, weight FROM events").fetchone()
+        assert "context_dependent" in row[0]
+        assert row[1] < 1.0
 
     def test_unknown_path_is_downgraded_not_dropped(self, conn: sqlite3.Connection) -> None:
         ground = GroundingContext(frozenset({"src/known.py"}))
@@ -1529,7 +1681,7 @@ Expected: PASS
 Run: `.venv/Scripts/python.exe -m pytest tests/unit tests/integration -q`
 Expected: PASS. Some existing tests may assert that a defective fixture event round-trips; if one does, it encoded the old behaviour — update it and note it in the commit.
 
-Then confirm the gate rejects a sane share, not everything:
+Then confirm the gate's verdict mix on real stored data. The denominator is the **five statement types only**, matching how the §0.1 baseline was computed — counting `COMPONENT_STATUS` and `THREAD_*` rows would dilute the rate and hide over-firing:
 
 ```bash
 .venv/Scripts/python.exe -c "
@@ -1537,21 +1689,25 @@ import sqlite3, json
 from pathlib import Path
 from cognikernel.quality.gate import admit
 from cognikernel.model import Event
-n=r=0
-for db in sorted((Path.home()/'.cognikernel'/'projects').glob('*.db'))[:40]:
+T={'DECISION','CONSTRAINT_HARD','CONSTRAINT_SOFT','APPROACH_ABANDONED','APPROACH_ABANDONED_DO_NOT_RETRY'}
+n=rej=dn=0
+for db in sorted((Path.home()/'.cognikernel'/'projects').glob('*.db')):
     try: c=sqlite3.connect(f'file:{db}?mode=ro',uri=True)
     except Exception: continue
     for et,pl in c.execute('SELECT event_type,payload FROM events WHERE archived=0'):
+        if et not in T: continue
         try: p=json.loads(pl)
         except Exception: continue
         n+=1
-        if admit(Event(project_id='p',session_id='s',event_type=et,payload=p,content_hash='h',weight=1.0)).action=='reject': r+=1
+        a=admit(Event(project_id='p',session_id='s',event_type=et,payload=p,content_hash='h',weight=1.0)).action
+        if a=='reject': rej+=1
+        elif a=='downgrade': dn+=1
     c.close()
-print(f'{r}/{n} rejected = {100*r/max(n,1):.1f}%')
+print(f'statements={n}  reject={rej} ({100*rej/max(n,1):.1f}%)  downgrade={dn} ({100*dn/max(n,1):.1f}%)')
 "
 ```
 
-Expected: single-digit percent, consistent with the measured baseline (D7 6.5% + D2 + D4 ≈ 7-9%). **If it exceeds ~15%, stop** — a detector is over-firing and would silently discard real memory. Tighten before proceeding.
+Expected, against the §0.1 baseline: **reject ≈ 0.1-2%** (D2 + D4 only, both small) and **downgrade ≈ 6-7%** (D7). **Stop and tighten if reject exceeds 5% or downgrade exceeds 15%** — that means a detector is over-firing and would suppress real memory. A reject rate near zero is fine and expected; D2/D4 are genuinely rare.
 
 - [ ] **Step 6: Commit**
 
@@ -1565,102 +1721,132 @@ the gate lives there rather than in the per-path predicates it supersedes."
 
 ---
 
-### Task 9: Render-time structural invariants
+### Task 9: Structural invariants at event level (not on the rendered string)
 
-Last line of defence. **Structural only** — no path grounding here, because that would be render-time filtering of stored rows, which prevent-only rules out (spec §4).
+Last line of defence. Two constraints shape where this runs:
+
+1. **Structural only** — no path grounding, because that would be render-time filtering of stored rows, which prevent-only rules out (spec §4).
+2. **It must filter events, not lines of the finished block.** `render_injection(ctx, survivors_out=out)` populates `out["events"]` with the set that actually rendered, and `render_with_budget_enforcement_ex` returns it for `storage/render_ledger.py` (which feeds the PreToolUse channel). Dropping lines from the assembled string *after* that set is computed would make the ledger claim an event rendered when its line was removed. So the filter runs over the event lists **before** sections are assembled, and the survivors set is correct by construction.
 
 **Files:**
 - Modify: `src/cognikernel/injection/template.py` (`render_injection`)
 - Test: `tests/unit/injection/test_render_invariants.py`
 
 **Interfaces:**
-- Consumes: `normalized_key` (Task 3).
-- Produces: `enforce_structural_invariants(block: str) -> str`
+- Consumes: `normalized_key`, `BOX_DRAWING_RE` (Tasks 2-3), `Event`.
+- Produces: `filter_structural_defects(events: list[Event]) -> list[Event]`
 
 - [ ] **Step 1: Write the failing test**
 
 Create `tests/unit/injection/test_render_invariants.py`:
 
 ```python
-"""Structural invariants on the rendered block (spec §4)."""
-from cognikernel.injection.template import enforce_structural_invariants
+"""Structural invariants over the event set before rendering (spec §4)."""
+from cognikernel.injection.template import filter_structural_defects
+from cognikernel.model import Event
+
+
+def _event(event_type: str, description: str, chash: str) -> Event:
+    return Event(
+        project_id="p",
+        session_id="s",
+        event_type=event_type,
+        payload={"description": description},
+        content_hash=chash,
+        weight=1.0,
+    )
 
 
 class TestStructuralInvariants:
-    def test_drops_box_drawing_line(self) -> None:
-        block = "### Hard constraints\n- fine line\n- ┌────┬────┐ junk\n"
-        out = enforce_structural_invariants(block)
-        assert "fine line" in out
-        assert "┌" not in out
+    def test_drops_box_drawing_event(self) -> None:
+        events = [
+            _event("DECISION", "Use SQLite for local state.", "a"),
+            _event("DECISION", "┌────┬────┐ │ Layer │ Choice │", "b"),
+        ]
+        out = filter_structural_defects(events)
+        assert len(out) == 1
+        assert out[0].content_hash == "a"
 
-    def test_drops_cross_section_duplicate(self) -> None:
-        block = (
-            "### Key decisions\n"
-            "- Record Celery as abandoned.\n"
-            "### Do not retry\n"
-            "- record celery as abandoned!\n"
-        )
-        out = enforce_structural_invariants(block)
-        assert out.count("elery") == 1
+    def test_drops_cross_type_duplicate_keeping_first(self) -> None:
+        events = [
+            _event("APPROACH_ABANDONED", "Record Celery as abandoned.", "a"),
+            _event("CONSTRAINT_HARD", "record celery as abandoned!", "b"),
+        ]
+        out = filter_structural_defects(events)
+        assert len(out) == 1
+        assert out[0].content_hash == "a"
 
-    def test_keeps_headings_and_distinct_content(self) -> None:
-        block = "### A\n- one\n### B\n- two\n"
-        assert enforce_structural_invariants(block) == block
+    def test_keeps_distinct_statements(self) -> None:
+        events = [
+            _event("DECISION", "Use Postgres.", "a"),
+            _event("DECISION", "Use Redis for the cache.", "b"),
+        ]
+        assert len(filter_structural_defects(events)) == 2
 
     def test_does_not_ground_paths(self) -> None:
         # Prevent-only: a legacy truncated path still renders. Grounding is the
         # admission gate's job and must never run here.
-        block = "### Component state\n- rc/storage/connection.py · MODIFIED\n"
-        assert "rc/storage/connection.py" in enforce_structural_invariants(block)
+        e = _event("COMPONENT_STATUS", "rc/storage/connection.py modified", "a")
+        e.payload["path"] = "rc/storage/connection.py"
+        assert filter_structural_defects([e]) == [e]
 
-    def test_never_raises_on_empty(self) -> None:
-        assert enforce_structural_invariants("") == ""
+    def test_empty_input_is_empty_output(self) -> None:
+        assert filter_structural_defects([]) == []
+
+    def test_never_raises_on_malformed_event(self) -> None:
+        e = _event("DECISION", "fine", "a")
+        e.payload = {}          # no description at all
+        assert filter_structural_defects([e]) == [e]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/unit/injection/test_render_invariants.py -v`
-Expected: FAIL — `ImportError: cannot import name 'enforce_structural_invariants'`
+Expected: FAIL — `ImportError: cannot import name 'filter_structural_defects'`
 
 - [ ] **Step 3: Write minimal implementation**
 
 Add to `src/cognikernel/injection/template.py`:
 
 ```python
-def enforce_structural_invariants(block: str) -> str:
-    """Drop malformed or duplicated lines from a rendered block.
+def filter_structural_defects(events: list[Event]) -> list[Event]:
+    """Drop malformed and cross-type-duplicate events before rendering.
+
+    Runs over the EVENT SET, not the assembled string, so that survivors_out
+    (and therefore the render ledger) reflects what actually rendered. Dropping
+    lines from the finished block would desynchronize them.
 
     STRUCTURAL ONLY. This deliberately does NOT check path grounding: doing so
     would filter already-stored rows at render time, which the design rules out
     in favour of prevent-only (spec §4). Grounding belongs to the admission
     gate, which only ever sees new events.
 
-    Never raises — on any error the block is returned unchanged, because a
+    Never raises — on any error the input list is returned unchanged, because a
     slightly malformed block beats no context at all.
     """
-    if not block:
-        return block
+    if not events:
+        return events
     try:
         from cognikernel.quality.detectors import BOX_DRAWING_RE, normalized_key
 
         seen: set[str] = set()
-        kept: list[str] = []
-        for line in block.split("\n"):
-            if BOX_DRAWING_RE.search(line):
-                _log.debug("render invariant: dropped box-drawing line")
+        kept: list[Event] = []
+        for event in events:
+            description = (event.payload or {}).get("description", "") or ""
+            if BOX_DRAWING_RE.search(description):
+                _log.debug("render invariant: dropped box-drawing event")
                 continue
-            if line.startswith("-") or line.startswith("*"):
-                key = normalized_key(line)
-                if key and key in seen:
-                    _log.debug("render invariant: dropped duplicate line")
+            key = normalized_key(description)
+            if key:
+                if key in seen:
+                    _log.debug("render invariant: dropped cross-type duplicate")
                     continue
-                if key:
-                    seen.add(key)
-            kept.append(line)
-        return "\n".join(kept)
+                seen.add(key)
+            kept.append(event)
+        return kept
     except Exception as exc:
-        _log.warning("render invariant check failed — returning block as-is: %s", exc)
-        return block
+        _log.warning("render invariant check failed — passing events through: %s", exc)
+        return events
 ```
 
 Add a public alias to `detectors.py` (below the `_BOX_DRAWING` definition) so the template does not import a private name across modules:
@@ -1673,19 +1859,21 @@ BOX_DRAWING_RE = _BOX_DRAWING
 
 Add it to `__init__.py`'s imports and `__all__` too.
 
-Then wrap the return of `render_injection`. The current line is `src/cognikernel/injection/template.py:138`:
+Then apply the filter **at the top of `render_injection`**, before any section is built and before `survivors_out` is populated. Near the start of the function body, filter each event list the renderer consumes:
 
 ```python
-    return "\n\n".join(s for s in sections if s)
+    ctx = copy.copy(ctx)
+    ctx.decisions = filter_structural_defects(ctx.decisions)
+    ctx.components = filter_structural_defects(ctx.components)
+    ctx.hard_constraints = filter_structural_defects(ctx.hard_constraints)
+    ctx.graveyard = filter_structural_defects(ctx.graveyard)
 ```
 
-Change it to:
+Match the actual attribute names on `InjectionContext` — read the dataclass first and filter every event-list field it exposes except `active_threads`, which is protected from dropping elsewhere in this module and should stay that way.
 
-```python
-    return enforce_structural_invariants("\n\n".join(s for s in sections if s))
-```
+Do **not** touch line 138 (`return "\n\n".join(s for s in sections if s)`); the string stays untouched by design.
 
-Ensure `template.py` has `import logging` and a module-level `_log = logging.getLogger("cognikernel.injection")`; add them if absent.
+Ensure `template.py` has `import copy`, `import logging`, and a module-level `_log = logging.getLogger("cognikernel.injection")`; `copy` and `_log` are already used by `render_with_budget_enforcement_ex`, so most likely only the check is needed.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2024,11 +2212,13 @@ paper's prevalence table both read."
 
 ## Deviations from the spec (decided while planning — read before implementing)
 
-Two spec items are deliberately not implemented as written. Both are narrowings, and the reasoning belongs with the plan rather than in a commit message nobody re-reads.
+Three spec items are deliberately not implemented as written. All three are narrowings, and the reasoning belongs with the plan rather than in a commit message nobody re-reads.
 
-**1. D5 is handled at render time, not by write-time cross-type suppression.** Spec §3 says "content-hash uniqueness checked across all event types at write time." Not done, because the gate sees one event at a time and has no principled way to choose *which* of two same-text events survives: suppressing the second arrival means a `CONSTRAINT_HARD` can lose to a `DECISION` purely on extraction order, which trades a visible duplicate for a silent loss of the more authoritative row. The render-time dedup in Task 9 removes the user-visible symptom — the same fact appearing in two sections — with no risk of dropping the authoritative copy. If the measured D5 rate stays material after these fixes, revisit with an explicit type-priority rule rather than first-writer-wins.
+**1. D5 is deduplicated at render time, not by write-time cross-type suppression.** Spec §3 says "content-hash uniqueness checked across all event types at write time." Not done, because the gate sees one event at a time and has no principled way to choose *which* of two same-text events survives: suppressing the second arrival means a `CONSTRAINT_HARD` can lose to a `DECISION` purely on extraction order, which trades a visible duplicate for a silent loss of the more authoritative row. Task 9 removes the user-visible symptom — the same fact appearing in two sections — with no row deleted from the store. Note it filters the *event set* before section assembly rather than the rendered string, so `survivors_out` and the render ledger stay accurate; a string-level filter would have made the ledger claim an event rendered when its line had been removed. If D5 stays material after these fixes, revisit with an explicit type-priority rule rather than first-writer-wins.
 
-**2. Windowing span-contiguity enforcement (spec §3, D6/D7) is not implemented.** The spec proposed changing `windowing.py` so descriptions cannot splice non-adjacent sentences. §0.1 then measured D6 at 0.1% in 2 stores and found its actual cause was `normalize.py:81` capitalization, which Task 3 fixes directly. Changing windowing's span logic is high-blast-radius surgery on the main extraction path to chase a 0.1% class whose diagnosis has already moved. D7 — the class that actually matters at 6.5% — is addressed at the gate, which catches subject-less statements regardless of how windowing assembled them. Spec §8 already flags "does D6 survive as a class" as open; this plan answers "not yet."
+**2. D7 downgrades instead of rejecting.** The spec's §3 wording ("the subject-presence heuristic gates admission") reads as rejection. Changed to downgrade after finding that `pipeline.py` already states the opposite policy for the same class of statement — *"We DEMOTE (not drop): weight collapses so they fall off the budget-ranked block while staying in the store"* — with `_FRAG_DEMOTE = 0.4`. The harm D7 causes is occupying the budget-ranked block, and weight collapse fixes exactly that; rejecting would additionally remove the statement from `recall` and `find_related`, which is strictly more destructive for a memory system and would contradict a reasoned decision already in the file. D2 and D4 still reject, because box-drawing artifacts and harness boilerplate carry no recoverable content. The gate skips its downgrade when the v1/v2 head path already demoted the event (`provenance` contains `+frag`) so the multiplier is never applied twice.
+
+**3. Windowing span-contiguity enforcement (spec §3, D6/D7) is not implemented.** The spec proposed changing `windowing.py` so descriptions cannot splice non-adjacent sentences. §0.1 then measured D6 at 0.1% in 2 stores and found its actual cause was `normalize.py:81` capitalization, which Task 3 fixes directly. Changing windowing's span logic is high-blast-radius surgery on the main extraction path to chase a 0.1% class whose diagnosis has already moved. D7 — the class that actually matters at 6.5% — is addressed at the gate, which catches subject-less statements regardless of how windowing assembled them. Spec §8 already flags "does D6 survive as a class" as open; this plan answers "not yet."
 
 ## Deliberately out of scope
 
