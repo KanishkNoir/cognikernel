@@ -1,6 +1,9 @@
 # Injection correctness — defect taxonomy, root-cause fixes, and admission control
 
-**Status:** design approved, not yet implemented
+**Status:** design approved; **§0 amended 2026-08-01 after a measurement pass**
+(see §0.1) — the amendment corrects, and in one case retracts, claims made from
+unmeasured evidence. No re-approval sought: these are factual corrections
+discovered while planning, and they narrow scope rather than expand it.
 **Date:** 2026-08-01
 **Framing:** first cycle of the next-version quality trajectory (injection
 correctness → retrieval relevance → speed/granularity, each its own spec).
@@ -40,6 +43,77 @@ instructions declare the block "supersedes CLAUDE.md"):
 - **Mashed fragments**: decisions stitched from unrelated spans with `->`
   splices and orphaned list markers.
 
+## 0.1 Amendment — what the measurement pass actually found
+
+Every defect above was read off **one artifact**: the session-context block
+injected into the session that authored this spec. Before planning fixes, a
+read-only date-stratified sweep of all 163 local stores (8,822 active
+statement rows, 370 component rows, 10,165 descriptions) tested each class.
+The result changes the plan materially.
+
+| Class | Measured | Stores | Dating | Verdict |
+|---|---|---|---|---|
+| D1 path-corruption | 17 / 370 (4.6%) | 2 | **all 2026-05-10, none since** | **LEGACY — retracted as a live bug** |
+| D2 junk-as-constraint | 64 / 3,250 (2.0%) | 20 | all months incl. 08 | live, but **detector over-fires** |
+| D4 boilerplate-capture | 9 / 8,822 (0.1%) | 9 | through 2026-07 | live, small, cheap |
+| D5 cross-type duplicate | 79 / 8,723 (0.9%) | 20 | all months | **live, confirmed** |
+| D6 mashed-fragment | 8 / 8,822 (0.1%) | 2 | 2026-07/08 | marginal — see below |
+| D7 subject-less | 575 / 8,822 (6.5%) | 34 | **growing: 188→310→66** | **live, dominant** |
+| D3 vendored-skeleton | 2 stores affected | 2 | current | **live, severe where it hits** |
+
+**D1 is retracted.** The spec asserted "one specific extraction code path
+strips a leading character," present tense. It does not. All 17 occurrences
+are in 2 stores on a single day (2026-05-10), during the `memlora` era — the
+paths themselves contain `memlora`, the pre-rename package name. A direct
+probe of `_FILE_PATTERN` + `canonicalize_path` on 19 realistic path shapes
+produced **zero** truncations. There is no live generator. D1 becomes a
+regression guard, not a bug hunt.
+
+**But a real, live path bug was found in its place — silent loss, not
+corruption.** `_FILE_PATTERN`'s negative lookbehind `(?<![a-zA-Z0-9_./\\])`
+combined with a body class `[a-zA-Z0-9_/.-]` containing no backslash means
+these produce **no match at all**:
+
+- `.claude/settings.json` and every dotfile/dotdir path
+- `./src/foo.py` and `/abs/src/foo.py`
+- **every Windows backslash path** (`C:\Users\...\src\storage\connection.py`)
+
+A whole class of file mentions is invisible to component tracking. Fixing the
+lookbehind alone is insufficient — the body class and the `/` separator in the
+directory-repeat group must widen too, or Windows paths still vanish.
+
+**D2's 2.0% is an artifact of a bad proxy.** Inspection of the hits shows the
+detector firing on leading-imperative constraints — *"Do the slow work outside
+any transaction"*, *"Do not cache in Redis"* — which are well-formed. It
+cannot tell an imperative "Do not…" from an interrogative "Does…". The genuine
+hits (*"…should we just bring in Celery + Redis?"* stored as a constraint) are
+a small fraction. **Detector precision is therefore itself a deliverable**, not
+an assumption; the audit must report per-detector false-positive rate against
+hand labels before any rate is quoted.
+
+**D7 is the real headline** and the spec under-weighted it: 6.5%, 34 of 163
+stores, rising month over month, with unambiguous examples (*"This only
+guarantees the event is captured exactly once."* — what does? *"It must not be
+able to take down the pipeline."* — what must not?).
+
+**D6 is marginal but surfaced a distinct real defect:** hits like
+`'Src/cognitrace/harness/latency.py …'` are not mashed fragments — they are
+`extraction/normalize.py:81` (`s = s[0].upper() + s[1:]`) capitalizing a
+description that begins with a file path, corrupting the path's first segment.
+Small, live, and a one-line guard.
+
+**Two claims tested and dropped, recorded so they are not re-litigated:**
+
+- *Encoding corruption*: 0 U+FFFD in 10,165 descriptions. The `?`-looking
+  glyphs in earlier output were console encoding, not stored data. No such
+  defect class exists.
+- *D3's mechanism*: confirmed, and worse than described where it hits — one
+  store carries **4,655 of 4,934 symbol nodes (94%) from vendored/cache
+  paths**, and both affected stores exceed the file cap. So the cap does fill
+  with vendored files *and* they crowd the PageRank ranking and 600-token
+  `skeleton_budget`. Only 2 of 163 stores are affected — but CogniKernel's own
+  store is one of them, which is why it appeared in the authoring session.
+
 The prior statement-quality audit (see
 `2026-07-25-memory-statement-generation-design.md` §0) measured 11.9% surface
 defects over 6,434 statements across 163 stores, with a plausible true rate of
@@ -60,9 +134,14 @@ well-formed, grounded in the actual codebase, and non-duplicated.
 
 **Success criteria:**
 
-1. Offline A/B re-extraction over the 163 local stores' source transcripts
-   shows **≥90% reduction in detector-flagged defects per class** (new
-   pipeline vs old, same inputs).
+1. **Per-class reduction on the classes measured live in §0.1** — D2, D3, D4,
+   D5, D6, D7 — against their committed baseline. Targets are set per class
+   *after* detector precision is established (§0.1: D2's proxy over-fires), not
+   uniformly: a 90% cut in a detector's hits is meaningless if a third of them
+   are false positives. **The ≥90%-for-every-class target from the approved
+   draft is withdrawn**; it was written before the classes were measured, and
+   for the legacy-only class (D1) reduction against current code is ~0 by
+   construction — there is nothing live left to remove.
 2. **Zero D1-detectable corrupted paths in any rendered injection block** —
    grounding + near-miss rejection make this a hard invariant, not a
    statistic. (A path that is neither in the inventory nor a near-miss of a
@@ -82,7 +161,11 @@ speed optimization beyond not-regressing.
 
 ### 2.1 The taxonomy
 
-Seven named defect classes. Each gets a pure-function detector; the taxonomy
+Seven named defect classes, **defined here but prioritized by §0.1's measured
+prevalence**: D7 and D3 first (dominant / severe), then D5, D2, D4, then D1 as
+a regression guard. Detector definitions below are the *starting* shapes; §0.1
+showed at least D2's needs to be rewritten before its rate means anything.
+Each class gets a pure-function detector; the taxonomy
 is itself a paper contribution (definitions + anonymized real examples +
 baseline prevalence with Wilson CIs), positioned against the gap that the
 Mem0/Letta/A-Mem literature benchmarks recall, not stored-memory quality.
@@ -117,14 +200,22 @@ Mem0/Letta/A-Mem literature benchmarks recall, not stored-memory quality.
 Fixes are per defect class. The *test* is the contract; exact fix locations
 are implementation details found via systematic debugging.
 
-### D1 — path corruption (the first-char strip)
+### D1 — path integrity (rescoped by §0.1: guard, not hunt)
 
-Property-based round-trip contract: for any well-formed path embedded in
-transcript text, the stored `component_map` key equals
-`canonicalize_path(original)`. `utils/paths.py:canonicalize_path` is verified
-clean; suspects are windowing span slicing, sanitize's markdown stripping, and
-trie matching. The coexistence of intact and truncated variants of the same
-file proves a single corrupting code path.
+There is no live truncation bug. Two things replace the bug hunt:
+
+1. **Regression guard.** A Hypothesis property test asserting that for any
+   well-formed path embedded in transcript text, the stored `component_map`
+   key equals `canonicalize_path(original)` — no truncation, ever. This is
+   expected to pass on first run; its value is preventing regression to the
+   May-10 behavior. If it *fails*, a live generator exists after all and the
+   original bug hunt resumes.
+2. **The live recall bug (§0.1).** Widen `_FILE_PATTERN` to match dotfile
+   paths, `./`-relative, absolute, and Windows backslash paths. All three of
+   the lookbehind, the body character class, and the directory-separator group
+   must change together; `canonicalize_path` then normalizes separators. Also
+   guard `normalize.py:81` so first-letter capitalization never rewrites a
+   description whose leading token is a path.
 
 ### D3 — vendored skeleton (scope the walk)
 
@@ -199,11 +290,17 @@ pattern from Wave 1.3): `(project_id, session_id, rule_id, count, ts)`.
 `cognikernel doctor` prints top rejection rules — real-world prevention rates
 for the paper's longitudinal claim.
 
-**Render-time invariant check (last line of defense):**
-`injection/template.py:render_injection` verifies the rendered block: no
-box-drawing characters, no duplicate normalized lines across sections, all
-paths grounded-or-flagged. A violation logs to stderr, drops the offending
-line, and never crashes — an empty section beats a dead session.
+**Render-time invariant check — scope resolved.** The approved draft said the
+render check verifies "all paths grounded-or-flagged," which is render-time
+*filtering* of stored rows — the option explicitly declined in favour of
+prevent-only. Resolved: **the render check enforces structural invariants
+only** — no box-drawing characters, no duplicate normalized lines across
+sections. It does **not** ground paths, so the 17 legacy May-10 paths continue
+to render until decay retires them. That is the accepted cost of prevent-only,
+and §0.1 shows the exposure is 2 stores, not a fleet-wide problem. Grounding
+lives solely in the admission gate, where it only ever sees new events. A
+violation logs to stderr, drops the offending line, and never crashes — an
+empty section beats a dead session.
 
 ---
 
@@ -214,9 +311,22 @@ line, and never crashes — an empty section beats a dead session.
 - **How — architecture section:** root-cause fixes + admission control with
   grounding, contrasted with filter-only designs.
 - **Impact — three tiers:**
-  1. **Offline A/B (primary, immediate):** re-run old vs new extraction over
-     the same source transcripts of all 163 stores; per-class defect
-     reduction vs the ≥90% target. Deterministic, exactly reproducible.
+  1. **Offline A/B (primary) — rescoped by measurement.** The approved draft
+     assumed the source transcripts of all 163 stores could be re-extracted.
+     They cannot: only **22 of 139 stored session ids (15.8%)** still have a
+     `~/.claude/projects/**/*.jsonl` transcript on disk. Sessions are the unit
+     that disappears, so the A/B runs on two corpora instead:
+     - **Recovered corpus (n=22 sessions):** true end-to-end old-vs-new
+       re-extraction. Small, real, honestly reported as such with CIs.
+     - **Fixture corpus (committed):** hand-built transcripts under
+       `tests/fixtures/transcripts/` that instantiate each live defect class,
+       including the §0.1 path shapes. Deterministic, reproducible by anyone
+       cloning the repo — which the recovered corpus is not, since it depends
+       on one machine's private transcripts.
+     The **stored-event sweep** (163 stores) remains the prevalence baseline
+     for the taxonomy; it measures how common each defect is, while the A/B
+     measures whether the fix removes it. Keeping those two roles distinct is
+     what the approved draft conflated.
   2. **Downstream (Wave 4 tie-in):** run the ready Arm C benchmark on the new
      pipeline; measure token use / constraint adherence. May show no
      significant change — reported either way.
@@ -271,11 +381,23 @@ counter. Extraction exits 0 always (existing contract).
    telemetry, Wave 4 tie-in) plus grounding as the researched
    beyond-current-architecture addition.
 
-## 8. Open questions (deferred to implementation)
+## 8. Open questions
 
-- Exact location of the D1 first-char strip (found via systematic debugging;
-  the round-trip property test is the acceptance contract regardless).
-- Whether Hypothesis is added as a dev dependency or property cases are
-  hand-parametrized.
-- The near-miss edit-distance threshold (start: first-segment distance ≤1;
-  tune against the audit corpus, report false-positive rate).
+**Closed by the §0.1 measurement pass:**
+
+- ~~Exact location of the D1 first-char strip~~ — no live strip exists; D1 is
+  legacy-only and becomes a regression guard.
+- ~~Whether Hypothesis is a dev dependency~~ — it already is
+  (`pyproject.toml` `[dependency-groups] dev`), so property tests are free.
+- ~~Near-miss edit-distance threshold~~ — **demoted**. With no live generator
+  of truncated paths, near-miss rejection is a defense-in-depth guard, not a
+  threshold worth tuning against n=17 in 2 stores. The **downgrade** path for
+  unverified paths carries the value and keeps the tuning surface.
+
+**Still open:**
+
+- Per-class reduction targets, set only after each detector's false-positive
+  rate is measured against hand labels (§0.1 shows D2's proxy is unfit as-is).
+- Whether D6 survives as its own class at 0.1% in 2 stores, or is retired in
+  favour of the specific `normalize.py:81` path-capitalization guard it
+  actually surfaced.
