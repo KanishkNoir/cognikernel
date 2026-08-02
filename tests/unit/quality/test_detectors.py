@@ -4,6 +4,7 @@ from cognikernel.quality.detectors import (
     detect_boilerplate,
     detect_junk_constraint,
     detect_subject_less,
+    normalized_key,
 )
 
 
@@ -99,3 +100,21 @@ class TestDetectBoilerplate:
 
     def test_allows_ordinary_statement(self) -> None:
         assert detect_boilerplate("The worker retries twice before dead-lettering.") is None
+
+
+class TestNormalizedKey:
+    """D5 — the key that makes 'same fact, different type' detectable."""
+
+    def test_collapses_case_and_punctuation(self) -> None:
+        a = normalized_key("Record Celery as an explicitly abandoned approach!")
+        b = normalized_key("record celery as an explicitly abandoned approach")
+        assert a == b
+
+    def test_collapses_whitespace(self) -> None:
+        assert normalized_key("a   b\n c") == normalized_key("a b c")
+
+    def test_distinguishes_different_statements(self) -> None:
+        assert normalized_key("use postgres") != normalized_key("use redis")
+
+    def test_empty_is_empty(self) -> None:
+        assert normalized_key("   ") == ""

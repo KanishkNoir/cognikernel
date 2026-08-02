@@ -20,6 +20,11 @@ from __future__ import annotations
 
 import re
 
+# A leading token that looks like a path: a dot-directory (".claude/…") or a
+# first segment terminated by a separator ("src/…", "src\…"). Used to suppress
+# sentence-case capitalization, which would corrupt the path.
+_OPENS_WITH_PATH = re.compile(r"^(?:\.[a-zA-Z0-9_]|[a-zA-Z0-9_.-]+[/\\])")
+
 # ── A-1: prompt-verb prefix stripping ────────────────────────────────────────
 
 
@@ -76,8 +81,11 @@ def normalize_description(text: str) -> str:
             break
 
     # After stripping, the first character may now be lowercase. Capitalize it
-    # so the sanitized form reads like a sentence.
-    if s and s[0].islower():
+    # so the sanitized form reads like a sentence — but NEVER when the leading
+    # token is a file path. Capitalizing rewrites the path's first segment
+    # ('src/...' -> 'Src/...'), which then matches nothing in the codebase and
+    # silently strands the statement's referent. Observed in 2 stores.
+    if s and s[0].islower() and not _OPENS_WITH_PATH.match(s):
         s = s[0].upper() + s[1:]
 
     s = _WHITESPACE.sub(" ", s).strip()

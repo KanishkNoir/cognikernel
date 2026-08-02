@@ -178,3 +178,23 @@ class TestSmartTruncate:
         result = smart_truncate(text, 25, ellipsis="...")
         assert result.endswith("...")
         assert len(result) <= 25
+
+
+class TestPathCapitalizationGuard:
+    """D6 — first-letter capitalization must not rewrite a leading file path.
+
+    Observed in the store sweep as 'Src/cognitrace/harness/latency.py ...'.
+    A capitalized path matches nothing in the codebase, so the statement
+    silently loses its referent.
+    """
+
+    def test_does_not_capitalize_leading_path(self) -> None:
+        out = normalize_description("src/cognitrace/harness/latency.py added timing")
+        assert out.startswith("src/")
+
+    def test_does_not_capitalize_dotted_path(self) -> None:
+        out = normalize_description(".claude/settings.json registers the hook")
+        assert out.startswith(".claude/")
+
+    def test_still_capitalizes_ordinary_prose(self) -> None:
+        assert normalize_description("the worker retries twice").startswith("The")

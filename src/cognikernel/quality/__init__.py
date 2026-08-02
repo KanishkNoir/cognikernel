@@ -10,6 +10,7 @@ from cognikernel.quality.detectors import (
     detect_boilerplate,
     detect_junk_constraint,
     detect_subject_less,
+    normalized_key,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "detect_boilerplate",
     "detect_junk_constraint",
     "detect_subject_less",
+    "normalized_key",
 ]

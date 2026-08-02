@@ -124,3 +124,24 @@ def detect_boilerplate(text: str) -> DetectorHit | None:
     if _BOILERPLATE.search(stripped):
         return DetectorHit("D4", "harness or compaction boilerplate")
     return None
+
+
+# ── D5: cross-type duplicates ────────────────────────────────────────────────
+#
+# Content-hash dedup is per (event_type, description), so the SAME fact stored
+# under two types survives as two rows and renders in two sections. This key is
+# type-independent: equal keys mean "same statement", whatever the type.
+
+_NON_KEY_CHARS = re.compile(r"[^a-z0-9 ]")
+_WHITESPACE = re.compile(r"\s+")
+
+
+def normalized_key(text: str) -> str:
+    """Type-independent identity key for a statement.
+
+    Lowercase, strip punctuation, collapse whitespace. Equal keys across two
+    different event types is exactly the D5 defect.
+    """
+    lowered = (text or "").lower()
+    stripped = _NON_KEY_CHARS.sub(" ", lowered)
+    return _WHITESPACE.sub(" ", stripped).strip()
