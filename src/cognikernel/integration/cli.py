@@ -1122,6 +1122,13 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
             (project_id, project_id),
         ).fetchone()[0]
         cache_stats = get_cache_stats(conn, project_id)
+        # Quality gate — which defect rules are firing in real use. Fail-soft:
+        # a doctor section must never be the thing that breaks doctor.
+        try:
+            from cognikernel.storage.quality_telemetry import get_rule_counts
+            quality_counts = get_rule_counts(conn, project_id, limit=5)
+        except Exception:
+            quality_counts = []
         evidence_summary = get_evidence_summary(conn, project_id)
         import time as _time
         dead_jobs = list_jobs(conn, project_id, state="dead_lettered", limit=1000)
@@ -1156,6 +1163,15 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
             "likely orphaned by a crashed process; run 'cognikernel doctor' again after "
             "the next session to confirm they clear."
         )
+
+    print()
+    print("-- quality gate ---------------------------------------------")
+    if not quality_counts:
+        print("  no rejections recorded yet")
+    else:
+        print("  top rules fired    :")
+        for entry in quality_counts:
+            print(f"    {entry['rule_id']:<6} {entry['total']:>6}")
 
     print()
     print("-- cache telemetry ------------------------------------------")

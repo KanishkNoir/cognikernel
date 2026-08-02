@@ -440,10 +440,33 @@ def persist_events(
     events: list[Event],
     conn: sqlite3.Connection,
     session_meta: SessionMetadata | None = None,
+    ground=None,
 ) -> list[int]:
-    """Write extracted events to storage. Returns row IDs of inserted/updated rows."""
+    """Write extracted events to storage. Returns row IDs of inserted/updated rows.
+
+    Every event passes the quality gate first. This is the single choke point,
+    and it is deliberately here rather than in the per-path predicates it
+    supersedes: sanitize.py's fragment check runs only in the v1/v2 head paths,
+    so the default `legacy` extractor never ran it.
+
+    `ground` is an optional GroundingContext for path referential integrity;
+    when None, path checks are skipped and behaviour is unchanged.
+    """
+    from cognikernel.quality.gate import admit, apply_verdict
+    from cognikernel.storage.quality_telemetry import record_verdict
+
     ids: list[int] = []
     for event in events:
+        verdict = admit(event, ground)
+        if verdict.rule_id:
+            record_verdict(conn, event.project_id, event.session_id, verdict.rule_id)
+        if verdict.action == "reject":
+            _log.debug(
+                "event rejected by quality gate",
+                extra={"rule_id": verdict.rule_id, "note": verdict.note},
+            )
+            continue
+        apply_verdict(event, verdict)
         try:
             ids.append(insert_event(conn, event))
         except Exception as exc:

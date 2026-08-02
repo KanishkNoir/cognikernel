@@ -57,6 +57,55 @@ class InjectionContext:
     pending_confirmations: list[Event] = field(default_factory=list)
 
 
+def filter_structural_defects(
+    events: list[Event],
+    seen: set[str] | None = None,
+) -> list[Event]:
+    """Drop malformed and duplicated events before rendering.
+
+    Runs over the EVENT SET, not the assembled string, so that survivors_out —
+    and therefore the render ledger — reflects what actually rendered. Dropping
+    lines from the finished block would desynchronize them.
+
+    Pass one shared `seen` set across every bucket: the observed D5 defect was
+    a single fact rendered in both "Key decisions" and "Do not retry", which a
+    per-call set cannot catch. Call order sets priority, so callers should
+    filter higher-authority buckets first.
+
+    STRUCTURAL ONLY. This deliberately does NOT check path grounding: doing so
+    would filter already-stored rows at render time, which the design rules out
+    in favour of prevent-only (spec §4). Grounding belongs to the admission
+    gate, which only ever sees new events.
+
+    Never raises — on any error the input is returned unchanged, because a
+    slightly malformed block beats no context at all.
+    """
+    if not events:
+        return events
+    try:
+        from cognikernel.quality.detectors import BOX_DRAWING_RE, normalized_key
+
+        if seen is None:
+            seen = set()
+        kept: list[Event] = []
+        for event in events:
+            description = (event.payload or {}).get("description", "") or ""
+            if BOX_DRAWING_RE.search(description):
+                _log.debug("render invariant: dropped box-drawing event")
+                continue
+            key = normalized_key(description)
+            if key:
+                if key in seen:
+                    _log.debug("render invariant: dropped cross-type duplicate")
+                    continue
+                seen.add(key)
+            kept.append(event)
+        return kept
+    except Exception as exc:
+        _log.warning("render invariant check failed — passing events through: %s", exc)
+        return events
+
+
 def render_injection(
     ctx: InjectionContext,
     survivors_out: dict | None = None,
@@ -83,10 +132,17 @@ def render_injection(
     has_skeleton = bool(ctx.skeleton)
     sb = ctx.section_budgets
 
-    hard = ctx.hard_constraints
-    grave = ctx.graveyard
-    comps = ctx.components
-    decs = ctx.decisions
+    # Structural pass BEFORE budget enforcement and before survivors_out is
+    # computed, so the ledger stays consistent with what rendered. One shared
+    # `seen` across buckets catches the cross-section duplicate; bucket order
+    # is the priority order, so a hard constraint outranks a decision carrying
+    # the same text. active_threads and pending_confirmations are left alone —
+    # they are protected from dropping everywhere else in this module.
+    _seen: set[str] = set()
+    hard = filter_structural_defects(ctx.hard_constraints, _seen)
+    grave = filter_structural_defects(ctx.graveyard, _seen)
+    comps = filter_structural_defects(ctx.components, _seen)
+    decs = filter_structural_defects(ctx.decisions, _seen)
 
     if sb is not None:
         hard = _enforce_section_budget(

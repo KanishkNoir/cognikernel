@@ -1,0 +1,1 @@
+For the queue between worker and dispatcher, should we just bring in Celery + Redis?

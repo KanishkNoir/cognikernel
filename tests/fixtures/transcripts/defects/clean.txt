@@ -1,0 +1,1 @@
+Do not cache in Redis, because that adds a network hop and defeats the point.
