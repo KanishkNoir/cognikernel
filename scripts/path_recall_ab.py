@@ -39,10 +39,16 @@ OLD_PATTERN = re.compile(
 
 
 def extractable(pattern: re.Pattern, text: str) -> set[str]:
-    """Paths this pattern would actually turn into a component, post-canonicalization."""
+    """Paths this pattern would actually turn into a component, post-canonicalization.
+
+    Deduplicates the raw match strings BEFORE canonicalizing. A transcript
+    mentions the same path hundreds of times, and canonicalizing each occurrence
+    made this scan quadratic in repetition for no extra information.
+    """
+    raw = {m.group(0) for m in pattern.finditer(text)}
     out: set[str] = set()
-    for m in pattern.finditer(text):
-        p = canonicalize_path(m.group(0))
+    for candidate in raw:
+        p = canonicalize_path(candidate)
         if p and not is_bare_basename(p):
             out.add(p)
     return out
@@ -81,6 +87,7 @@ def main() -> int:
             continue
 
         store_old = store_new = 0
+        print(f"  {db.name}: {len(rows)} blobs", flush=True)
         for encoding, blob in rows:
             if blob is None:
                 continue
