@@ -142,6 +142,54 @@ research script. The fix removes the separators from the inner class so each
 repetition matches exactly one segment with nothing to backtrack over.
 Regression tests assert linear time on dot-slash, backslash, and mixed runs.
 
+### Measured — path recall, and what three attempts at measuring it cost
+
+Final result over 1,024 stored evidence blobs across 163 stores:
+
+| | paths extractable |
+|---|---|
+| old pattern | 2,705 |
+| new pattern | 2,774 |
+| **gain** | **+69 (+2.6%), 6 stores** |
+
+Recovered by shape: 28 dot-directory, 81 other.
+
+**This number moved twice for methodological reasons, and the progression is
+the more useful finding.**
+
+| attempt | input | project_root | result |
+|---|---|---|---|
+| 1 | raw JSONL | none | **−817 (−6.5%)** — invalid |
+| 2 | decoded transcript | none | +27 (+1.0%) — partial |
+| 3 | decoded transcript | real, from `meta` | **+69 (+2.6%)** — faithful |
+
+*Attempt 1* fed raw JSONL, whose literal `\n` escapes are backslash+letter —
+which the new Windows-separator support reads as directory separators, fusing
+prose and paths into strings like `skeleton/n/nsrc/conductor/driver.py`.
+Production never sees that: `jsonl_to_transcript` parses each line first. Had
+this been reported, it would have shown a regression that does not exist.
+
+*Attempt 2* still withheld `project_root`, so every absolute path canonicalized
+to `''` and was dropped. Production supplies a root, so the harness was
+measuring a pipeline configuration that never runs.
+
+The 6 paths that genuinely stopped being extracted were checked individually
+rather than assumed, and neither category is a regression:
+
+- **URL fragments** — the old pattern minted
+  `record/blob/main/locales/en/x.md` out of a GitHub URL. These were never
+  project files; dropping them is a precision improvement.
+- **Absolute paths** — resolvable only with a root. With one, e.g.
+  `/home/me/src/cognitrace/baselines/full_context.py` correctly becomes
+  `src/cognitrace/baselines/full_context.py`.
+
+**Read this number honestly**: +2.6% aggregate, 6 of 163 stores. The
+qualitative change is larger than the aggregate suggests — `.claude/settings.json`
+and `.codex/config.toml` were previously *unmatched entirely*, so they were
+silently absent rather than corrupted — but this is a narrow fix, not a
+headline one. The skeleton scoping (94% → 0% vendored) is the branch's
+substantive win.
+
 ### Measured — detector precision
 
 The production detectors are deliberately more conservative than the
@@ -205,6 +253,13 @@ only **22 of 139** stored session ids still have a transcript on disk (15.8%).
 That is why the path-recall claim is evidenced by replaying both regexes over
 stored `raw_evidence` instead — deterministic, needs no transcript recovery,
 and measures precisely what changed.
+
+**A replay harness must reproduce the pipeline's input, not just its data.**
+Both times this one disagreed with the code, the harness was wrong: first by
+skipping JSONL decoding, then by withholding `project_root`. The sign of the
+result flipped from −6.5% to +2.6% purely on those two corrections. Any future
+A/B here should assert it reconstructs the same string extraction actually
+receives before it is trusted to contradict a unit test.
 
 ---
 

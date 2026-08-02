@@ -39,7 +39,7 @@ OLD_PATTERN = re.compile(
 )
 
 
-def extractable(pattern: re.Pattern, text: str) -> set[str]:
+def extractable(pattern: re.Pattern, text: str, project_root: str | None = None) -> set[str]:
     """Paths this pattern would actually turn into a component, post-canonicalization.
 
     Deduplicates the raw match strings BEFORE canonicalizing. A transcript
@@ -49,7 +49,7 @@ def extractable(pattern: re.Pattern, text: str) -> set[str]:
     raw = {m.group(0) for m in pattern.finditer(text)}
     out: set[str] = set()
     for candidate in raw:
-        p = canonicalize_path(candidate)
+        p = canonicalize_path(candidate, project_root)
         if p and not is_bare_basename(p):
             out.add(p)
     return out
@@ -87,8 +87,20 @@ def main() -> int:
         except Exception:
             continue
 
+        # Supply the store's real project root, exactly as production does.
+        # Without it an ABSOLUTE path canonicalizes to '' and is dropped, which
+        # made the new pattern look like a regression when it is in fact
+        # resolving paths the old one never matched at all.
+        try:
+            r = conn.execute(
+                "SELECT value FROM meta WHERE key = 'project_path'"
+            ).fetchone()
+            project_root = r[0] if r else None
+        except Exception:
+            project_root = None
+
         store_old = store_new = 0
-        print(f"  {db.name}: {len(rows)} blobs", flush=True)
+        print(f"  {db.name}: {len(rows)} blobs (root={bool(project_root)})", flush=True)
         for encoding, blob, source_type in rows:
             if blob is None:
                 continue
@@ -106,8 +118,8 @@ def main() -> int:
             except Exception:
                 continue
             blobs += 1
-            o = extractable(OLD_PATTERN, text)
-            n = extractable(NEW_PATTERN, text)
+            o = extractable(OLD_PATTERN, text, project_root)
+            n = extractable(NEW_PATTERN, text, project_root)
             store_old += len(o)
             store_new += len(n)
             for p in (n - o):

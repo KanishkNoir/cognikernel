@@ -1,25 +1,25 @@
 {
-  "absolute_gain": 27,
-  "evidence_blobs": 1023,
+  "absolute_gain": 69,
+  "evidence_blobs": 1024,
   "examples": [
     ".codex/config.toml",
-    "src/conductor/circuit_breaker.py",
-    "tests/test_chaos_soak.py",
-    "tests/test_dispatch.py",
+    "src/conductor/workers/credit.py",
+    "tests/test_finalize_race.py",
+    "src/conductor/db/pool.py",
+    "tests/test_payment_pipeline.py",
     "tests/test_credit.py",
-    "src/conductor/worker.py",
-    "src/conductor/dispatch_worker.py",
-    "src/conductor/db/migrations/0001_init.sql",
-    "src/conductor/api.py",
-    "tests/test_outbox_idempotency.py"
+    "tests/test_outbox_idempotency.py",
+    "src/conductor/credit_worker.py",
+    "src/conductor/driver.py",
+    "src/conductor/workers/dispatch.py"
   ],
-  "paths_extractable_new": 2727,
-  "paths_extractable_old": 2700,
+  "paths_extractable_new": 2774,
+  "paths_extractable_old": 2705,
   "recovered_by_shape": {
-    "dot-directory": 23,
-    "other": 44
+    "dot-directory": 28,
+    "other": 81
   },
-  "relative_gain_pct": 1.0,
-  "stores_improved": 4,
+  "relative_gain_pct": 2.5508317929759703,
+  "stores_improved": 6,
   "stores_scanned": 163
 }
