@@ -55,3 +55,72 @@ def detect_subject_less(text: str) -> DetectorHit | None:
     if _CONJUNCTION_OPENER.match(stripped):
         return DetectorHit("D7", "discourse-connective opener")
     return None
+
+
+# ── D2: junk stored as a constraint ──────────────────────────────────────────
+
+_BOX_DRAWING = re.compile(r"[─-╿▀-▟]")
+
+# Public alias — the render-time invariant check in injection/template.py
+# reuses this rather than defining a second box-drawing pattern.
+BOX_DRAWING_RE = _BOX_DRAWING
+
+# A question is identified ONLY by a trailing '?'. Opener-based detection was
+# tried and rejected: every candidate opener also begins well-formed
+# declaratives in this corpus.
+#   "Do not cache in Redis."                     imperative, not interrogative
+#   "What must be redacted: message content, …"  label-list, not interrogative
+# Both were flagged by an opener heuristic during verification. Requiring the
+# '?' costs recall on unpunctuated questions and is the deliberate
+# precision-first trade — it also matches the precedent already set by
+# sanitize.is_question_description, which requires a question terminator and
+# then excludes declaratives.
+_CONSTRAINT_TYPES = frozenset({"CONSTRAINT_HARD", "CONSTRAINT_SOFT"})
+
+_NON_ALPHA_MAX = 0.30
+
+
+def _non_alpha_ratio(text: str) -> float:
+    """Share of non-whitespace characters that are not letters."""
+    body = [c for c in text if not c.isspace()]
+    if not body:
+        return 1.0
+    return sum(1 for c in body if not c.isalpha()) / len(body)
+
+
+def detect_junk_constraint(text: str, event_type: str) -> DetectorHit | None:
+    """D2 — a constraint slot holding something that is not a proposition."""
+    stripped = (text or "").strip()
+    if not stripped or event_type not in _CONSTRAINT_TYPES:
+        return None
+    if _BOX_DRAWING.search(stripped):
+        return DetectorHit("D2", "box-drawing/table artifact")
+    if stripped.endswith("?"):
+        return DetectorHit("D2", "interrogative stored as a constraint")
+    if _non_alpha_ratio(stripped) > _NON_ALPHA_MAX:
+        return DetectorHit("D2", "predominantly non-alphabetic")
+    return None
+
+
+# ── D4: harness boilerplate captured as memory ───────────────────────────────
+#
+# Phrases emitted by the agent harness (compaction summaries, resume banners)
+# and by CogniKernel's own injected block. None of these are project facts.
+
+_BOILERPLATE = re.compile(
+    r"read the full transcript at|continue the conversation from|"
+    r"resume directly|do not acknowledge the summary|"
+    r"do not recap what was happening|pick up the last task|"
+    r"session context \[auto-generated|as if the break never happened",
+    re.IGNORECASE,
+)
+
+
+def detect_boilerplate(text: str) -> DetectorHit | None:
+    """D4 — harness/compaction chatter, or CogniKernel's own injected block."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    if _BOILERPLATE.search(stripped):
+        return DetectorHit("D4", "harness or compaction boilerplate")
+    return None
