@@ -133,6 +133,7 @@ class TestExecuteMergeEmpty:
             "superseded": 0,
             "cascaded": 0,
             "archived": 0,
+            "rejected": 0,
         }
 
     def test_empty_candidates_no_db_writes(self, conn: sqlite3.Connection) -> None:
@@ -371,6 +372,7 @@ class TestExecuteMergeReplayIdempotency:
         second = execute_merge(conn, "sess1", [make_event(content_hash="hx", evidence_id=ev)])
         assert second == {
             "inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0, "archived": 0,
+            "rejected": 0,
         }
 
     def test_replay_does_not_rebump_mention_count(self, conn: sqlite3.Connection) -> None:

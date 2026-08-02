@@ -17,6 +17,33 @@
 3. Task 9 filters the **event set**, not the rendered string, so the render ledger cannot over-claim.
 4. Task 8's tripwire counts the five statement types only, so its rate is comparable to the §0.1 baseline.
 
+> **CORRECTION (found during implementation, 2026-08-02).** This plan repeatedly
+> calls `persist_events` "the one function every extraction path reaches." That is
+> **false**. `persist_events` has *no production callers at all* — `session_end`,
+> `process_jobs`, and `rebuild_from_raw` every one go through
+> `delta.merge.execute_merge`. Wiring the gate only into `persist_events` made it
+> dead code in production; it passed every unit test while guarding nothing. The
+> gate now runs inside `execute_merge`'s candidate loop, which is the real choke
+> point, and `execute_merge` gained a `rejected` stats key. Task 8 below is
+> retained as written for the record — read it knowing the seam it names is the
+> wrong one. The lesson is the cheap one: verify the callers, not the docstring.
+>
+> The same trap recurred twice more, and all three share one shape — **a
+> parameter added is not a parameter passed**:
+> 1. the gate wired into a function with no callers;
+> 2. `ground` added to `execute_merge` but supplied by no call site, leaving
+>    path grounding inert until `build_grounding_context` was wired into all
+>    three production merges;
+> 3. an empty inventory silently downgrading every component event, since a
+>    brand-new project has no symbol graph — now treated as "cannot verify".
+>
+> A second gap surfaced only under end-to-end testing: D4 boilerplate was scoped
+> to statement types, so one compaction sentence extracted twice had its
+> `CONSTRAINT_HARD` copy rejected while the `THREAD_OPEN` copy was stored. D4 is
+> now type-independent — harness chatter is never a project fact regardless of
+> classification. D7 stays statement-scoped, since a `THREAD_OPEN` legitimately
+> refers to the current work item.
+
 ## Why one gate (the finding that shaped this plan)
 
 `extraction/sanitize.py` already ships `is_context_dependent_fragment()` and `is_question_description()`. They are wired in only partially:

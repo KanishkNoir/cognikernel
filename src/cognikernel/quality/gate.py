@@ -112,14 +112,19 @@ def _admit_inner(event: Event, ground: GroundingContext | None) -> Verdict:
     payload = event.payload or {}
     description = payload.get("description", "") or ""
 
+    # D4 is TYPE-INDEPENDENT. Harness and compaction chatter is never a project
+    # fact, whatever type the classifier assigned it. Found end-to-end: one
+    # compaction sentence was extracted twice, and scoping D4 to statement types
+    # rejected the CONSTRAINT_HARD copy while the THREAD_OPEN copy was stored.
+    hit = detect_boilerplate(description)
+    if hit is not None:
+        return Verdict("reject", hit.rule_id, hit.note)
+
     if event.event_type in _STATEMENT_TYPES:
-        # Reject: nothing recoverable in these.
-        for hit in (
-            detect_boilerplate(description),
-            detect_junk_constraint(description, event.event_type),
-        ):
-            if hit is not None:
-                return Verdict("reject", hit.rule_id, hit.note)
+        # Reject: nothing recoverable in a constraint slot holding a non-proposition.
+        hit = detect_junk_constraint(description, event.event_type)
+        if hit is not None:
+            return Verdict("reject", hit.rule_id, hit.note)
 
         # Downgrade: real fact, unresolvable referent. Skipped when a head path
         # already demoted this event (provenance carries '+frag') so the
@@ -129,7 +134,10 @@ def _admit_inner(event: Event, ground: GroundingContext | None) -> Verdict:
             if hit is not None:
                 return Verdict("downgrade", hit.rule_id, hit.note)
 
-    if event.event_type in _PATH_TYPES and ground is not None:
+    # An EMPTY inventory means "cannot verify", not "nothing is real". A brand-new
+    # project has no symbol graph yet, and grounding against an empty set would
+    # downgrade every component event it ever captured.
+    if event.event_type in _PATH_TYPES and ground is not None and ground.known_paths:
         path = payload.get("path", "") or ""
         if path:
             if ground.is_near_miss(path):

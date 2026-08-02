@@ -51,6 +51,36 @@ class TestStatementRules:
         assert v.action == "admit"
 
 
+class TestBoilerplateIsTypeIndependent:
+    """Harness chatter is never a project fact, whatever type it was classified
+    as. Found end-to-end: the same compaction sentence was extracted twice, and
+    the CONSTRAINT_HARD copy was rejected while the THREAD_OPEN copy sailed
+    through because D4 was scoped to statement types.
+    """
+
+    def test_rejects_boilerplate_as_thread_open(self) -> None:
+        v = admit(_event("THREAD_OPEN",
+                         "Pick up the last task as if the break never happened."))
+        assert v.action == "reject"
+        assert v.rule_id == "D4"
+
+    def test_rejects_boilerplate_as_component_status(self) -> None:
+        v = admit(_event("COMPONENT_STATUS",
+                         "read the full transcript at: C:/x/a.jsonl", path="a/b.py"))
+        assert v.action == "reject"
+        assert v.rule_id == "D4"
+
+    def test_ordinary_thread_open_still_admitted(self) -> None:
+        v = admit(_event("THREAD_OPEN", "Wire the dispatcher into the worker pool."))
+        assert v.action == "admit"
+
+    def test_subject_less_still_scoped_to_statements(self) -> None:
+        # D7 stays statement-scoped: a THREAD_OPEN naturally references the
+        # current work item and is not defective for doing so.
+        v = admit(_event("THREAD_OPEN", "It must not take down the pipeline."))
+        assert v.action == "admit"
+
+
 class TestGrounding:
     def test_admits_known_path(self) -> None:
         g = GroundingContext(frozenset({"src/storage/connection.py"}))

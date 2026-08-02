@@ -444,10 +444,11 @@ def persist_events(
 ) -> list[int]:
     """Write extracted events to storage. Returns row IDs of inserted/updated rows.
 
-    Every event passes the quality gate first. This is the single choke point,
-    and it is deliberately here rather than in the per-path predicates it
-    supersedes: sanitize.py's fragment check runs only in the v1/v2 head paths,
-    so the default `legacy` extractor never ran it.
+    NOT the production write path. Every shipped caller (session_end,
+    process_jobs, rebuild_from_raw) goes through delta.merge.execute_merge
+    instead; this function survives for direct/simple use and tests. The
+    quality gate runs in BOTH places — here for the direct path, and in
+    execute_merge, which is the one that actually guards user sessions.
 
     `ground` is an optional GroundingContext for path referential integrity;
     when None, path checks are skipped and behaviour is unchanged.

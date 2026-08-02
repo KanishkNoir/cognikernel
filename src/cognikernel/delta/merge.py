@@ -36,11 +36,13 @@ from cognikernel.delta.supersede import (
     jaccard_similarity,
     supersedes,
 )
+from cognikernel.quality.gate import admit, apply_verdict
 from cognikernel.storage.events import (
     MAX_EVENT_WEIGHT,
     WEIGHT_INCREMENT_ON_DEDUP,
     insert_extraction_failure,
 )
+from cognikernel.storage.quality_telemetry import record_verdict
 
 if TYPE_CHECKING:
     from cognikernel.storage.events import Event
@@ -87,12 +89,19 @@ def execute_merge(
     candidates: list[Event],
     embed_events: bool = False,
     use_cross_encoder: bool = False,
+    ground=None,
 ) -> dict:
     """Run the full six-step merge inside a single transaction.
 
-    Returns a stats dict: {inserted, updated, superseded, cascaded, archived}.
+    Returns a stats dict:
+    {inserted, updated, superseded, cascaded, archived, rejected}.
     On failure, the transaction is rolled back and the error written to the
     dead-letter queue (extraction_failures).
+
+    This is the quality gate's admission point. Every production caller —
+    session_end, process_jobs, rebuild_from_raw — funnels through here, so it
+    is the choke point the gate needs; `ground` optionally supplies a
+    GroundingContext for path referential integrity.
 
     Supersession always runs through `find_superseded`, so the temporal,
     authority, and provenance gates are the baseline regardless of embeddings —
@@ -104,10 +113,12 @@ def execute_merge(
     gated-lexical only.
     """
     if not candidates:
-        return {"inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0, "archived": 0}
+        return {"inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0,
+                "archived": 0, "rejected": 0}
 
     project_id = candidates[0].project_id
-    stats = {"inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0, "archived": 0}
+    stats = {"inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0,
+             "archived": 0, "rejected": 0}
 
     # Idempotency guard (audit P1). A worker can be killed (the Job Object tears
     # down hook-spawned drains at hook exit) AFTER this merge commits but BEFORE
@@ -130,6 +141,25 @@ def execute_merge(
     try:
         with conn:
             for event in candidates:
+                # Quality gate — the real admission choke point. This loop is
+                # what session_end, process_jobs and rebuild_from_raw all reach;
+                # persist_events has no production callers. Runs before decision
+                # keying and echo folding so a rejected event costs nothing and
+                # a downgraded one is stored already demoted.
+                verdict = admit(event, ground)
+                if verdict.rule_id:
+                    record_verdict(
+                        conn, event.project_id, event.session_id, verdict.rule_id
+                    )
+                if verdict.action == "reject":
+                    _log.debug(
+                        "merge.gate_rejected",
+                        extra={"rule_id": verdict.rule_id, "note": verdict.note},
+                    )
+                    stats["rejected"] = stats.get("rejected", 0) + 1
+                    continue
+                apply_verdict(event, verdict)
+
                 # J2: derive the decision key at the single mint choke point so
                 # every extraction path (broad, patterns, co-capture) gets one.
                 if event.decision_key is None:

@@ -135,6 +135,7 @@ def session_end(
                 conn, session_id, candidates,
                 embed_events=config.embedding_enabled,
                 use_cross_encoder=config.cross_encoder_supersession,
+                ground=build_grounding_context(conn, project_id, project_path),
             )
             ack_stage(
                 conn,
@@ -508,6 +509,7 @@ def process_jobs(
                         conn, job.session_id, candidates,
                         embed_events=config.embedding_enabled,
                         use_cross_encoder=config.cross_encoder_supersession,
+                        ground=build_grounding_context(conn, project_id, project_path),
                     )
                     ack_stage(conn, job.id, "MERGED", output_ref=json_like_stats(stats))
                     # Monotonic guard: a retried old job must never rewind the
@@ -838,6 +840,9 @@ def rebuild_from_raw(
                     sidecar_conn, session_id, candidates,
                     embed_events=config.embedding_enabled,
                     use_cross_encoder=config.cross_encoder_supersession,
+                    ground=build_grounding_context(
+                        sidecar_conn, project_id, project_path
+                    ),
                 )
                 _update_symbol_graph(sidecar_conn, project_id, str(project_path), git_diff=None, session_id=session_id)
                 total_extracted += len(candidates)
@@ -944,3 +949,41 @@ def _compute_hot_files(
          if d["mentions"] >= min_mentions],
         key=lambda x: -x[1],
     )
+
+
+def build_grounding_context(conn, project_id: str, project_path):
+    """Assemble the path inventory the quality gate grounds component events against.
+
+    Built ONCE per merge from data already reachable — the symbol store plus a
+    project walk — so a per-event check is a set lookup with no I/O. Adding the
+    parameter to execute_merge is not the same as supplying it; without this
+    call site the gate's grounding branch never runs, which is exactly how the
+    gate itself sat dead in persist_events.
+
+    Never raises: on any failure it returns an empty context, and an empty
+    context is treated by the gate as "cannot verify" rather than "nothing is
+    real" (see _admit_inner) — otherwise a brand-new project with no inventory
+    would have every component event downgraded.
+    """
+    from pathlib import Path
+
+    from cognikernel.quality.gate import GroundingContext
+
+    known: set[str] = set()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT path FROM symbol_nodes WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        known.update(p for (p,) in rows if p)
+    except Exception as exc:
+        _log.debug("grounding.symbol_load_failed", extra={"error": str(exc)})
+
+    try:
+        from cognikernel.symbols.extractor import _discover_project_paths
+
+        known.update(_discover_project_paths(Path(project_path)))
+    except Exception as exc:
+        _log.debug("grounding.walk_failed", extra={"error": str(exc)})
+
+    return GroundingContext(frozenset(known))

@@ -51,13 +51,24 @@ the largest section of the injected block.
 ## How
 
 One choke point instead of scattered predicates. Every extracted event passes
-`quality.gate.admit()` inside `persist_events` — the single function every
-extraction path reaches — which returns admit / downgrade / reject.
+`quality.gate.admit()` inside `delta.merge.execute_merge`'s candidate loop,
+which returns admit / downgrade / reject.
+
+> Finding the right seam took two attempts, and the failure mode is worth
+> recording. The gate was first wired into `extraction.pipeline.persist_events`,
+> which the design called "the one function every extraction path reaches." It
+> has **no production callers**: `session_end`, `process_jobs`, and
+> `rebuild_from_raw` all go through `execute_merge`. The gate passed every unit
+> test while guarding nothing in production. A grep for callers — not a reading
+> of the docstring — is what caught it.
 
 Verdicts are graded by how recoverable the content is:
 
 - **reject** for D2 and D4: box-drawing artifacts and harness boilerplate carry
-  no project content.
+  no project content. D4 is checked for *every* event type — end-to-end testing
+  showed one compaction sentence extracted twice, with the `CONSTRAINT_HARD`
+  copy rejected and the `THREAD_OPEN` copy stored, because the check had been
+  scoped to statement types.
 - **downgrade** for D7 and ungrounded paths: a subject-less statement still
   carries a real fact, so weight collapse removes it from the budget-ranked
   block while leaving it reachable through `recall` and `find_related`.
@@ -65,8 +76,18 @@ Verdicts are graded by how recoverable the content is:
   policy `pipeline.py` already states for the same class.
 
 The researched addition is **path grounding** — referential integrity between
-stored memory and the actual codebase. Unknown paths downgrade (new files are
-legitimate); only near-miss truncations of a known path are rejected.
+stored memory and the actual codebase. The inventory is assembled once per
+merge from the symbol store plus a project walk, so each check is a set lookup.
+Unknown paths downgrade (new files are legitimate); only near-miss truncations
+of a known path are rejected. An **empty** inventory means "cannot verify", not
+"nothing is real" — otherwise a brand-new project with no symbol graph would
+have every component event it ever captured downgraded.
+
+> The same dead-code trap recurred here and is worth naming, because it is the
+> failure mode of this whole branch: adding a `ground` parameter is not the
+> same as passing one. After the gate moved to `execute_merge`, grounding was
+> still inert because no call site supplied a context. `grep` for the argument,
+> not for the parameter.
 
 `cognikernel.quality` is a leaf package with an import-linter contract forbidding
 it from reaching into storage, injection, compression, integration, extraction,
@@ -114,6 +135,19 @@ defects. Those cases are now pinned as regression tests.
 
 Safe by an order of magnitude. A gate that rejected aggressively would be worse
 than the defect it fixes.
+
+### Verified end to end
+
+A synthetic session run through the real capture path (`extract_session` →
+`execute_merge`) on a transcript containing compaction boilerplate, a
+subject-less statement, and a `.claude/` path mention:
+
+- both copies of the boilerplate rejected (`rejected: 1` → `2` after the D4
+  type-independence fix; telemetry `D4: 2`)
+- the subject-less statement stored at weight 0.50 and marked
+  `quality: context_dependent` — demoted, still recallable
+- `.claude/settings.json` captured as a component, which the old pattern could
+  not match at all
 
 ### Baseline with confidence intervals
 
