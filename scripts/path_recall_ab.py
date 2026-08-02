@@ -25,6 +25,7 @@ from collections import Counter
 from pathlib import Path
 
 from cognikernel.extraction.file_mentions import _FILE_PATTERN as NEW_PATTERN
+from cognikernel.extraction.transcript import transcript_from_source
 from cognikernel.utils.paths import canonicalize_path, is_bare_basename
 
 # The pattern exactly as it stood before the fix (git 409707f and earlier).
@@ -81,19 +82,27 @@ def main() -> int:
         try:
             conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
             rows = conn.execute(
-                "SELECT content_encoding, content_blob FROM raw_evidence"
+                "SELECT content_encoding, content_blob, source_type FROM raw_evidence"
             ).fetchall()
         except Exception:
             continue
 
         store_old = store_new = 0
         print(f"  {db.name}: {len(rows)} blobs", flush=True)
-        for encoding, blob in rows:
+        for encoding, blob, source_type in rows:
             if blob is None:
                 continue
             try:
                 raw = zlib.decompress(blob) if encoding == "zlib" else blob
                 text = raw.decode("utf-8", errors="replace")
+                # Decode exactly as production does. Feeding RAW JSONL here is
+                # invalid: its literal "\n" and "\r" escapes are backslash+letter,
+                # which the Windows-separator support reads as directory
+                # separators, fusing prose and paths into strings like
+                # 'skeleton/n/nsrc/conductor/driver.py'. Production never sees
+                # that — jsonl_to_transcript parses each line first, so the
+                # escapes are already real newlines by the time the pattern runs.
+                text = transcript_from_source(source_type, text)
             except Exception:
                 continue
             blobs += 1

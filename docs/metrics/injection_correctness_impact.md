@@ -111,6 +111,37 @@ with `.uv-cache/archive-v0/…/attr/_make.py` and `attr/validators.py`, the
 `attrs` library's internals. It now leads with
 `src/cognikernel/symbols/extractor.py`. Same tokens, real content.
 
+### Measured — a ReDoS found by accident, and fixed
+
+The offline A/B would not finish. After ~29 minutes of CPU on ~1 GB of stored
+evidence it had produced nothing, against an estimate of ~100 seconds. The
+cause was not slowness — it was **catastrophic backtracking in the shipped path
+pattern**, and the A/B's refusal to terminate is what surfaced it.
+
+The directory-segment class contained `/` and `\`, which the repeat group's own
+terminator also consumes. A run like `a./a./a./…` that never ends in a valid
+extension therefore had exponentially many ways to split:
+
+| repetitions | before fix | after fix |
+|---|---|---|
+| 14 | 0.018 s | 0.0001 s |
+| 16 | 0.059 s | 0.0001 s |
+| 18 | 0.249 s | 0.0001 s |
+| 20 | 0.986 s | 0.0001 s |
+| 22 | 3.318 s | 0.0001 s |
+
+Growth is 4× per two extra repetitions — exponential. At n=22 the fix is
+~33,000× faster, and it is flat rather than merely faster.
+
+Two things worth stating plainly. First, **the pre-existing pattern had the
+same flaw** (0.195 s at n=20); widening it for Windows paths made the blowup
+reachable through backslash runs too, so this was inherited and amplified,
+not introduced. Second, a transcript containing such a run would have stalled
+extraction — this is a robustness defect in shipped code, not merely a slow
+research script. The fix removes the separators from the inner class so each
+repetition matches exactly one segment with nothing to backtrack over.
+Regression tests assert linear time on dot-slash, backslash, and mixed runs.
+
 ### Measured — detector precision
 
 The production detectors are deliberately more conservative than the

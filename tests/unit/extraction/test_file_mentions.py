@@ -154,3 +154,38 @@ class TestNoTruncation:
         hits = _match(f"edited {path} today")
         assert hits, f"path vanished entirely: {path!r}"
         assert canonicalize_path(hits[0]) == path
+
+
+class TestNoCatastrophicBacktracking:
+    """The path pattern must stay linear on adversarial input.
+
+    An earlier revision let the directory-segment class contain '/' and '\',
+    which the group terminator also consumes. A run like "a./a./a./..." that
+    never ends in a valid extension then had exponentially many ways to split:
+    measured 4x per two extra repetitions, 3.3s at n=22. A transcript
+    containing such a run would have stalled extraction.
+    """
+
+    def test_dot_slash_run_is_fast(self) -> None:
+        import time
+
+        text = "x " + "a./" * 24 + "zzz"
+        t0 = time.perf_counter()
+        _match(text)
+        assert time.perf_counter() - t0 < 0.5
+
+    def test_backslash_run_is_fast(self) -> None:
+        import time
+
+        text = "x " + "a.\\" * 24 + "zzz"
+        t0 = time.perf_counter()
+        _match(text)
+        assert time.perf_counter() - t0 < 0.5
+
+    def test_long_mixed_separator_run_is_fast(self) -> None:
+        import time
+
+        text = "prefix " + ("dir./sub.\\" * 20) + " no_extension_here"
+        t0 = time.perf_counter()
+        _match(text)
+        assert time.perf_counter() - t0 < 0.5

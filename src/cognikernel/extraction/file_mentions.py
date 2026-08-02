@@ -30,15 +30,22 @@ if TYPE_CHECKING:
 #   1. lookbehind: no longer blocks on '.', '/' or '\' — those START a path
 #      rather than continue a word. It still blocks mid-identifier matches.
 #   2. separator: [/\\] everywhere a separator can appear.
-#   3. body class: includes '\' so backslash paths hold together.
 # canonicalize_path() then folds separators to '/' downstream. Note that an
 # ABSOLUTE path additionally needs project_root to survive canonicalization —
 # see the note on extract_file_mention_events.
+#
+# ReDoS: the directory-segment class must NOT contain '/' or '\'. When it did,
+# the inner `*` and the group's own terminator could both consume a separator,
+# so a run like "a./a./a./…" that never ends in a valid extension had
+# exponentially many ways to split — measured 4x per two extra characters,
+# 3.3s at 22 repetitions and climbing. Excluding the separators from the inner
+# class makes each repetition match exactly one segment, with nothing to
+# backtrack over: the same input drops to 0.0001s. Keep them out.
 _FILE_PATTERN = re.compile(
     r"(?<![a-zA-Z0-9_])"
-    r"(?:[a-zA-Z]:[/\\])?"                        # optional Windows drive
-    r"(?:[/\\]|\./|\.(?=[a-zA-Z0-9_]))?"          # optional leading / ./ or dot-dir
-    r"(?:[a-zA-Z0-9_.][a-zA-Z0-9_.\\/-]*[/\\])*"  # directory segments
+    r"(?:[a-zA-Z]:[/\\])?"                      # optional Windows drive
+    r"(?:[/\\]|\./|\.(?=[a-zA-Z0-9_]))?"        # optional leading / ./ or dot-dir
+    r"(?:[a-zA-Z0-9_.][a-zA-Z0-9_.-]*[/\\])*"   # directory segments (no separators inside)
     r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*\."
     r"(?:py|ts|tsx|js|jsx|mjs|json|yaml|yml|sql|md|toml|env|cfg|ini|go|rs|java|cs)"
     r"(?![a-zA-Z0-9_])",

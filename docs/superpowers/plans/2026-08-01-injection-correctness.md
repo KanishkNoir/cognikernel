@@ -37,6 +37,17 @@
 > 3. an empty inventory silently downgrading every component event, since a
 >    brand-new project has no symbol graph — now treated as "cannot verify".
 >
+> **A ReDoS in the Task 4 pattern**, found because the offline A/B would not
+> terminate. The directory-segment class contained `/` and `\`, which the repeat
+> group's terminator also consumes, so a run like `a./a./a./…` with no valid
+> extension backtracked exponentially — 4× per two extra repetitions, 3.3s at
+> n=22. The pre-existing pattern had the same flaw (0.195s at n=20); widening it
+> for Windows paths made it reachable through backslash runs as well. Removing
+> the separators from the inner class makes each repetition match exactly one
+> segment: 0.0001s, flat. Regression tests assert linear time. A transcript
+> containing such a run would have stalled extraction, so this was a shipped
+> robustness defect, not a slow script.
+>
 > A second gap surfaced only under end-to-end testing: D4 boilerplate was scoped
 > to statement types, so one compaction sentence extracted twice had its
 > `CONSTRAINT_HARD` copy rejected while the `THREAD_OPEN` copy was stored. D4 is

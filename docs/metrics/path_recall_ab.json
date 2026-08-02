@@ -1,0 +1,25 @@
+{
+  "absolute_gain": 27,
+  "evidence_blobs": 1023,
+  "examples": [
+    ".codex/config.toml",
+    "src/conductor/circuit_breaker.py",
+    "tests/test_chaos_soak.py",
+    "tests/test_dispatch.py",
+    "tests/test_credit.py",
+    "src/conductor/worker.py",
+    "src/conductor/dispatch_worker.py",
+    "src/conductor/db/migrations/0001_init.sql",
+    "src/conductor/api.py",
+    "tests/test_outbox_idempotency.py"
+  ],
+  "paths_extractable_new": 2727,
+  "paths_extractable_old": 2700,
+  "recovered_by_shape": {
+    "dot-directory": 23,
+    "other": 44
+  },
+  "relative_gain_pct": 1.0,
+  "stores_improved": 4,
+  "stores_scanned": 163
+}
