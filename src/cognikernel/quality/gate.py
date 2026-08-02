@@ -1,0 +1,159 @@
+"""Admission control for extracted events — the single choke point.
+
+Every extracted event passes through admit() immediately before persistence.
+The gate returns one of three verdicts:
+
+  admit      store as-is
+  downgrade  store with halved weight and a payload marker
+  reject     do not store
+
+WHY ONE CHOKE POINT. extraction/sanitize.py already ships
+is_context_dependent_fragment() and is_question_description(), but they are
+wired in only partially: the fragment predicate runs in the v1/v2 salience-head
+paths (pipeline.py) and NOT in the default `legacy` extractor, and the question
+predicate guards CONSTRAINT_HARD in windowing.py and nothing else. That is why
+subject-less statements measured 6.5% of all statements across 34 of 163
+stores. The fix is not more call sites — it is one function every extraction
+path reaches.
+
+VERDICTS ARE GRADED BY RECOVERABILITY. D2 and D4 reject: box-drawing artifacts
+and harness boilerplate carry no project content, so keeping them helps nobody.
+D7 downgrades: a subject-less statement still carries a real fact, just one the
+reader cannot resolve, and its harm is occupying the budget-ranked block —
+which weight collapse fixes while leaving it reachable through recall and
+find_related. This mirrors the policy pipeline.py already states for the same
+class of statement ("We DEMOTE (not drop)").
+
+FAILURE POSTURE: the gate never blocks a session. Any exception inside a
+detector produces an 'admit' verdict tagged rule_id='gate_error', which the
+caller counts. Losing a defect is acceptable; losing a session is not.
+
+PURITY: this module takes the path inventory as an argument rather than
+reading the symbol store, which keeps cognikernel.quality a leaf package
+(see the "Quality is a leaf" contract in pyproject.toml).
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+
+from cognikernel.model import Event
+from cognikernel.quality.detectors import (
+    detect_boilerplate,
+    detect_junk_constraint,
+    detect_subject_less,
+)
+
+_log = logging.getLogger("cognikernel.quality")
+
+# Types whose payload carries a file path worth grounding.
+_PATH_TYPES = frozenset({"COMPONENT_STATUS"})
+
+# Types that assert something and must therefore be well-formed statements.
+_STATEMENT_TYPES = frozenset({
+    "DECISION", "CONSTRAINT_HARD", "CONSTRAINT_SOFT",
+    "APPROACH_ABANDONED", "APPROACH_ABANDONED_DO_NOT_RETRY",
+})
+
+_DOWNGRADE_FACTOR = 0.5
+
+# Maximum number of leading characters that may be missing for a path to count
+# as a truncation of a known path rather than an unrelated new file.
+_NEAR_MISS_MAX_MISSING = 2
+
+
+@dataclass(frozen=True)
+class Verdict:
+    action: str                     # "admit" | "downgrade" | "reject"
+    rule_id: str | None = None
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class GroundingContext:
+    """Referential integrity between stored memory and the real codebase.
+
+    `known_paths` is built once per extraction run by the caller from the
+    symbol store, the project walk, and the git index — so a per-event check
+    is a set lookup with no I/O.
+    """
+    known_paths: frozenset[str] = field(default_factory=frozenset)
+
+    def is_known(self, path: str) -> bool:
+        return path in self.known_paths
+
+    def is_near_miss(self, path: str) -> bool:
+        """True when `path` is a known path with leading characters removed.
+
+        This is the 2026-05-10 corruption signature. A store sweep found no
+        live generator of it, so this is defence in depth rather than a tuned
+        classifier — which is why the threshold is a flat 1-2 characters and
+        not an edit distance worth calibrating.
+        """
+        if not path or self.is_known(path):
+            return False
+        for known in self.known_paths:
+            missing = len(known) - len(path)
+            if 0 < missing <= _NEAR_MISS_MAX_MISSING and known.endswith(path):
+                return True
+        return False
+
+
+def admit(event: Event, ground: GroundingContext | None = None) -> Verdict:
+    """Decide whether an extracted event may be stored. Never raises."""
+    try:
+        return _admit_inner(event, ground)
+    except Exception as exc:                      # fail-open by contract
+        _log.warning("quality gate error — admitting un-gated: %s", exc)
+        return Verdict("admit", "gate_error", str(exc))
+
+
+def _admit_inner(event: Event, ground: GroundingContext | None) -> Verdict:
+    payload = event.payload or {}
+    description = payload.get("description", "") or ""
+
+    if event.event_type in _STATEMENT_TYPES:
+        # Reject: nothing recoverable in these.
+        for hit in (
+            detect_boilerplate(description),
+            detect_junk_constraint(description, event.event_type),
+        ):
+            if hit is not None:
+                return Verdict("reject", hit.rule_id, hit.note)
+
+        # Downgrade: real fact, unresolvable referent. Skipped when a head path
+        # already demoted this event (provenance carries '+frag') so the
+        # multiplier is never applied twice.
+        if "+frag" not in (payload.get("provenance") or ""):
+            hit = detect_subject_less(description)
+            if hit is not None:
+                return Verdict("downgrade", hit.rule_id, hit.note)
+
+    if event.event_type in _PATH_TYPES and ground is not None:
+        path = payload.get("path", "") or ""
+        if path:
+            if ground.is_near_miss(path):
+                return Verdict("reject", "D1", "path is a truncation of a known path")
+            if not ground.is_known(path):
+                return Verdict("downgrade", "D1", "path not found in codebase inventory")
+
+    return Verdict("admit")
+
+
+def apply_verdict(event: Event, verdict: Verdict) -> Event:
+    """Mutate `event` per a downgrade verdict and return it.
+
+    Only 'downgrade' changes the event; 'admit' and 'reject' leave it alone
+    (the caller drops rejects). The marker key differs by rule so the two
+    downgrade reasons stay distinguishable in the store:
+      D1 -> payload['grounding'] = 'unverified'   (path not in the codebase)
+      D7 -> payload['quality']   = 'context_dependent'
+    """
+    if verdict.action != "downgrade":
+        return event
+    event.weight = (event.weight or 1.0) * _DOWNGRADE_FACTOR
+    if verdict.rule_id == "D1":
+        event.payload["grounding"] = "unverified"
+    else:
+        event.payload["quality"] = "context_dependent"
+    return event

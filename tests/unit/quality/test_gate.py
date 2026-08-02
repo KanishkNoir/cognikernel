@@ -1,0 +1,116 @@
+"""Admission gate behaviour (spec §4)."""
+from cognikernel.model import Event
+from cognikernel.quality.gate import GroundingContext, Verdict, admit
+
+
+def _event(event_type: str, description: str, **payload) -> Event:
+    return Event(
+        project_id="p",
+        session_id="s",
+        event_type=event_type,
+        payload={"description": description, **payload},
+        content_hash="h",
+        weight=1.0,
+    )
+
+
+class TestStatementRules:
+    def test_admits_well_formed_decision(self) -> None:
+        v = admit(_event("DECISION", "The dispatcher retries twice before dead-lettering."))
+        assert v.action == "admit"
+
+    def test_downgrades_subject_less_statement(self) -> None:
+        # DOWNGRADE, not reject: the harm is that it renders in the block, and
+        # weight collapse already prevents that. Rejecting would also remove it
+        # from recall/find_related, which is strictly more destructive. This
+        # matches the policy pipeline.py already states for context-dependent
+        # fragments ("We DEMOTE (not drop)").
+        v = admit(_event("DECISION", "It must not be able to take down the pipeline."))
+        assert v.action == "downgrade"
+        assert v.rule_id == "D7"
+
+    def test_subject_less_downgrade_is_not_applied_twice(self) -> None:
+        # v1/v2 head paths already demote fragments pre-hash (_FRAG_DEMOTE).
+        # The gate must not stack a second multiplier on the same event.
+        e = _event("DECISION", "It must not take down the pipeline.")
+        e.payload["provenance"] = "salience_v2+frag"
+        assert admit(e).action == "admit"
+
+    def test_rejects_boilerplate(self) -> None:
+        v = admit(_event("CONSTRAINT_HARD", "Pick up the last task as if the break never happened."))
+        assert v.action == "reject"
+        assert v.rule_id == "D4"
+
+    def test_rejects_interrogative_constraint(self) -> None:
+        v = admit(_event("CONSTRAINT_HARD", "Should we just bring in Celery?"))
+        assert v.action == "reject"
+        assert v.rule_id == "D2"
+
+    def test_admits_imperative_constraint(self) -> None:
+        v = admit(_event("CONSTRAINT_HARD", "Do not cache in Redis."))
+        assert v.action == "admit"
+
+
+class TestGrounding:
+    def test_admits_known_path(self) -> None:
+        g = GroundingContext(frozenset({"src/storage/connection.py"}))
+        v = admit(_event("COMPONENT_STATUS", "x", path="src/storage/connection.py"), g)
+        assert v.action == "admit"
+
+    def test_downgrades_unknown_path(self) -> None:
+        # A genuinely new file must survive — downgraded, never dropped.
+        g = GroundingContext(frozenset({"src/storage/connection.py"}))
+        v = admit(_event("COMPONENT_STATUS", "x", path="src/brand/new_file.py"), g)
+        assert v.action == "downgrade"
+
+    def test_rejects_near_miss_truncation(self) -> None:
+        g = GroundingContext(frozenset({"src/storage/connection.py"}))
+        v = admit(_event("COMPONENT_STATUS", "x", path="rc/storage/connection.py"), g)
+        assert v.action == "reject"
+        assert v.rule_id == "D1"
+
+    def test_no_grounding_context_admits(self) -> None:
+        v = admit(_event("COMPONENT_STATUS", "x", path="anything/at/all.py"), None)
+        assert v.action == "admit"
+
+
+class TestFailOpen:
+    def test_detector_exception_admits(self, monkeypatch) -> None:
+        import cognikernel.quality.gate as gate_mod
+
+        def boom(*_a, **_k):
+            raise RuntimeError("detector exploded")
+
+        monkeypatch.setattr(gate_mod, "detect_subject_less", boom)
+        v = admit(_event("DECISION", "It must not take down the pipeline."))
+        assert v.action == "admit"
+        assert v.rule_id == "gate_error"
+
+    def test_verdict_is_a_verdict(self) -> None:
+        assert isinstance(admit(_event("DECISION", "The queue is durable.")), Verdict)
+
+
+class TestApplyVerdict:
+    def test_downgrade_halves_weight_and_marks_quality(self) -> None:
+        from cognikernel.quality.gate import apply_verdict
+
+        e = _event("DECISION", "It must not take down the pipeline.")
+        apply_verdict(e, admit(e))
+        assert e.weight == 0.5
+        assert e.payload["quality"] == "context_dependent"
+
+    def test_path_downgrade_marks_grounding(self) -> None:
+        from cognikernel.quality.gate import apply_verdict
+
+        g = GroundingContext(frozenset({"src/known.py"}))
+        e = _event("COMPONENT_STATUS", "x", path="src/new.py")
+        apply_verdict(e, admit(e, g))
+        assert e.payload["grounding"] == "unverified"
+
+    def test_admit_leaves_event_untouched(self) -> None:
+        from cognikernel.quality.gate import apply_verdict
+
+        e = _event("DECISION", "The queue is durable.")
+        apply_verdict(e, admit(e))
+        assert e.weight == 1.0
+        assert "quality" not in e.payload
