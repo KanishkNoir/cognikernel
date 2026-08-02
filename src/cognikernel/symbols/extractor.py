@@ -486,14 +486,79 @@ def build_symbol_update(
 _SKIP_DIRS = frozenset({
     ".git", ".venv", "venv", "env", "__pycache__", "node_modules",
     ".mypy_cache", ".pytest_cache", ".tox", "dist", "build", ".eggs",
+    # Added after a store sweep found one project with 94% of its symbol nodes
+    # (4,655 of 4,934) coming from vendored/cache trees, while the rendered
+    # Codebase skeleton was the largest section of the injection block.
+    ".uv-cache", ".claude", ".pytest_tmp", ".ruff_cache", "htmlcov",
+    ".idea", ".vscode", "target", "vendor", ".next", ".nuxt",
 })
 _MAX_FILES = 500
 
+# Top-level directories that mark first-party source. Ranking only.
+_SRC_HINTS = frozenset({"src", "lib", "app", "pkg", "internal", "cmd"})
+
+
+def _load_gitignore_globs(project_root: Path) -> list[str]:
+    """Return fnmatch-able patterns from .gitignore. Missing file → [].
+
+    Deliberately not a full gitignore implementation (no negation, no ancestor
+    files): this is a noise filter, and over-matching would hide real source.
+    Unsupported lines are skipped rather than approximated.
+    """
+    try:
+        lines = (project_root / ".gitignore").read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except (OSError, ValueError):
+        return []
+    globs: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("!"):
+            continue
+        line = line.rstrip("/").lstrip("/")
+        if line:
+            globs.append(line)
+    return globs
+
+
+def _is_gitignored(rel_path: str, globs: list[str]) -> bool:
+    """True if any gitignore pattern matches the path or one of its segments."""
+    import fnmatch
+
+    segments = rel_path.split("/")
+    for pattern in globs:
+        if fnmatch.fnmatch(rel_path, pattern):
+            return True
+        if any(fnmatch.fnmatch(seg, pattern) for seg in segments):
+            return True
+    return False
+
+
+def _src_rank(rel_path: str) -> tuple[int, int]:
+    """Sort key — lower is kept first when the budget binds.
+
+    Ranks by (not-first-party, depth). Collection used to be first-glob-wins,
+    and rglob yields shallow files before deep ones, so walk order alone decided
+    the 500 survivors: a nested module under src/ could lose its slot to a
+    shallow third-party file. Ranking makes ownership beat traversal order.
+    """
+    segments = rel_path.split("/")
+    top = segments[0] if segments else ""
+    first_party = 0 if (top in _SRC_HINTS or len(segments) == 1) else 1
+    return (first_party, len(segments))
+
 
 def _discover_project_paths(project_root: Path) -> dict[str, str]:
-    """Walk project for supported source files, skip noise dirs. Returns {rel_path: abs_path}."""
-    result: dict[str, str] = {}
+    """Walk project for supported source files, skip noise dirs and gitignored
+    paths, rank by src-likeness, and keep at most _MAX_FILES.
+
+    Returns {rel_path: abs_path}.
+    """
+    globs = _load_gitignore_globs(project_root)
+    candidates: list[tuple[tuple[int, int], str, str]] = []
     patterns = ("*.py", "*.ts", "*.tsx", "*.js", "*.jsx")
+
     for pattern in patterns:
         for abs_p in project_root.rglob(pattern):
             if any(part in _SKIP_DIRS for part in abs_p.parts):
@@ -502,10 +567,12 @@ def _discover_project_paths(project_root: Path) -> dict[str, str]:
                 rel = str(abs_p.relative_to(project_root)).replace("\\", "/")
             except ValueError:
                 continue
-            result[rel] = str(abs_p)
-            if len(result) >= _MAX_FILES:
-                return result
-    return result
+            if globs and _is_gitignored(rel, globs):
+                continue
+            candidates.append((_src_rank(rel), rel, str(abs_p)))
+
+    candidates.sort(key=lambda c: (c[0], c[1]))
+    return {rel: abs_p for _, rel, abs_p in candidates[:_MAX_FILES]}
 
 
 # ── AST helpers ───────────────────────────────────────────────────────────────
