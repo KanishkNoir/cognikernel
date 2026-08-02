@@ -1,0 +1,40 @@
+{
+  "captured_at": 1785655451,
+  "label": "after",
+  "projects": [
+    {
+      "block_chars": 6997,
+      "event_counts": {
+        "APPROACH_ABANDONED": 11,
+        "APPROACH_ABANDONED_DO_NOT_RETRY": 15,
+        "COMPONENT_STATUS": 52,
+        "CONSTRAINT_HARD": 47,
+        "CONSTRAINT_SOFT": 12,
+        "DECISION": 25,
+        "THREAD_CLOSE": 29,
+        "THREAD_OPEN": 36
+      },
+      "project_id": "f9ce230b91437a8c",
+      "project_path": "C:\\Users\\Admin\\OneDrive\\Desktop\\CogniKernel",
+      "section_tokens": {
+        "Active thread": 43,
+        "Codebase skeleton": 459,
+        "Component state": 89,
+        "Do not retry \u2014 confirmed failures": 225,
+        "Hard constraints \u2014 never violate": 288,
+        "Key decisions": 334,
+        "Most active files \u2014 structure in Codebase skeleton below": 149,
+        "Summary": 46,
+        "\u00abheader\u00bb": 55
+      },
+      "symbol_composition": {
+        "examples": [],
+        "first_party": 2713,
+        "total": 2713,
+        "vendored": 0,
+        "vendored_pct": 0.0
+      },
+      "total_tokens": 1749
+    }
+  ]
+}

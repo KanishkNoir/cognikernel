@@ -888,7 +888,10 @@ def _update_symbol_graph(
     """
     try:
         from cognikernel.symbols.extractor import build_symbol_update
-        from cognikernel.symbols.store import apply_symbol_update
+        from cognikernel.symbols.store import (
+            apply_symbol_update,
+            prune_out_of_scope_symbols,
+        )
         from cognikernel.extraction.git_augment import parse_diff
 
         changed_files = parse_diff(git_diff) if git_diff else []
@@ -900,6 +903,12 @@ def _update_symbol_graph(
             session_id=session_id,
             last_action="scan",
         )
+        # Retire nodes for paths that should never have been scanned. Without
+        # this, tightening the scan rules only affects NEW nodes and existing
+        # graphs keep spending the skeleton budget on vendored trees forever.
+        removed = prune_out_of_scope_symbols(conn, project_id, project_path)
+        if removed:
+            _log.info("symbol_graph.pruned", extra={"paths_removed": removed})
     except Exception as exc:
         _log.warning("symbol_graph.update_failed", extra={"error": str(exc)})
 

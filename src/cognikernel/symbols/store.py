@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import sqlite3
 import time
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from cognikernel.symbols.extractor import SymbolEdge, SymbolNode, SymbolUpdate
+
+_log = logging.getLogger("cognikernel.symbols")
 
 
 def apply_symbol_update(
@@ -197,3 +200,74 @@ def load_symbol_edges(
         )
         for r in rows
     ]
+
+
+def prune_out_of_scope_symbols(
+    conn,
+    project_id: str,
+    project_root,
+) -> int:
+    """Delete symbol rows for paths that should never have been scanned.
+
+    Completes an invalidation rule that was always incomplete: build_symbol_update
+    emits delete_paths only for git-DELETED files, so a path that left scope —
+    vendored, cached, or gitignored — stayed in the graph forever, competing for
+    PageRank and the skeleton token budget. One real store carried 4,655 such
+    nodes (94% of its graph).
+
+    This invalidates a DERIVED cache, not memory. The symbol graph is rebuilt by
+    scanning disk, and any path pruned here reappears if it re-enters scope. No
+    decision, constraint, or abandonment is touched.
+
+    Keys on the EXCLUSION predicate (skip-dir component or gitignore match),
+    never on set-difference against a discovery run: discovery caps at
+    _MAX_FILES, so a project with more in-scope files than the cap has
+    legitimate modules missing from any single run, and "delete what wasn't
+    discovered" would permanently purge them. The predicate is cap-independent
+    and idempotent.
+
+    Returns the number of paths removed. Never raises.
+    """
+    from cognikernel.symbols.extractor import (
+        _SKIP_DIRS,
+        _is_gitignored,
+        _load_gitignore_globs,
+    )
+
+    try:
+        globs = _load_gitignore_globs(Path(project_root))
+        rows = conn.execute(
+            "SELECT DISTINCT path FROM symbol_nodes WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+
+        doomed = [
+            path for (path,) in rows
+            if path and (
+                any(part in _SKIP_DIRS for part in path.split("/"))
+                or (globs and _is_gitignored(path, globs))
+            )
+        ]
+        for path in doomed:
+            conn.execute(
+                "DELETE FROM symbol_nodes WHERE project_id = ? AND path = ?",
+                (project_id, path),
+            )
+            conn.execute(
+                "DELETE FROM symbol_edges WHERE project_id = ? AND from_path = ?",
+                (project_id, path),
+            )
+            conn.execute(
+                "DELETE FROM symbol_edges WHERE project_id = ? AND to_path = ?",
+                (project_id, path),
+            )
+            conn.execute(
+                "DELETE FROM symbol_files WHERE project_id = ? AND path = ?",
+                (project_id, path),
+            )
+        if doomed:
+            conn.commit()
+        return len(doomed)
+    except Exception as exc:
+        _log.warning("symbol_prune.failed", extra={"error": str(exc)})
+        return 0
