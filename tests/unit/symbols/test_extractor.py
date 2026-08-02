@@ -137,3 +137,49 @@ class TestGracefulDegradation:
         nodes, edges = extract_file("script.rb", "/fake/script.rb", _PID, frozenset())
         assert nodes == []
         assert edges == []
+
+
+class TestBindingCompatibility:
+    """tree-sitter-language-pack changed its binding twice and CogniKernel sat
+    between the breaks. `pyproject.toml` declared >=1.0, so a fresh pip install
+    resolved 1.14.0, every accessor raised AttributeError, extraction failed
+    open, and TS/JS produced an EMPTY graph for PyPI users. Verified at the
+    time: typescript_support_status() False, valid TS -> 0 nodes, 0 edges.
+
+    These tests fail on either side of the split if the adapters regress.
+    """
+
+    def test_typescript_support_is_actually_available(self) -> None:
+        from cognikernel.symbols.extractor import typescript_support_status
+
+        ok, detail = typescript_support_status()
+        assert ok, f"TS extraction unavailable: {detail}"
+
+    def test_valid_typescript_yields_symbols(self) -> None:
+        from cognikernel.symbols.extractor import EXTRACTORS
+
+        nodes, edges = EXTRACTORS[".ts"].extract(
+            "a.ts",
+            'import {X} from "./b";\n'
+            "export class Widget extends Base { render(): void {} }",
+            "p",
+            frozenset({"b.ts"}),
+        )
+        kinds = {(n.node_type, n.name) for n in nodes}
+        assert ("class", "Widget") in kinds
+        assert ("method", "render") in kinds
+        assert len(edges) == 1
+
+    def test_adapters_handle_method_and_property_shapes(self) -> None:
+        """The adapters must not assume either binding's calling convention."""
+        from cognikernel.symbols.extractor import _ts_attr
+
+        class MethodStyle:
+            def value(self):
+                return 7
+
+        class PropertyStyle:
+            value = 7
+
+        assert _ts_attr(MethodStyle(), "value") == 7
+        assert _ts_attr(PropertyStyle(), "value") == 7

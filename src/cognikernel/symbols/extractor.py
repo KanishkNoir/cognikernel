@@ -129,6 +129,61 @@ class PythonASTExtractor:
         return nodes, edges
 
 
+# ── tree-sitter binding compatibility ────────────────────────────────────────
+#
+# tree-sitter-language-pack changed its binding twice, and CogniKernel sat
+# between the two breaks:
+#
+#   <= 1.12.x  native binding: parser.parse_bytes(), tree.root_node(),
+#              node.kind(), node.named_child_count() — all METHODS
+#   >= 1.13.0  py-tree-sitter: parser.parse(), tree.root_node, node.type,
+#              node.named_child_count — all PROPERTIES
+#
+# `pyproject.toml` declared `>=1.0`, so a fresh `pip install` resolved 1.14.0
+# and every accessor below raised AttributeError. Extraction fails open, so
+# TS/JS silently produced an EMPTY symbol graph for anyone who installed from
+# PyPI — verified: `typescript_support_status()` returned False and valid
+# TypeScript yielded 0 nodes, 0 edges.
+#
+# These adapters accept BOTH shapes so the fix does not strand users on either
+# side of the split. Each probes once per call and is a plain attribute read on
+# the hot path; the cost is not measurable against parse time.
+
+def _ts_attr(obj, name: str):
+    """Read `name` from `obj` whether it is a property or a zero-arg method."""
+    value = getattr(obj, name)
+    return value() if callable(value) else value
+
+
+def _ts_parse(parser, source_bytes: bytes):
+    """Parse across both bindings (`parse_bytes` native, `parse` py-tree-sitter)."""
+    fn = getattr(parser, "parse_bytes", None)
+    return fn(source_bytes) if fn is not None else parser.parse(source_bytes)
+
+
+def _ts_root(tree):
+    return _ts_attr(tree, "root_node")
+
+
+def _ts_kind(node) -> str:
+    """Node type: `.type` on py-tree-sitter, `.kind()` on the native binding."""
+    if hasattr(node, "type"):
+        return _ts_attr(node, "type")
+    return _ts_attr(node, "kind")
+
+
+def _ts_ncount(node) -> int:
+    return _ts_attr(node, "named_child_count")
+
+
+def _ts_nchild(node, index: int):
+    return node.named_child(index)
+
+
+def _ts_span(node) -> tuple[int, int]:
+    return _ts_attr(node, "start_byte"), _ts_attr(node, "end_byte")
+
+
 # ── TypeScript/JavaScript extractor ──────────────────────────────────────────
 
 class TypeScriptExtractor:
@@ -165,8 +220,8 @@ class TypeScriptExtractor:
         try:
             parser = get_parser(self._language)
             source_bytes = source.encode("utf-8")
-            tree = parser.parse_bytes(source_bytes)
-            root = tree.root_node()
+            tree = _ts_parse(parser, source_bytes)
+            root = _ts_root(tree)
         except Exception as exc:
             _log.warning("symbols.typescript_parse_failed: %s (%s)", path, exc)
             return [], []
@@ -177,11 +232,11 @@ class TypeScriptExtractor:
         now = int(time.time() * 1000)
 
         def _get(node) -> str:
-            return source_bytes[node.start_byte():node.end_byte()].decode("utf-8", errors="replace")
+            return source_bytes[slice(*_ts_span(node))].decode("utf-8", errors="replace")
 
-        for i in range(root.named_child_count()):
-            child = root.named_child(i)
-            kind = child.kind()
+        for i in range(_ts_ncount(root)):
+            child = _ts_nchild(root, i)
+            kind = _ts_kind(child)
 
             if kind == "import_statement":
                 edge = _ts_import_edge(child, path, project_id, known_project_paths, _get)
@@ -211,9 +266,9 @@ class TypeScriptExtractor:
 
 def _ts_unwrap_export(export_node) -> object | None:
     """Return the inner declaration from an export_statement, or None."""
-    for i in range(export_node.named_child_count()):
-        child = export_node.named_child(i)
-        if child.kind() in (
+    for i in range(_ts_ncount(export_node)):
+        child = _ts_nchild(export_node, i)
+        if _ts_kind(child) in (
             "class_declaration", "abstract_class_declaration", "class",
             "function_declaration", "lexical_declaration",
         ):
@@ -222,7 +277,7 @@ def _ts_unwrap_export(export_node) -> object | None:
 
 
 def _ts_handle_decl(decl, path, project_id, _get, nodes, now) -> None:
-    kind = decl.kind()
+    kind = _ts_kind(decl)
     if kind in ("class_declaration", "abstract_class_declaration", "class"):
         nodes.extend(_ts_extract_class(decl, path, project_id, _get, now))
     elif kind == "function_declaration":
@@ -238,13 +293,13 @@ def _ts_extract_class(cls_node, path, project_id, _get, now) -> list[SymbolNode]
     class_name = _get(name_node)
 
     signature = ""
-    for i in range(cls_node.named_child_count()):
-        child = cls_node.named_child(i)
-        if child.kind() == "class_heritage":
-            for j in range(child.named_child_count()):
-                ext = child.named_child(j)
-                if ext.kind() == "extends_clause" and ext.named_child_count() > 0:
-                    signature = _get(ext.named_child(0))
+    for i in range(_ts_ncount(cls_node)):
+        child = _ts_nchild(cls_node, i)
+        if _ts_kind(child) == "class_heritage":
+            for j in range(_ts_ncount(child)):
+                ext = _ts_nchild(child, j)
+                if _ts_kind(ext) == "extends_clause" and _ts_ncount(ext) > 0:
+                    signature = _get(_ts_nchild(ext, 0))
                     break
             break
 
@@ -265,9 +320,9 @@ def _ts_extract_class(cls_node, path, project_id, _get, now) -> list[SymbolNode]
 
 def _ts_extract_fields(class_body, _get) -> str:
     fields: dict[str, str] = {}
-    for i in range(class_body.named_child_count()):
-        child = class_body.named_child(i)
-        if child.kind() != "public_field_definition":
+    for i in range(_ts_ncount(class_body)):
+        child = _ts_nchild(class_body, i)
+        if _ts_kind(child) != "public_field_definition":
             continue
         name_node = child.child_by_field_name("name")
         if name_node is None:
@@ -275,8 +330,8 @@ def _ts_extract_fields(class_body, _get) -> str:
         name = _get(name_node)
         type_node = child.child_by_field_name("type")
         type_str = ""
-        if type_node is not None and type_node.named_child_count() > 0:
-            type_str = _get(type_node.named_child(0))
+        if type_node is not None and _ts_ncount(type_node) > 0:
+            type_str = _get(_ts_nchild(type_node, 0))
         fields[name] = type_str
         if len(fields) >= 10:
             break
@@ -287,9 +342,9 @@ def _ts_extract_fields(class_body, _get) -> str:
 
 def _ts_extract_methods(class_body, class_name, path, project_id, _get, now) -> list[SymbolNode]:
     methods = []
-    for i in range(class_body.named_child_count()):
-        child = class_body.named_child(i)
-        if child.kind() != "method_definition":
+    for i in range(_ts_ncount(class_body)):
+        child = _ts_nchild(class_body, i)
+        if _ts_kind(child) != "method_definition":
             continue
         name_node = child.child_by_field_name("name")
         if name_node is None:
@@ -300,7 +355,7 @@ def _ts_extract_methods(class_body, class_name, path, project_id, _get, now) -> 
         params_node = child.child_by_field_name("parameters")
         sig = _ts_format_params(params_node, _get) if params_node else "()"
         ret_node = child.child_by_field_name("return_type")
-        ret = _get(ret_node.named_child(0)) if (ret_node and ret_node.named_child_count() > 0) else ""
+        ret = _get(_ts_nchild(ret_node, 0)) if (ret_node and _ts_ncount(ret_node) > 0) else ""
         methods.append(SymbolNode(
             path=path, node_type="method", name=method_name,
             parent_name=class_name, signature=sig,
@@ -318,7 +373,7 @@ def _ts_extract_function(fn_node, path, project_id, _get, now) -> SymbolNode | N
     params_node = fn_node.child_by_field_name("parameters")
     sig = _ts_format_params(params_node, _get) if params_node else "()"
     ret_node = fn_node.child_by_field_name("return_type")
-    ret = _get(ret_node.named_child(0)) if (ret_node and ret_node.named_child_count() > 0) else ""
+    ret = _get(_ts_nchild(ret_node, 0)) if (ret_node and _ts_ncount(ret_node) > 0) else ""
     return SymbolNode(
         path=path, node_type="function", name=name,
         parent_name="", signature=sig,
@@ -329,36 +384,36 @@ def _ts_extract_function(fn_node, path, project_id, _get, now) -> SymbolNode | N
 
 def _ts_format_params(params_node, _get) -> str:
     parts = []
-    for i in range(params_node.named_child_count()):
-        p = params_node.named_child(i)
-        if p.kind() not in ("required_parameter", "optional_parameter"):
+    for i in range(_ts_ncount(params_node)):
+        p = _ts_nchild(params_node, i)
+        if _ts_kind(p) not in ("required_parameter", "optional_parameter"):
             continue
         name_node = None
         type_ann = None
-        for j in range(p.named_child_count()):
-            child = p.named_child(j)
-            if child.kind() == "identifier":
+        for j in range(_ts_ncount(p)):
+            child = _ts_nchild(p, j)
+            if _ts_kind(child) == "identifier":
                 name_node = child
-            elif child.kind() == "type_annotation":
+            elif _ts_kind(child) == "type_annotation":
                 type_ann = child
         if name_node is None:
             continue
         name_str = _get(name_node)
-        if type_ann is not None and type_ann.named_child_count() > 0:
-            parts.append(f"{name_str}:{_get(type_ann.named_child(0))}")
+        if type_ann is not None and _ts_ncount(type_ann) > 0:
+            parts.append(f"{name_str}:{_get(_ts_nchild(type_ann, 0))}")
         else:
             parts.append(name_str)
     return f"({', '.join(parts)})"
 
 
 def _ts_import_edge(import_node, path, project_id, known, _get) -> SymbolEdge | None:
-    n = import_node.named_child_count()
+    n = _ts_ncount(import_node)
     if n == 0:
         return None
     str_node = import_node.named_child(n - 1)
-    if str_node.kind() != "string" or str_node.named_child_count() == 0:
+    if _ts_kind(str_node) != "string" or _ts_ncount(str_node) == 0:
         return None
-    specifier = _get(str_node.named_child(0))
+    specifier = _get(_ts_nchild(str_node, 0))
     to_path, is_ext = _ts_resolve_import(specifier, path, known)
     return SymbolEdge(
         project_id=project_id,
@@ -401,7 +456,10 @@ def typescript_support_status() -> tuple[bool, str]:
         return False, f"tree-sitter-language-pack not importable ({exc})"
     try:
         parser = get_parser("typescript")
-        parser.parse_bytes(b"const x = 1;").root_node()
+        # Must go through the same adapters the extractor uses, or this probe
+        # reports the binding it happens to be written against rather than
+        # whether extraction actually works.
+        _ts_root(_ts_parse(parser, b"const x = 1;"))
         return True, "tree-sitter typescript parser OK"
     except Exception as exc:  # pragma: no cover - environment-dependent
         return False, f"parser init/parse failed ({exc})"

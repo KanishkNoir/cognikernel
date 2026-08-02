@@ -24,6 +24,15 @@ dependencies = [
     "pyahocorasick>=2.0",
     "mcp>=1.0",
     "tree-sitter>=0.22",
+    # Deliberately unpinned. tree-sitter-language-pack switched its binding at
+    # 1.13.0 (native `parse_bytes()`/`kind()` methods -> py-tree-sitter
+    # `parse()`/`.type` properties). This range once silently resolved to a
+    # version the extractor could not drive, which failed open and left TS/JS
+    # users with an EMPTY symbol graph. symbols/extractor.py now goes through
+    # adapters that accept BOTH shapes, so no floor bump is needed and nobody
+    # on an older pack is stranded. Verified working on 1.9.1 and 1.14.0;
+    # tests/unit/symbols/test_extractor.py::TestBindingCompatibility fails on
+    # either side if that regresses.
     "tree-sitter-language-pack>=1.0",
 ]
 
