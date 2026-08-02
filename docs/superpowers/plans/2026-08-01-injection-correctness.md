@@ -1905,7 +1905,7 @@ Turns the exploratory scratchpad sweep into reproducible research tooling and lo
 - Create: `scripts/injection_defect_audit.py`
 - Create: `tests/fixtures/transcripts/defects/*.txt` (5 files)
 - Create: `tests/unit/quality/test_baseline_regression.py`
-- Create: `docs/research/injection_defect_baseline.json`
+- Create: `docs/metrics/injection_defect_baseline.json`
 - Test: as above
 
 **Interfaces:**
@@ -2025,7 +2025,7 @@ Research tooling — NOT part of the shipped package. Produces the prevalence
 baseline that the paper's "before" column and the CI regression gate both use.
 
 Usage:
-    python scripts/injection_defect_audit.py [--out docs/research/injection_defect_baseline.json]
+    python scripts/injection_defect_audit.py [--out docs/metrics/injection_defect_baseline.json]
 
 Never writes to a store: every connection is opened read-only.
 """
@@ -2121,7 +2121,7 @@ def main() -> int:
         "--projects-dir",
         default=str(Path.home() / ".cognikernel" / "projects"),
     )
-    parser.add_argument("--out", default="docs/research/injection_defect_baseline.json")
+    parser.add_argument("--out", default="docs/metrics/injection_defect_baseline.json")
     args = parser.parse_args()
 
     stores = sorted(Path(args.projects_dir).glob("*.db"))
@@ -2181,7 +2181,7 @@ Run:
 .venv/Scripts/python.exe scripts/injection_defect_audit.py
 .venv/Scripts/python.exe -m pytest tests/unit/quality/test_baseline_regression.py -v
 ```
-Expected: the script prints a per-rule table with Wilson CIs and writes `docs/research/injection_defect_baseline.json`; tests PASS.
+Expected: the script prints a per-rule table with Wilson CIs and writes `docs/metrics/injection_defect_baseline.json`; tests PASS.
 
 **Note:** this baseline is measured with the *new* detectors against *existing stored* events, so it is the honest "before" for the paper — it says how much defective memory is currently in the stores, which is exactly the prevalence claim. It is not the A/B; that compares old vs new extraction over the recovered and fixture corpora (spec §5 tier 1) and is out of scope for this plan.
 
@@ -2191,7 +2191,7 @@ Run: `.venv/Scripts/python.exe -m pytest -q && .venv/Scripts/python.exe -m lint_
 Expected: PASS, all import contracts KEPT.
 
 ```bash
-git add scripts/injection_defect_audit.py scripts/__init__.py tests/fixtures/transcripts/defects tests/unit/quality/test_baseline_regression.py docs/research/injection_defect_baseline.json
+git add scripts/injection_defect_audit.py scripts/__init__.py tests/fixtures/transcripts/defects tests/unit/quality/test_baseline_regression.py docs/metrics/injection_defect_baseline.json
 git commit -m "feat(research): defect audit harness, fixture corpus, and baseline
 
 Sweeps every local store read-only, reports per-rule prevalence with Wilson
@@ -2207,7 +2207,7 @@ paper's prevalence table both read."
 - [ ] `.venv/Scripts/python.exe -m lint_imports` — all contracts KEPT, including "Quality is a leaf"
 - [ ] Gate rejection rate on real stores is single-digit percent (Task 8, Step 5)
 - [ ] `_discover_project_paths(Path('.'))` returns no vendored paths (Task 5, Step 5)
-- [ ] `docs/research/injection_defect_baseline.json` committed
+- [ ] `docs/metrics/injection_defect_baseline.json` committed
 - [ ] A v18 store opens and upgrades to v19 without error
 
 ## Deviations from the spec (decided while planning — read before implementing)
