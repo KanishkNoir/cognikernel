@@ -17,9 +17,28 @@ from cognikernel.utils.paths import canonicalize_path, is_bare_basename
 if TYPE_CHECKING:
     from cognikernel.extraction.tokenize import Sentence
 
+# Path shapes this must match — all four were invisible before (spec §0.1):
+#   src/storage/connection.py     plain relative
+#   ./src/storage/connection.py   dot-relative
+#   .claude/settings.json         dot-directory
+#   /srv/app/main.py              absolute POSIX
+#   C:\Users\x\src\main.py        absolute Windows, backslash-separated
+#
+# Three things had to change together. Widening only the lookbehind leaves
+# Windows paths invisible, because the body class carried no backslash and the
+# directory-repeat group required a literal '/' terminator.
+#   1. lookbehind: no longer blocks on '.', '/' or '\' — those START a path
+#      rather than continue a word. It still blocks mid-identifier matches.
+#   2. separator: [/\\] everywhere a separator can appear.
+#   3. body class: includes '\' so backslash paths hold together.
+# canonicalize_path() then folds separators to '/' downstream. Note that an
+# ABSOLUTE path additionally needs project_root to survive canonicalization —
+# see the note on extract_file_mention_events.
 _FILE_PATTERN = re.compile(
-    r"(?<![a-zA-Z0-9_./\\])"
-    r"(?:[a-zA-Z0-9_][a-zA-Z0-9_/.-]*/)*"
+    r"(?<![a-zA-Z0-9_])"
+    r"(?:[a-zA-Z]:[/\\])?"                        # optional Windows drive
+    r"(?:[/\\]|\./|\.(?=[a-zA-Z0-9_]))?"          # optional leading / ./ or dot-dir
+    r"(?:[a-zA-Z0-9_.][a-zA-Z0-9_.\\/-]*[/\\])*"  # directory segments
     r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*\."
     r"(?:py|ts|tsx|js|jsx|mjs|json|yaml|yml|sql|md|toml|env|cfg|ini|go|rs|java|cs)"
     r"(?![a-zA-Z0-9_])",
@@ -54,12 +73,20 @@ def extract_file_mention_events(
     sentences: list[Sentence],
     project_id: str,
     session_id: str,
+    project_root: str | None = None,
 ) -> list[Event]:
     """Return COMPONENT_STATUS events for files mentioned in assistant turns.
 
     Only emits an event when an action verb appears within ±1 sentence of the
     file mention, avoiding false positives from bare filenames in explanations.
     Each unique path is emitted at most once per call.
+
+    `project_root` is required for ABSOLUTE paths to survive: canonicalize_path
+    returns '' for any absolute path when it has no root to relativize against
+    (paths.py rule 7), and empty results are dropped below. With a root,
+    absolute paths inside the project are relativized and those outside are
+    correctly discarded — they are not project components. When None, absolute
+    paths stay unresolvable, which is the pre-existing behaviour.
     """
     events: list[Event] = []
     seen_paths: set[str] = set()
@@ -75,7 +102,7 @@ def extract_file_mention_events(
             # at insertion time — they're extractor noise that conflicts with
             # the prefixed canonical form (C4). Mirrors the same filter in
             # storage/projections.py:rebuild_projection.
-            path = canonicalize_path(match.group(0))
+            path = canonicalize_path(match.group(0), project_root)
             if not path or is_bare_basename(path) or path in seen_paths:
                 continue
 

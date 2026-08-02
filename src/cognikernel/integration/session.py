@@ -118,6 +118,7 @@ def session_end(
         session_id=session_id,
         started_at=now,
         ended_at=now,
+        project_root=str(Path(project_path).resolve()),
     )
     try:
         # Extract from the delta slice (or full transcript on first/fallback run).
@@ -492,6 +493,7 @@ def process_jobs(
                     session_id=job.session_id,
                     started_at=now,
                     ended_at=now,
+                    project_root=str(Path(project_path).resolve()),
                 )
                 candidates = extract_session(
                     transcript, session_meta, git_diff=git_diff, extractor=config.extractor
@@ -823,6 +825,7 @@ def rebuild_from_raw(
                 session_id=session_id,
                 started_at=now,
                 ended_at=now,
+                project_root=str(Path(project_path).resolve()),
             )
 
             try:

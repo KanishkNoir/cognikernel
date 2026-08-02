@@ -39,6 +39,11 @@ class SessionMetadata:
     session_id: str
     started_at: int   # Unix milliseconds
     ended_at: int     # Unix milliseconds
+    # Absolute path of the project checkout. Optional because not every caller
+    # knows it; when None, absolute paths in the transcript stay unresolvable
+    # and are dropped, which is the pre-existing behaviour. Supplying it is what
+    # lets file mentions written as absolute paths become components.
+    project_root: str | None = None
 
 
 def extract_session(
@@ -117,7 +122,8 @@ def _extract_session_impl(
                 broad = _extract_via_head(sentences, session_meta, head)
                 if broad is not None:
                     broad.extend(extract_file_mention_events(
-                        sentences, session_meta.project_id, session_meta.session_id))
+                        sentences, session_meta.project_id, session_meta.session_id,
+                        project_root=session_meta.project_root))
                     broad.extend(schema_events)
                     return broad
                 _log.info("salience head unavailable — falling back to legacy")
@@ -175,7 +181,8 @@ def _extract_session_impl(
         events.extend(classified)
 
         mention_events = extract_file_mention_events(
-            sentences, session_meta.project_id, session_meta.session_id
+            sentences, session_meta.project_id, session_meta.session_id,
+            project_root=session_meta.project_root,
         )
         events.extend(mention_events)
         events.extend(schema_events)
