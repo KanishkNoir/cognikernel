@@ -240,7 +240,7 @@ forbidden_modules = [
 ]
 ```
 
-Run: `.venv/Scripts/python.exe -m lint_imports`
+Run: `./.venv/Scripts/lint-imports.exe`
 Expected: all contracts KEPT.
 
 - [ ] **Step 6: Commit**
@@ -1283,7 +1283,7 @@ Expected: PASS (12 tests)
 
 - [ ] **Step 5: Verify the leaf contract still holds**
 
-Run: `.venv/Scripts/python.exe -m lint_imports`
+Run: `./.venv/Scripts/lint-imports.exe`
 Expected: all contracts KEPT.
 
 - [ ] **Step 6: Commit**
@@ -2187,7 +2187,7 @@ Expected: the script prints a per-rule table with Wilson CIs and writes `docs/me
 
 - [ ] **Step 6: Run the whole suite and commit**
 
-Run: `.venv/Scripts/python.exe -m pytest -q && .venv/Scripts/python.exe -m lint_imports`
+Run: `.venv/Scripts/python.exe -m pytest -q && ./.venv/Scripts/lint-imports.exe`
 Expected: PASS, all import contracts KEPT.
 
 ```bash
@@ -2204,7 +2204,7 @@ paper's prevalence table both read."
 ## Verification checklist (run before declaring the branch done)
 
 - [ ] `.venv/Scripts/python.exe -m pytest -q` — full suite green
-- [ ] `.venv/Scripts/python.exe -m lint_imports` — all contracts KEPT, including "Quality is a leaf"
+- [ ] `./.venv/Scripts/lint-imports.exe` — all contracts KEPT, including "Quality is a leaf"
 - [ ] Gate rejection rate on real stores is single-digit percent (Task 8, Step 5)
 - [ ] `_discover_project_paths(Path('.'))` returns no vendored paths (Task 5, Step 5)
 - [ ] `docs/metrics/injection_defect_baseline.json` committed

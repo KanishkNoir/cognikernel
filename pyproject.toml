@@ -104,6 +104,22 @@ forbidden_modules = [
     "cognikernel.extraction",
 ]
 
+# Quality is a LEAF: detectors and the admission gate are pure functions over
+# text and an injected path inventory. Keeping it dependency-free is what lets
+# extraction call it without violating the layered pipeline above.
+[[tool.importlinter.contracts]]
+name = "Quality is a leaf"
+type = "forbidden"
+source_modules = ["cognikernel.quality"]
+forbidden_modules = [
+    "cognikernel.injection",
+    "cognikernel.compression",
+    "cognikernel.integration",
+    "cognikernel.extraction",
+    "cognikernel.delta",
+    "cognikernel.storage",
+]
+
 # NOTE (audit P2): there used to be an "Observability does not import stage
 # modules" contract whose source_modules pointed at "cognikernel.observability" — a
 # module that never existed. import-linter aborts the ENTIRE run when a contract
