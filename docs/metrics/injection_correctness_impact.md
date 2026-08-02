@@ -215,6 +215,21 @@ defects. Those cases are now pinned as regression tests.
 Safe by an order of magnitude. A gate that rejected aggressively would be worse
 than the defect it fixes.
 
+### Reading merge stats after this change
+
+`execute_merge` now returns a `rejected` count alongside the existing keys, and
+`session_end` sets `extracted` from the candidate list *before* the gate runs.
+So the identity to expect is:
+
+```
+extracted = inserted + updated + rejected
+```
+
+Anything that previously assumed `extracted == inserted + updated` will show a
+gap once the gate starts firing. The gap is `rejected`, and it is the feature
+working — not lost extraction. Verified on the end-to-end run below: 8
+extracted = 6 inserted + 1 updated + 1 rejected.
+
 ### Verified end to end
 
 A synthetic session run through the real capture path (`extract_session` →

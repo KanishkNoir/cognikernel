@@ -189,3 +189,37 @@ class TestNoCatastrophicBacktracking:
         t0 = time.perf_counter()
         _match(text)
         assert time.perf_counter() - t0 < 0.5
+
+
+class TestWindowsPathDepthAndMixedSeparators:
+    """The ReDoS fix removed '/' and '\' from the directory-segment class, so a
+    segment can no longer CONTAIN a separator. That is correct, but it could
+    have silently narrowed Windows matching — the rest of the suite only
+    exercises shallow 3-4 segment shapes. These pin deeper and mixed forms,
+    which Windows tooling emits routinely.
+    """
+
+    def test_deep_windows_absolute_path(self) -> None:
+        hits = _match(r"edited C:\a\b\c\d\e\f\deep.py now")
+        assert hits
+        assert canonicalize_path(hits[0], r"C:\a") == "b/c/d/e/f/deep.py"
+
+    def test_mixed_separators_absolute(self) -> None:
+        hits = _match(r"edited C:\proj\src/mixed/file.py now")
+        assert hits
+        assert canonicalize_path(hits[0], r"C:\proj") == "src/mixed/file.py"
+
+    def test_mixed_separators_relative(self) -> None:
+        hits = _match(r"edited src\a/b\c/mixed.py now")
+        assert hits
+        assert canonicalize_path(hits[0]) == "src/a/b/c/mixed.py"
+
+    def test_deep_relative_backslash_path(self) -> None:
+        hits = _match(r"edited src\a\b\c\deep.py now")
+        assert hits
+        assert canonicalize_path(hits[0]) == "src/a/b/c/deep.py"
+
+    def test_non_c_drive_letter(self) -> None:
+        hits = _match(r"edited D:\Work\repo\pkg\mod\sub\thing.ts now")
+        assert hits
+        assert canonicalize_path(hits[0], r"D:\Work\repo") == "pkg/mod/sub/thing.ts"
