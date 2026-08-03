@@ -63,3 +63,44 @@ jobs:
         env:
           COGNIKERNEL_DISABLE_AUTO_WARM: "1"
         run: uv run pytest -q
+
+  fresh-install:
+    # The gap that let a broken release ship. Every other job installs from
+    # uv.lock, which pins tree-sitter-language-pack to a version the extractor
+    # could drive. Real users run `pip install cognikernel`, which resolves the
+    # NEWEST compatible dependency — and when that pack changed its binding at
+    # 1.13.0, TS/JS extraction returned zero symbols for everyone while CI
+    # stayed green. A lock file protects development and hides what users get.
+    #
+    # This job deliberately does NOT use the lock. It resolves dependencies the
+    # way PyPI does, then asserts the tree-sitter-backed extractors actually
+    # produce symbols. Extraction fails open, so a smoke import is not enough —
+    # the assertion has to look at the output.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install from source with unpinned resolution
+        run: python -m pip install --upgrade pip && python -m pip install .
+      - name: Report resolved dependency versions
+        run: python -c "import importlib.metadata as m; print('tree-sitter', m.version('tree-sitter')); print('tree-sitter-language-pack', m.version('tree-sitter-language-pack'))"
+      - name: Assert TS/JS extraction actually yields symbols
+        run: |
+          python - <<'PY'
+          import sys
+          from cognikernel.symbols.extractor import EXTRACTORS, typescript_support_status
+
+          ok, detail = typescript_support_status()
+          if not ok:
+              sys.exit(f"typescript_support_status() is False: {detail}")
+
+          src = 'export class Widget extends Base { render(): void {} }'
+          for ext in (".ts", ".tsx", ".js", ".jsx"):
+              nodes, _edges = EXTRACTORS[ext].extract("a" + ext, src, "p", frozenset())
+              names = {(n.node_type, n.name) for n in nodes}
+              if ("class", "Widget") not in names:
+                  sys.exit(f"{ext}: expected class Widget, got {names}")
+          print("fresh-install extraction OK for .ts/.tsx/.js/.jsx")
+          PY
