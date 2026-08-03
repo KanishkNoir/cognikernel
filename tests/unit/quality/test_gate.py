@@ -144,3 +144,43 @@ class TestApplyVerdict:
         apply_verdict(e, admit(e))
         assert e.weight == 1.0
         assert "quality" not in e.payload
+
+
+class TestUnverifiableLanguagesAreNotPenalised:
+    """Grounding must not punish a file merely because we cannot parse its
+    language. The inventory is built from the discovery walk, which globs only
+    .py/.ts/.tsx/.js/.jsx — so a real internal/db/pool.go was being marked
+    'unverified' and having its weight halved, pushing every component event in
+    a Go/Rust/Java project off the budget-ranked block.
+
+    'Cannot verify' is not 'does not exist', the same distinction already made
+    for an empty inventory.
+    """
+
+    def test_unindexable_suffix_is_admitted(self) -> None:
+        g = GroundingContext(
+            frozenset({"src/known.py"}),
+            verifiable_suffixes=frozenset({".py", ".ts"}),
+        )
+        v = admit(_event("COMPONENT_STATUS", "x", path="internal/db/pool.go"), g)
+        assert v.action == "admit"
+
+    def test_indexable_suffix_still_downgrades_when_unknown(self) -> None:
+        g = GroundingContext(
+            frozenset({"src/known.py"}),
+            verifiable_suffixes=frozenset({".py", ".ts"}),
+        )
+        v = admit(_event("COMPONENT_STATUS", "x", path="src/ghost.py"), g)
+        assert v.action == "downgrade"
+
+    def test_indexable_and_known_is_admitted(self) -> None:
+        g = GroundingContext(
+            frozenset({"src/known.py"}),
+            verifiable_suffixes=frozenset({".py"}),
+        )
+        assert admit(_event("COMPONENT_STATUS", "x", path="src/known.py"), g).action == "admit"
+
+    def test_empty_suffix_set_verifies_everything(self) -> None:
+        # Back-compat: callers that supply no suffix set keep the old behaviour.
+        g = GroundingContext(frozenset({"src/known.py"}))
+        assert admit(_event("COMPONENT_STATUS", "x", path="src/ghost.py"), g).action == "downgrade"

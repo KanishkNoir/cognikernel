@@ -76,11 +76,31 @@ class GroundingContext:
     `known_paths` is built once per extraction run by the caller from the
     symbol store, the project walk, and the git index — so a per-event check
     is a set lookup with no I/O.
+
+    `verifiable_suffixes` bounds what the inventory can speak to. The discovery
+    walk globs only the languages we can parse, so a real `internal/db/pool.go`
+    is absent from `known_paths` for a reason that has nothing to do with
+    whether it exists. Grounding it would mark every component event in a
+    Go/Rust/Java project 'unverified' and halve its weight, pushing the whole
+    project off the budget-ranked block. An empty set means "verify
+    everything", preserving the behaviour of callers that supply no suffixes.
     """
     known_paths: frozenset[str] = field(default_factory=frozenset)
+    verifiable_suffixes: frozenset[str] = field(default_factory=frozenset)
 
     def is_known(self, path: str) -> bool:
         return path in self.known_paths
+
+    def can_verify(self, path: str) -> bool:
+        """False when the inventory has no authority over this path's language.
+
+        'Cannot verify' is not 'does not exist' — the same distinction the gate
+        already draws for an empty inventory.
+        """
+        if not self.verifiable_suffixes:
+            return True
+        dot = path.rfind(".")
+        return dot != -1 and path[dot:].lower() in self.verifiable_suffixes
 
     def is_near_miss(self, path: str) -> bool:
         """True when `path` is a known path with leading characters removed.
@@ -139,7 +159,7 @@ def _admit_inner(event: Event, ground: GroundingContext | None) -> Verdict:
     # downgrade every component event it ever captured.
     if event.event_type in _PATH_TYPES and ground is not None and ground.known_paths:
         path = payload.get("path", "") or ""
-        if path:
+        if path and ground.can_verify(path):
             if ground.is_near_miss(path):
                 return Verdict("reject", "D1", "path is a truncation of a known path")
             if not ground.is_known(path):

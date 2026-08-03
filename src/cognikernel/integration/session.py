@@ -979,11 +979,20 @@ def build_grounding_context(conn, project_id: str, project_path):
     except Exception as exc:
         _log.debug("grounding.symbol_load_failed", extra={"error": str(exc)})
 
+    suffixes: frozenset[str] = frozenset()
     try:
-        from cognikernel.symbols.extractor import _discover_project_paths
+        from cognikernel.symbols.extractor import (
+            EXTRACTABLE_SUFFIXES,
+            _discover_project_paths,
+        )
 
         known.update(_discover_project_paths(Path(project_path)))
+        # Bound the inventory's authority to the languages it actually walks.
+        # Without this, a real internal/db/pool.go is absent for a reason that
+        # has nothing to do with existing, and every component event in a
+        # Go/Rust/Java project gets downgraded off the block.
+        suffixes = EXTRACTABLE_SUFFIXES
     except Exception as exc:
         _log.debug("grounding.walk_failed", extra={"error": str(exc)})
 
-    return GroundingContext(frozenset(known))
+    return GroundingContext(frozenset(known), suffixes)

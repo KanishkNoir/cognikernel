@@ -555,6 +555,15 @@ _MAX_FILES = 500
 # Top-level directories that mark first-party source. Ranking only.
 _SRC_HINTS = frozenset({"src", "lib", "app", "pkg", "internal", "cmd"})
 
+# The languages discovery actually walks. Exported so the quality gate can tell
+# "this path is missing from the inventory" from "the inventory never covered
+# this language" — without that distinction, grounding penalises every file in
+# an unsupported language. Keep in lockstep with `patterns` in
+# _discover_project_paths; EXTRACTABLE_SUFFIXES is derived from it below.
+EXTRACTABLE_SUFFIXES: frozenset[str] = frozenset(
+    {".py", ".ts", ".tsx", ".js", ".jsx"}
+)
+
 
 def _load_gitignore_globs(project_root: Path) -> list[str]:
     """Return fnmatch-able patterns from .gitignore. Missing file → [].
@@ -615,7 +624,7 @@ def _discover_project_paths(project_root: Path) -> dict[str, str]:
     """
     globs = _load_gitignore_globs(project_root)
     candidates: list[tuple[tuple[int, int], str, str]] = []
-    patterns = ("*.py", "*.ts", "*.tsx", "*.js", "*.jsx")
+    patterns = tuple(f"*{suffix}" for suffix in sorted(EXTRACTABLE_SUFFIXES))
 
     for pattern in patterns:
         for abs_p in project_root.rglob(pattern):
