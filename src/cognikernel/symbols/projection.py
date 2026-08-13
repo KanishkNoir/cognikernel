@@ -13,6 +13,29 @@ _MAX_METHODS_PER_CLASS = 5
 _MAX_FUNCTIONS_PER_FILE = 10
 _MAX_IMPORTS_PER_FILE = 8
 
+# Score component weights. These are meaningful only because centrality is
+# normalised to [0,1] against the graph max before being weighted — see
+# _file_score. symbol_density is an unweighted integer count (~1-26), so these
+# are calibrated against that range: structure is worth roughly as much as a
+# mid-sized file's symbol count, and recency somewhat more.
+_CENTRALITY_WEIGHT = 15.0
+_HOT_WEIGHT = 20.0
+
+# Directories whose files describe how the project is exercised rather than what
+# it does. Their symbol counts are inflated by construction, so without a
+# penalty they crowd out first-party source.
+_SUPPORT_PREFIXES = ("tests/", "test/", "scripts/", "docs/", "examples/",
+                     "benchmarks/", "fixtures/")
+_SUPPORT_PENALTY = 0.35
+
+
+def _is_support_path(path: str) -> bool:
+    """True for test/tooling paths, which are deprioritised but never excluded."""
+    norm = path.replace("\\", "/")
+    if norm.startswith(_SUPPORT_PREFIXES):
+        return True
+    return "/tests/" in norm or "/test/" in norm
+
 
 @dataclass
 class SkeletonMethod:
@@ -97,32 +120,57 @@ def compress_to_skeleton(
     if total <= budget_tokens:
         return entries
 
-    # Budget phase 1: reduce methods per class (5 → 3 → 1)
-    for method_limit in (3, 1):
-        for entry in entries:
-            for cls in entry.classes:
-                cls.methods = cls.methods[:method_limit]
-        for entry in entries:
-            entry.token_estimate = max(1, count_tokens(_render_entry(entry)))
-        total = sum(e.token_estimate for e in entries)
-        if total <= budget_tokens:
-            return entries
+    # Score = symbol density + normalised centrality + hot-file bonus.
+    # Higher score = keep longer; lowest-score file dropped first.
+    #
+    # CENTRALITY IS NORMALISED AGAINST THE GRAPH MAX, not multiplied by a bare
+    # constant. PageRank is normalised to sum to 1 over the graph, so raw values
+    # scale as 1/N: on a 10-file project the mean is 0.10 and `* 100` yields a
+    # bonus of ~10, while on a 240-file project the same expression yields
+    # ~0.42. symbol_density is an integer count that does not shrink with N, so
+    # the relative weight of structure against size silently changed by more
+    # than an order of magnitude with project size — a different scoring
+    # function per project. Dividing by the graph's own max makes the term
+    # scale-free, so the weights below mean the same thing everywhere.
+    cmax = max(centrality.values(), default=0.0) or 1.0
 
-    # Budget phase 2: drop whole files.
-    # Score = symbol density + PageRank centrality bonus + hot-file bonus.
-    # Higher score = keep longer; lowest-score file dropped first. PageRank
-    # captures transitive import importance (a file imported by central files
-    # ranks above one imported by leaves with the same raw in-degree).
     def _file_score(e: SkeletonEntry) -> float:
         symbol_density = len(e.classes) * 3 + len(e.functions) + 1
-        centrality_bonus = centrality.get(e.path, 0.0) * 100.0
-        hot_bonus = 20 if e.path in _hot else 0
-        return symbol_density + centrality_bonus + hot_bonus
+        centrality_bonus = (centrality.get(e.path, 0.0) / cmax) * _CENTRALITY_WEIGHT
+        hot_bonus = _HOT_WEIGHT if e.path in _hot else 0
+        score = symbol_density + centrality_bonus + hot_bonus
+        # Test and tooling files inflate symbol_density by construction — a test
+        # class per scenario, a test method per case — so they outranked real
+        # source in the measured baseline (a test module was the second entry in
+        # this repo's own skeleton, above every src/ file). Deprioritise rather
+        # than exclude: agents genuinely do work on tests (11% of observed
+        # file-touches), and excluding them outright measured no better than
+        # penalising them.
+        if _is_support_path(e.path):
+            score *= _SUPPORT_PENALTY
+        return score
 
+    # DROP BEFORE DEGRADE. Previously this ran the method-limit ladder
+    # (5 -> 3 -> 1) across EVERY file before dropping a single one, so the
+    # budget was spent on 1-method stubs of irrelevant files instead of full
+    # signatures of relevant ones. Freeing budget by removing a file the agent
+    # will not open is strictly better than blinding every file it will.
     entries.sort(key=_file_score, reverse=True)
     while total > budget_tokens and len(entries) > 1:
         dropped = entries.pop()
         total -= dropped.token_estimate
+
+    # Only now, if a single entry still exceeds the budget, degrade its detail.
+    # This is the genuine last resort: there is nothing left to drop.
+    if total > budget_tokens:
+        for method_limit in (3, 1):
+            for entry in entries:
+                for cls in entry.classes:
+                    cls.methods = cls.methods[:method_limit]
+                entry.token_estimate = max(1, count_tokens(_render_entry(entry)))
+            total = sum(e.token_estimate for e in entries)
+            if total <= budget_tokens:
+                break
 
     return entries
 
