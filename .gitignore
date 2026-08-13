@@ -117,3 +117,19 @@ checkpoints/
 .bench_dbs/
 .pytest_tmp/
 analysis_gcogni/
+
+# ── local-only research + training tooling ───────────────────────────────────
+# Kept on disk and in the private repo; deliberately not published. The salience
+# head / supersession cross-encoder training pipeline, corpus generation and
+# mining, ONNX export, and the eval + measurement harnesses are dev-environment
+# methodology, not part of the shipped package (the wheel contains only
+# src/cognikernel — no scripts/, no docs/).
+#
+# The cognikernel_*_hook.py shims are the exception and stay tracked: two
+# integration tests spawn them to validate the real hook pipeline end to end.
+scripts/*
+!scripts/cognikernel_*_hook.py
+
+# Research write-ups: plans, specs, and measurement output.
+docs/superpowers/
+docs/metrics/

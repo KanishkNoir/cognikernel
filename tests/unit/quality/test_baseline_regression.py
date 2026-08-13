@@ -15,25 +15,35 @@ from cognikernel.quality.detectors import (
     detect_junk_constraint,
     detect_subject_less,
 )
-from scripts.injection_defect_audit import wilson_interval
 
 _FIXTURES = Path(__file__).parents[2] / "fixtures" / "transcripts" / "defects"
 _BASELINE = Path(__file__).parents[3] / "docs" / "metrics" / "injection_defect_baseline.json"
 
 
+_AUDIT = Path(__file__).parents[3] / "scripts" / "injection_defect_audit.py"
+
+
+@pytest.mark.skipif(
+    not _AUDIT.exists(),
+    reason="scripts/injection_defect_audit.py is local-only research tooling",
+)
 class TestWilsonInterval:
     def test_interval_brackets_the_point_estimate(self) -> None:
+        from scripts.injection_defect_audit import wilson_interval
         lo, hi = wilson_interval(30, 100)
         assert lo < 0.30 < hi
 
     def test_zero_hits_has_zero_lower_bound(self) -> None:
+        from scripts.injection_defect_audit import wilson_interval
         lo, _ = wilson_interval(0, 100)
         assert lo == pytest.approx(0.0, abs=1e-9)
 
     def test_empty_denominator_is_zero_zero(self) -> None:
+        from scripts.injection_defect_audit import wilson_interval
         assert wilson_interval(0, 0) == (0.0, 0.0)
 
     def test_interval_narrows_as_n_grows(self) -> None:
+        from scripts.injection_defect_audit import wilson_interval
         lo_small, hi_small = wilson_interval(5, 50)
         lo_big, hi_big = wilson_interval(500, 5000)
         assert (hi_big - lo_big) < (hi_small - lo_small)
@@ -57,6 +67,10 @@ class TestFixtureCorpus:
         assert detect_junk_constraint(text, "CONSTRAINT_HARD") is None
 
 
+@pytest.mark.skipif(
+    not _BASELINE.exists(),
+    reason="docs/metrics/ baseline is local-only research output",
+)
 class TestBaselineGate:
     def test_baseline_file_exists_and_is_valid(self) -> None:
         data = json.loads(_BASELINE.read_text(encoding="utf-8"))

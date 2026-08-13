@@ -25,10 +25,19 @@ _GOLD = _ROOT / "tests" / "fixtures" / "relay_s1_gold.json"
 _BASELINE_EVENTS = _ROOT / "tests" / "fixtures" / "relay_s1_baseline_events.json"
 
 
+_HARNESS = _ROOT / "scripts" / "eval_extraction.py"
+
+# scripts/eval_extraction.py is local research tooling and is deliberately not
+# published (see .gitignore). This suite still runs in a dev checkout that has
+# it; on a fresh clone or in CI it skips rather than erroring at import.
+pytestmark = pytest.mark.skipif(
+    not _HARNESS.exists(),
+    reason="scripts/eval_extraction.py is local-only research tooling",
+)
+
+
 def _load_harness():
-    spec = importlib.util.spec_from_file_location(
-        "eval_extraction", _ROOT / "scripts" / "eval_extraction.py"
-    )
+    spec = importlib.util.spec_from_file_location("eval_extraction", _HARNESS)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
