@@ -212,10 +212,11 @@ def render_skeleton(
     """AST symbol graph — classes, functions, imports per file.
 
     `path_filter` (optional): case-insensitive substring matched against file
-    paths. When given, only matching files render and the token budget is
-    lifted — the injection block's skeleton section is the budget-capped VIEW;
-    this is the full-fidelity pull path for a specific file (down-sample at
-    read, never at store). Used by the `skeleton` MCP tool / /ck-skeleton.
+    paths. When given, only matching files render and both the token budget AND
+    the per-file member caps (methods/classes/functions/imports) are lifted —
+    the injection block's skeleton section is the budget-capped, cap-limited
+    VIEW; this is the full-fidelity pull path for a specific file (down-sample
+    at read, never at store). Used by the `skeleton` MCP tool / /ck-skeleton.
     """
     config = config or Config.load()
     db_path = _db_path(project_id, config)
@@ -230,7 +231,11 @@ def render_skeleton(
         if not nodes:
             return "No codebase skeleton yet. Skeleton is built by the PostToolUse hook after each Write/Edit."
 
+        from cognikernel.symbols.projection import Caps, DEFAULT_CAPS, compress_to_skeleton
+        from cognikernel.symbols.render import render_skeleton_section
+
         budget = config.skeleton_budget
+        caps = DEFAULT_CAPS
         if path_filter:
             needle = path_filter.lower().replace("\\", "/")
             keep = {n.path for n in nodes if needle in n.path.lower().replace("\\", "/")}
@@ -241,10 +246,9 @@ def render_skeleton(
             nodes = [n for n in nodes if n.path in keep]
             edges = [e for e in edges if e.from_path in keep or e.to_path in keep]
             budget = 1_000_000  # full fidelity for an explicit file query
+            caps = Caps.unlimited()
 
-        from cognikernel.symbols.projection import compress_to_skeleton
-        from cognikernel.symbols.render import render_skeleton_section
-        entries = compress_to_skeleton(nodes, edges, budget_tokens=budget)
+        entries = compress_to_skeleton(nodes, edges, budget_tokens=budget, caps=caps)
         return render_skeleton_section(entries) or "Skeleton is empty."
     except Exception as exc:
         return f"Error reading skeleton: {exc}"

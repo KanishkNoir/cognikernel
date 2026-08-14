@@ -152,7 +152,13 @@ def _render_import_hint(entry: "SkeletonEntry") -> str:
     if not public_names:
         return ""
 
-    return f"  Import: from {module} import {', '.join(public_names)}"
+    line = f"  Import: from {module} import {', '.join(public_names)}"
+    omitted = entry.classes_omitted + entry.functions_omitted
+    if omitted:
+        # This line is phrased as a recipe, not a listing — without a marker it
+        # asserts a public API that omits whatever the class/function caps cut.
+        line += f"  (+{omitted} more public symbol{'s' if omitted != 1 else ''} not shown)"
+    return line
 
 
 def _path_to_module(path: str) -> str:
@@ -166,6 +172,12 @@ def _path_to_module(path: str) -> str:
     if stem == "__init__":
         # Top-level __init__.py — no package above to name.
         return ""
+    if stem == "src/__init__":
+        # The src-layout root's own init — no package above. Checked before the
+        # generic collapse below so it can't collide with a real top-level
+        # module literally named `src.py` (which also ends up with parts ==
+        # ["src"] but must resolve to "src", not "").
+        return ""
     if stem.endswith("/__init__"):
         stem = stem[: -len("/__init__")]
         if not stem:
@@ -173,6 +185,16 @@ def _path_to_module(path: str) -> str:
     parts = [seg for seg in stem.split("/") if seg]
     if not parts:
         return ""
+    # PEP 517 src-layout: `src/` is a build-time container, never itself an
+    # importable package — `src/pkg/mod.py` installs as `pkg.mod`, not
+    # `src.pkg.mod`. Strip only a LEADING `src` segment (a real subpackage
+    # literally named `src` deeper in the tree, e.g. `pkg/src/mod.py`, is left
+    # alone). Deliberately narrower than extractor.py's `_SRC_HINTS` — `app`
+    # and `pkg` in that set are frequently the real, importable top-level
+    # package name (see the `app/core/security.py` -> `app.core.security`
+    # cases pinned in test_render_coverage.py), so only `src` is unambiguous.
+    if len(parts) > 1 and parts[0] == "src":
+        parts = parts[1:]
     # Reject parts that aren't valid Python identifiers (defensive — caller
     # should already have canonicalized paths but extraction noise could leak).
     if not all(_is_valid_identifier(p) for p in parts):

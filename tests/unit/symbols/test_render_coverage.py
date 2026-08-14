@@ -24,12 +24,16 @@ def _entry(
     imports=None,
     classes=None,
     functions=None,
+    classes_omitted: int = 0,
+    functions_omitted: int = 0,
 ) -> SkeletonEntry:
     return SkeletonEntry(
         path=path,
         imports=imports or [],
         classes=classes or [],
         functions=functions or [],
+        classes_omitted=classes_omitted,
+        functions_omitted=functions_omitted,
     )
 
 
@@ -152,6 +156,43 @@ class TestImportHints:
         out = render_skeleton_section([entry])
         assert "Import:" not in out
 
+    def test_truncated_file_marks_hint_as_partial(self) -> None:
+        """A file/class-cap cut some public symbols — the import line must say
+        so rather than presenting the survivors as the whole public API."""
+        entry = _entry(
+            path="app/core/security.py",
+            functions=[_fn("hash_password")],
+            functions_omitted=3,
+        )
+        out = render_skeleton_section([entry])
+        line = out.split("Import:")[1].split("\n")[0]
+        assert "hash_password" in line
+        assert "+3 more public symbols not shown" in line
+
+    def test_singular_omitted_count_is_grammatical(self) -> None:
+        entry = _entry(
+            path="app/core/security.py",
+            functions=[_fn("hash_password")],
+            functions_omitted=1,
+        )
+        out = render_skeleton_section([entry])
+        assert "+1 more public symbol not shown" in out
+
+    def test_untruncated_file_has_no_partial_marker(self) -> None:
+        entry = _entry(path="app/core/security.py", functions=[_fn("hash_password")])
+        out = render_skeleton_section([entry])
+        assert "not shown" not in out
+
+    def test_classes_and_functions_omitted_combine(self) -> None:
+        entry = _entry(
+            path="app/core/security.py",
+            functions=[_fn("hash_password")],
+            classes_omitted=2,
+            functions_omitted=1,
+        )
+        out = render_skeleton_section([entry])
+        assert "+3 more public symbols not shown" in out
+
 
 # ── _path_to_module helper ───────────────────────────────────────────────────
 
@@ -182,6 +223,40 @@ class TestPathToModule:
 
     def test_digit_leading_segment_returns_empty(self) -> None:
         assert _path_to_module("123/m.py") == ""
+
+    def test_src_layout_prefix_is_stripped(self) -> None:
+        """PEP 517 src-layout: `src/` is never itself an importable package —
+        `src/cognikernel/symbols/render.py` installs as `cognikernel.symbols.
+        render`, not `src.cognikernel...`. This project IS src-layout, so
+        before this fix CogniKernel injected a non-importable import statement
+        about its own source."""
+        assert _path_to_module("src/cognikernel/symbols/render.py") == \
+            "cognikernel.symbols.render"
+
+    def test_src_layout_init_collapses_to_package(self) -> None:
+        assert _path_to_module("src/pkg/__init__.py") == "pkg"
+
+    def test_bare_src_root_init_is_empty(self) -> None:
+        """`src/__init__.py` is the layout root's own init — no package above,
+        same as a bare top-level `__init__.py`."""
+        assert _path_to_module("src/__init__.py") == ""
+
+    def test_src_as_top_level_module_name_is_not_mangled(self) -> None:
+        """A real top-level module literally named `src.py` (not the src-layout
+        directory) must not be stripped to nothing."""
+        assert _path_to_module("src.py") == "src"
+
+    def test_nested_src_segment_is_not_stripped(self) -> None:
+        """Only a LEADING `src` is a layout container. A `src` directory deeper
+        in the tree (e.g. a real subpackage literally named `src`) is a normal
+        package segment and must be kept."""
+        assert _path_to_module("packages/foo/src/bar.py") == "packages.foo.src.bar"
+
+    def test_app_prefix_is_not_stripped(self) -> None:
+        """`app` (and the rest of extractor.py's _SRC_HINTS) is frequently the
+        real, importable top-level package name — see the other tests in this
+        class. Only `src` is unambiguous enough to strip."""
+        assert _path_to_module("app/core/security.py") == "app.core.security"
 
 
 # ── full B-2 + B-3 combined rendering ────────────────────────────────────────

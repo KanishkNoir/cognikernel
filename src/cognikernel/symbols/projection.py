@@ -13,6 +13,33 @@ _MAX_METHODS_PER_CLASS = 5
 _MAX_FUNCTIONS_PER_FILE = 10
 _MAX_IMPORTS_PER_FILE = 8
 
+
+@dataclass(frozen=True)
+class Caps:
+    """Per-file member caps. `unlimited()` is what the `skeleton` MCP tool needs:
+
+    that tool's docstring promises "the token budget is lifted... this is the
+    full-fidelity pull path" for an explicit single-file query, but the budget
+    was never what capped output — these constants, applied in `_build_entry`
+    before any budget logic, were. Passing `budget_tokens=1_000_000` alone (as
+    resources.py did) left a class with 18 methods returning 5 regardless, and
+    under strict-mode read denial the assistant is routed to exactly this tool
+    for "the full signatures" and cannot get them. Caps must be threaded
+    explicitly; there is no budget value that raises them.
+    """
+    classes: int = _MAX_CLASSES_PER_FILE
+    methods: int = _MAX_METHODS_PER_CLASS
+    functions: int = _MAX_FUNCTIONS_PER_FILE
+    imports: int = _MAX_IMPORTS_PER_FILE
+
+    @staticmethod
+    def unlimited() -> "Caps":
+        big = 1_000_000
+        return Caps(classes=big, methods=big, functions=big, imports=big)
+
+
+DEFAULT_CAPS = Caps()
+
 # Score component weights. These are meaningful only because centrality is
 # normalised to [0,1] against the graph max before being weighted — see
 # _file_score. symbol_density is an unweighted integer count (~1-26), so these
@@ -60,6 +87,13 @@ class SkeletonEntry:
     classes: list[SkeletonClass] = field(default_factory=list)
     functions: list[SkeletonMethod] = field(default_factory=list)
     token_estimate: int = 0
+    # Public classes/functions cut by caps.classes/caps.functions — i.e. ones
+    # that WOULD have appeared in render.py's `Import:` line had they not been
+    # capped. Computed once at build time; unlike per-class method residuals
+    # (not tracked — that's the separate, unimplemented §3.1 work) nothing
+    # downstream mutates the class/function list, so these can't go stale.
+    classes_omitted: int = 0
+    functions_omitted: int = 0
 
 
 def compress_to_skeleton(
@@ -67,11 +101,15 @@ def compress_to_skeleton(
     edges: list["SymbolEdge"],
     budget_tokens: int = _SKELETON_TOKEN_BUDGET,
     hot_paths: frozenset[str] | None = None,
+    caps: Caps = DEFAULT_CAPS,
 ) -> list[SkeletonEntry]:
     """Compress symbol graph into SkeletonEntry list fitting within budget_tokens.
 
     hot_paths: set of recently-active file paths that should be prioritised
                over lower-activity files when the budget forces drops.
+    caps: per-file member caps. Pass `Caps.unlimited()` for an explicit
+          single-file pull where every member should render regardless of
+          budget — see `Caps` docstring.
     """
     if not nodes and not edges:
         return []
@@ -105,7 +143,7 @@ def compress_to_skeleton(
         path_nodes = by_path.get(path, [])
         entry = _build_entry(
             path, path_nodes, by_from.get(path, []),
-            _MAX_METHODS_PER_CLASS,
+            caps.methods, caps=caps,
         )
         entries.append(entry)
 
@@ -180,6 +218,7 @@ def _build_entry(
     path_nodes: list["SymbolNode"],
     import_basenames: list[str],
     method_limit: int,
+    caps: Caps = DEFAULT_CAPS,
 ) -> SkeletonEntry:
     class_nodes = [n for n in path_nodes if n.node_type == "class"]
     method_nodes = [n for n in path_nodes if n.node_type == "method"]
@@ -193,11 +232,18 @@ def _build_entry(
         fields_count = len(node.fields.split(",")) if node and node.fields else 0
         return methods + fields_count
 
-    top_class_names = sorted(
+    ranked_class_names = sorted(
         (n.name for n in class_nodes),
         key=_class_score,
         reverse=True,
-    )[:_MAX_CLASSES_PER_FILE]
+    )
+    top_class_names = ranked_class_names[:caps.classes]
+    # Only PUBLIC cut classes count: a cut private class was never going to
+    # appear in the import hint even if kept, so it isn't part of the
+    # completeness claim being made.
+    classes_omitted = sum(
+        1 for nm in ranked_class_names[caps.classes:] if not nm.startswith("_")
+    )
 
     skeleton_classes: list[SkeletonClass] = []
     for name in top_class_names:
@@ -230,7 +276,11 @@ def _build_entry(
         is_public = 1 if not n.name.startswith("_") else 0
         return (-is_route, -is_public, n.name)
 
-    top_functions = sorted(func_nodes, key=_func_sort_key)[:_MAX_FUNCTIONS_PER_FILE]
+    ranked_funcs = sorted(func_nodes, key=_func_sort_key)
+    top_functions = ranked_funcs[:caps.functions]
+    functions_omitted = sum(
+        1 for f in ranked_funcs[caps.functions:] if not f.name.startswith("_")
+    )
     skeleton_funcs = [
         SkeletonMethod(name=f.name, signature=f.signature, return_type=f.return_type, route_info=f.fields)
         for f in top_functions
@@ -243,11 +293,13 @@ def _build_entry(
         if imp not in seen_imports:
             seen_imports.add(imp)
             deduped_imports.append(imp)
-    deduped_imports = deduped_imports[:_MAX_IMPORTS_PER_FILE]
+    deduped_imports = deduped_imports[:caps.imports]
 
     return SkeletonEntry(
         path=path,
         imports=deduped_imports,
         classes=skeleton_classes,
         functions=skeleton_funcs,
+        classes_omitted=classes_omitted,
+        functions_omitted=functions_omitted,
     )

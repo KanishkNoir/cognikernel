@@ -107,3 +107,49 @@ class TestCompressToSkeleton:
         nodes = [_node("src/m.py", "class", "Foo", fields="x:int")]
         entries = compress_to_skeleton(nodes, [])
         assert entries[0].token_estimate > 0
+
+
+class TestOmittedCounts:
+    """classes_omitted/functions_omitted feed render.py's honest '+N more
+    public symbols not shown' marker on the import hint — see #29. Must count
+    only PUBLIC symbols cut by the file-level class/function caps: a cut
+    private symbol was never part of the import line's completeness claim."""
+
+    def test_functions_beyond_cap_are_counted(self) -> None:
+        # 12 public top-level functions, cap is 10 -> 2 omitted.
+        nodes = [_node("src/m.py", "function", f"fn{i:02d}") for i in range(12)]
+        entries = compress_to_skeleton(nodes, [], budget_tokens=100_000)
+        assert entries[0].functions_omitted == 2
+
+    def test_classes_beyond_cap_are_counted(self) -> None:
+        # 7 classes, cap is 5 -> 2 omitted.
+        nodes = [_node("src/m.py", "class", f"C{i}") for i in range(7)]
+        entries = compress_to_skeleton(nodes, [], budget_tokens=100_000)
+        assert entries[0].classes_omitted == 2
+
+    def test_cut_private_functions_are_not_counted(self) -> None:
+        # 10 public (fills the cap exactly) + 3 private -> all 3 private ones
+        # are what gets cut, and none of them were ever going into the import
+        # hint, so the omitted count must be 0.
+        nodes = [_node("src/m.py", "function", f"fn{i:02d}") for i in range(10)]
+        nodes += [_node("src/m.py", "function", f"_priv{i}") for i in range(3)]
+        entries = compress_to_skeleton(nodes, [], budget_tokens=100_000)
+        assert entries[0].functions_omitted == 0
+
+    def test_nothing_cut_means_zero_omitted(self) -> None:
+        nodes = [_node("src/m.py", "function", "fn"),
+                 _node("src/m.py", "class", "C")]
+        entries = compress_to_skeleton(nodes, [], budget_tokens=100_000)
+        assert entries[0].functions_omitted == 0
+        assert entries[0].classes_omitted == 0
+
+    def test_unlimited_caps_omit_nothing(self) -> None:
+        from cognikernel.symbols.projection import Caps
+        nodes = [_node("src/m.py", "function", f"fn{i:02d}") for i in range(30)]
+        nodes += [_node("src/m.py", "class", f"C{i}") for i in range(10)]
+        entries = compress_to_skeleton(
+            nodes, [], budget_tokens=100_000, caps=Caps.unlimited())
+        assert entries[0].functions_omitted == 0
+        assert entries[0].classes_omitted == 0
+        assert len(entries[0].functions) == 30
+        assert len(entries[0].classes) == 10
