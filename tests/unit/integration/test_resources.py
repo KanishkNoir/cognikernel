@@ -78,6 +78,63 @@ def test_list_projects_empty_dir_returns_empty_list(tmp_path: Path, monkeypatch)
     assert result == []
 
 
+def test_list_projects_scopes_to_current_path_when_resolvable(
+    project, tmp_path: Path,
+) -> None:
+    """An agent asking 'what is my project_id' must not receive every other
+    project on the machine — found live: a real benchmark run got a 900+ line
+    dump of unrelated projects' names, paths, and event counts back from a
+    single resource read intended to resolve one project's own id."""
+    proj, pid, db, cfg = project
+
+    other = tmp_path / "otherproject"
+    other.mkdir()
+    cli._cmd_init(argparse.Namespace(project_path=str(other)))
+
+    result = json.loads(list_projects(cfg, current_path=str(proj)))
+    ids = [p["id"] for p in result]
+    assert ids == [pid], (
+        f"expected only the current project, got every known project: {ids}"
+    )
+
+
+def test_list_projects_falls_back_to_full_list_when_path_unresolvable(
+    project, tmp_path: Path,
+) -> None:
+    """A generic MCP client that doesn't know its own project path (or one
+    whose path was never registered via `init`) must still get the full
+    discovery list — the scoping is an optimisation for the known case, not a
+    hard restriction that breaks the documented multi-client discovery flow."""
+    proj, pid, db, cfg = project
+
+    other = tmp_path / "otherproject"
+    other.mkdir()
+    cli._cmd_init(argparse.Namespace(project_path=str(other)))
+    from cognikernel.storage.connection import hash_project_path
+    other_pid = hash_project_path(str(other))
+
+    result = json.loads(list_projects(cfg, current_path=str(tmp_path / "nowhere")))
+    ids = {p["id"] for p in result}
+    assert ids == {pid, other_pid}
+
+
+def test_list_projects_no_current_path_is_full_list(project, tmp_path: Path) -> None:
+    """Backward compatible: omitting current_path entirely keeps prior
+    behaviour — any caller that doesn't pass it (direct callers, scripts,
+    a future non-MCP-server use) is unaffected by the new scoping."""
+    proj, pid, db, cfg = project
+
+    other = tmp_path / "otherproject"
+    other.mkdir()
+    cli._cmd_init(argparse.Namespace(project_path=str(other)))
+    from cognikernel.storage.connection import hash_project_path
+    other_pid = hash_project_path(str(other))
+
+    result = json.loads(list_projects(cfg))
+    ids = {p["id"] for p in result}
+    assert ids == {pid, other_pid}
+
+
 # ── constraints renderer ──────────────────────────────────────────────────────
 
 def test_render_constraints_returns_not_found_for_missing_project(tmp_path, monkeypatch) -> None:

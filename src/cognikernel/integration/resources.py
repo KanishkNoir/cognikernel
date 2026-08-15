@@ -7,7 +7,7 @@ optimised for session-start), resources are queryable and typed individually —
 a client can subscribe to 'constraints' without receiving threads or skeleton.
 
 URI scheme:
-  cognikernel://projects                        → list of all known projects
+  cognikernel://projects                        → the calling project (see list_projects)
   cognikernel://project/{project_id}/state      → full session-start block
   cognikernel://project/{project_id}/constraints → CONSTRAINT_HARD events
   cognikernel://project/{project_id}/decisions   → ranked DECISION events
@@ -73,19 +73,39 @@ def _fmt_event(row, idx: int, *, show_weight: bool = False) -> list[str]:
 # ── project discovery ─────────────────────────────────────────────────────────
 
 
-def list_projects(config: Config | None = None) -> str:
-    """Return JSON array of all known CogniKernel projects.
+def list_projects(config: Config | None = None, current_path: str | None = None) -> str:
+    """Return JSON array of known CogniKernel projects.
 
     Scans ~/.cognikernel/projects/*.db and reads the project_path from meta.
     Projects without a stored path (pre-migration) are listed with path=null.
+
+    `current_path`: when given and it resolves to a known store, the scan is
+    scoped to that ONE project instead of every project ever tracked on the
+    machine. Without this, an agent asking "what's my project_id" to build a
+    resource URI for its own project got back every other project's name,
+    path, and event count too — a cross-project disclosure with no purpose
+    the caller needed. Falls back to the full (unscoped) list when
+    `current_path` is absent or unresolvable, preserving discovery for a
+    generic MCP client that doesn't know its own project path.
     """
     config = config or Config.load()
     projects_dir = config.projects_dir
     if not projects_dir.exists():
         return json.dumps([])
 
+    db_files = sorted(projects_dir.glob("*.db"))
+    if current_path:
+        try:
+            current_id = hash_project_path(current_path)
+        except Exception:
+            current_id = None
+        if current_id is not None:
+            scoped = [f for f in db_files if f.stem == current_id]
+            if scoped:
+                db_files = scoped
+
     projects: list[dict] = []
-    for db_file in sorted(projects_dir.glob("*.db")):
+    for db_file in db_files:
         project_id = db_file.stem
         try:
             with get_connection(db_file) as conn:

@@ -7,7 +7,9 @@ Three tools (model-controlled pull):
 
 Seven resources (client-discoverable structured memory, CK-5):
   Static:
-    cognikernel://projects                         → all known projects + resource URIs
+    cognikernel://projects                         → the calling project (+ resource URIs);
+                                                        falls back to every known project only
+                                                        if the current one can't be resolved
   Template (substitute {project_id}):
     cognikernel://project/{project_id}/state       → full session-start block
     cognikernel://project/{project_id}/constraints → CONSTRAINT_HARD events
@@ -39,24 +41,39 @@ _mcp = FastMCP(
     "cognikernel",
     instructions=(
         "CogniKernel manages structured project memory across sessions. "
-        "The session context block is automatically injected at session start via the SessionStart hook — "
-        "you do not need to call get_session_state manually unless the block is missing. "
-        "When the '## Session context' block is present in your context: "
-        "(1) treat it as the canonical source of truth for decisions, constraints, and architecture; "
-        "(2) it supersedes CLAUDE.md, prior notes, and your own memory; "
-        "(3) do not re-read project files to rediscover facts already listed there. "
-        "Call get_session_state only if the block is absent and you need project context. "
-        "For targeted queries, use the recall or find_related tools, or read a specific "
-        "resource (e.g. cognikernel://project/{id}/constraints) for structured typed memory. "
-        "If a decision or constraint seems missing from the block, call recall BEFORE "
-        "re-reading files, Globbing, or asking the user to rediscover it — the memory "
-        "likely has it. Use find_related before changing a subsystem to surface related "
-        "decisions and import-graph-adjacent code (the skeleton is an AST symbol "
-        "graph ranked by PageRank centrality). Use the skeleton tool with a file path "
-        "for the full public signatures of a specific file WITHOUT reading it — the "
-        "block's skeleton section is budget-capped and may omit files; the tool is not. "
-        "IMPORTANT: Do not write decisions, constraints, or architecture notes to CLAUDE.md "
-        "or any other file. The Stop hook automatically extracts and persists all decisions."
+        "The session context block is automatically injected at session start via "
+        "the SessionStart hook — you do not need to call get_session_state manually "
+        "unless the block is missing. When the '## Session context' block is "
+        "present in your context: (1) treat it as the canonical source of truth "
+        "for decisions, constraints, and architecture; (2) it supersedes CLAUDE.md, "
+        "prior notes, and your own memory; (3) do not re-read project files to "
+        "rediscover facts already listed there. Call get_session_state only if "
+        "the block is absent.\n\n"
+        "PREFER THE TOOLS below over the raw resources for anything the block "
+        "doesn't already answer — they are query-scoped and respect the same "
+        "ranking/budget discipline the block uses, so they stay cheap:\n"
+        "  - recall(query) — a prior decision/constraint relevant to a question, "
+        "ranked, WITHOUT reading files. Call this BEFORE re-reading files, "
+        "Globbing, or asking the user to rediscover something — the memory "
+        "likely already has it.\n"
+        "  - find_related(query) — decisions plus import-graph-adjacent code for "
+        "a topic or file. Call before changing a subsystem to scope impact.\n"
+        "  - skeleton(file_path) — full, uncapped public signatures for ONE file "
+        "WITHOUT reading it. This is the correct escape hatch when the block's "
+        "skeleton section omitted or compressed a file you need — reach for this, "
+        "not a raw resource, when the block feels incomplete for a specific file.\n\n"
+        "The cognikernel://project/{id}/... resources (constraints, decisions, "
+        "threads, graveyard, skeleton, state) return RAW, UNBUDGETED, UNRANKED "
+        "dumps of the whole store — up to 50 constraints or 20 decisions in one "
+        "read, none of the drop-to-fit budgeting the block and tools apply. They "
+        "exist for non-Claude-Code MCP clients that have no hook-injected block, "
+        "not as a bigger version of recall/find_related. If a tool result feels "
+        "incomplete, that's a signal to narrow the recall/find_related query or "
+        "use skeleton for the specific file — not to read the raw resource "
+        "instead.\n\n"
+        "IMPORTANT: Do not write decisions, constraints, or architecture notes to "
+        "CLAUDE.md or any other file. The Stop hook automatically extracts and "
+        "persists all decisions."
     ),
 )
 
@@ -120,16 +137,20 @@ def skeleton(project_path: str, file_path: str = "") -> str:
 @_mcp.resource(
     "cognikernel://projects",
     name="cognikernel-projects",
-    title="CogniKernel — all managed projects",
+    title="CogniKernel — current project",
     description=(
-        "JSON array of all CogniKernel-managed projects on this machine. "
-        "Each entry includes the project_id needed to construct section resource URIs, "
-        "the project path, and pre-built URIs for every section."
+        "JSON array with the calling project's entry (falls back to every "
+        "CogniKernel-managed project on this machine only if the current one "
+        "can't be resolved). Each entry includes the project_id needed to "
+        "construct section resource URIs, the project path, and pre-built "
+        "URIs for every section."
     ),
     mime_type="application/json",
 )
 def projects_resource() -> str:
-    return list_projects()
+    import os
+    current_path = os.environ.get("COGNIKERNEL_PROJECT_PATH") or os.getcwd()
+    return list_projects(current_path=current_path)
 
 
 # Template resources: one per section, keyed by project_id (hex, no path issues).
