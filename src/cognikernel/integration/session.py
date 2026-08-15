@@ -670,7 +670,7 @@ def render_state(
     project_name = Path(project_path).resolve().name
     hot_files = _compute_hot_files(events)
     selected = greedy_fill(events, config.token_budget)
-    hot_paths = frozenset(hf[0] for hf in hot_files)
+    hot_paths = _compute_hot_weights(events)
     skeleton = compress_to_skeleton(
         nodes, edges,
         budget_tokens=config.skeleton_budget,
@@ -949,6 +949,67 @@ def _compute_hot_files(
          if d["mentions"] >= min_mentions],
         key=lambda x: -x[1],
     )
+
+
+def _compute_hot_weights(events: list, alpha: float = 0.15) -> dict[str, float]:
+    """Per-file hotness for `compress_to_skeleton`'s graded hot bonus, in (0, 1].
+
+    `_compute_hot_files` above answers a different question (what to show in
+    the "Most active files" display list) and keeps its own hard
+    `min_mentions` cliff and flat weighting for that purpose unchanged. This
+    function answers "how much should this file's ranking score be boosted,
+    relative to every other candidate" — a continuous signal, not a gate.
+
+    A flat set-membership bonus (the previous scoring input) saturates: once
+    several files clear a threshold they all get the identical boost,
+    discriminating nothing between them, and files with only one recent
+    mention this session were invisible even when that mention is the most
+    relevant thing in the project right now (measured directly: a file
+    genuinely edited in the newest session, cited once, lost its rank-order
+    to a file edited two sessions earlier and cited twice, because the old
+    scheme could see the count but not the recency).
+
+    Recency is measured in session ordinals, not wall-clock time — sessions
+    are minutes apart in a testing burst and days apart in real use, and a
+    wall-clock half-life tuned for one regime misbehaves in the other.
+    Reuses the same hyperbolic recency/logarithmic repetition primitives
+    already used for event-weight ranking (compression/weights.py) rather
+    than inventing a second decay law.
+    """
+    from collections import defaultdict
+
+    from cognikernel.compression.recency import recency_factor
+    from cognikernel.compression.weights import repetition_factor
+    from cognikernel.utils.paths import is_bare_basename
+
+    status_events = [e for e in events if e.event_type == "COMPONENT_STATUS"]
+    if not status_events:
+        return {}
+
+    # Session ordinals by first appearance, chronological — same convention as
+    # storage/projections.py::_apply_composite_weights, computed independently
+    # here since that ordinal is never persisted onto the Event objects
+    # themselves (last_mentioned_session defaults to 0 off the projection path
+    # this function is called from — confirmed empirically, not assumed).
+    first_seen: dict[str, int] = {}
+    for e in status_events:
+        prior = first_seen.get(e.session_id)
+        if prior is None or e.created_at < prior:
+            first_seen[e.session_id] = e.created_at
+    session_order = sorted(first_seen, key=lambda sid: first_seen[sid])
+    session_ord = {sid: i + 1 for i, sid in enumerate(session_order)}
+    current_session = len(session_ord)
+
+    raw: dict[str, float] = defaultdict(float)
+    for e in status_events:
+        path = e.payload.get("path", "")
+        if not path or is_bare_basename(path):
+            continue
+        sessions_ago = max(0, current_session - session_ord.get(e.session_id, current_session))
+        raw[path] += repetition_factor(e.mention_count or 1) * recency_factor(sessions_ago, alpha=alpha)
+
+    peak = max(raw.values(), default=0.0) or 1.0
+    return {path: v / peak for path, v in raw.items()}
 
 
 def build_grounding_context(conn, project_id: str, project_path):

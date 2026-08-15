@@ -161,6 +161,39 @@ class TestObjective:
             f"recently-touched file did not rank first: {paths}"
         )
 
+    def test_graded_hot_weight_flips_ranking_that_flat_binary_gets_wrong(self) -> None:
+        """Reproduces the real failure the graded hot bonus fixes (found by
+        diagnosing an actual store): a file edited in the most recent session
+        but mentioned only once must not lose out to a file with more total
+        mentions but nothing recent. A flat binary hot_paths set can only
+        express "cleared the mention threshold or not", so the older,
+        more-mentioned file wins; a graded weight (as
+        session._compute_hot_weights produces) can express "less mentioned but
+        more recent" and gets it right."""
+        from cognikernel.symbols.projection import compress_to_skeleton
+
+        nodes = _nodes("src/old_favorite.py", n_classes=1, n_methods=2)
+        nodes += _nodes("src/just_edited.py", n_classes=1, n_methods=2)
+
+        # Old scheme: only the multiply-mentioned file clears the min_mentions
+        # cliff upstream, so it alone lands in the hot set.
+        entries_flat = compress_to_skeleton(
+            nodes, [], budget_tokens=1,
+            hot_paths=frozenset({"src/old_favorite.py"}),
+        )
+        assert [e.path for e in entries_flat] == ["src/old_favorite.py"], (
+            "fixture drifted — the flat scheme no longer drops the recently-"
+            "edited file, so this test no longer demonstrates the bug it "
+            "exists to catch"
+        )
+
+        # New scheme: recency outweighs the older file's extra mentions.
+        entries_graded = compress_to_skeleton(
+            nodes, [], budget_tokens=1,
+            hot_paths={"src/old_favorite.py": 0.4, "src/just_edited.py": 1.0},
+        )
+        assert [e.path for e in entries_graded] == ["src/just_edited.py"]
+
     def test_tests_are_deprioritised_against_source(self) -> None:
         """Test files inflate symbol counts (test classes + test methods) and
         outranked src/ in the measured baseline."""

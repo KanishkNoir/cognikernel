@@ -1,6 +1,7 @@
 """Compress symbol graph nodes + edges into token-efficient SkeletonEntry objects."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -100,13 +101,20 @@ def compress_to_skeleton(
     nodes: list["SymbolNode"],
     edges: list["SymbolEdge"],
     budget_tokens: int = _SKELETON_TOKEN_BUDGET,
-    hot_paths: frozenset[str] | None = None,
+    hot_paths: Mapping[str, float] | frozenset[str] | None = None,
     caps: Caps = DEFAULT_CAPS,
 ) -> list[SkeletonEntry]:
     """Compress symbol graph into SkeletonEntry list fitting within budget_tokens.
 
-    hot_paths: set of recently-active file paths that should be prioritised
-               over lower-activity files when the budget forces drops.
+    hot_paths: either a path -> weight mapping in (0, 1] (graded — the caller
+               already normalised recency/repetition into a continuous score,
+               see session._compute_hot_weights) or a plain set of paths
+               (legacy binary signal — membership is treated as weight 1.0).
+               A flat set-membership bonus saturates once many files clear
+               whatever threshold produced the set: on a real store this put
+               30 of 40 candidate files at the identical bonus, discriminating
+               nothing. The graded form is what lets recency actually order
+               files instead of only gating them in or out.
     caps: per-file member caps. Pass `Caps.unlimited()` for an explicit
           single-file pull where every member should render regardless of
           budget — see `Caps` docstring.
@@ -114,7 +122,12 @@ def compress_to_skeleton(
     if not nodes and not edges:
         return []
 
-    _hot = hot_paths or frozenset()
+    if hot_paths is None:
+        _hot: Mapping[str, float] = {}
+    elif isinstance(hot_paths, Mapping):
+        _hot = hot_paths
+    else:
+        _hot = {p: 1.0 for p in hot_paths}
 
     # Build path → nodes lookup
     by_path: dict[str, list["SymbolNode"]] = {}
@@ -175,7 +188,7 @@ def compress_to_skeleton(
     def _file_score(e: SkeletonEntry) -> float:
         symbol_density = len(e.classes) * 3 + len(e.functions) + 1
         centrality_bonus = (centrality.get(e.path, 0.0) / cmax) * _CENTRALITY_WEIGHT
-        hot_bonus = _HOT_WEIGHT if e.path in _hot else 0
+        hot_bonus = _HOT_WEIGHT * _hot.get(e.path, 0.0)
         score = symbol_density + centrality_bonus + hot_bonus
         # Test and tooling files inflate symbol_density by construction — a test
         # class per scenario, a test method per case — so they outranked real
