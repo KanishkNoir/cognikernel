@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS symbol_files (
                          CHECK (freshness IN ('fresh', 'stale')),
     refreshed_at         INTEGER NOT NULL DEFAULT 0,   -- epoch ms of last symbol re-scan
     refreshed_in_session TEXT    NOT NULL DEFAULT '',  -- session that triggered the last refresh
-    last_action          TEXT    NOT NULL DEFAULT '',  -- 'Write' | 'Edit' | 'scan' — sources B-2 header
+    last_action          TEXT    NOT NULL DEFAULT '',  -- 'Write' | 'Edit' | 'MultiEdit' | 'scan' — sources B-2 header
     content_sha256       TEXT    NOT NULL DEFAULT '',  -- file content hash at refresh time
     scan_status          TEXT    NOT NULL DEFAULT 'pending'
                          CHECK (scan_status IN ('scanned', 'parse_error', 'ignored', 'pending')),

@@ -206,3 +206,86 @@ def test_hook_pretool_write_surfaces_prohibition_e2e(tmp_path, monkeypatch) -> N
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"  # never blocks a Write
     assert "Redis" in hso.get("additionalContext", "")
+
+
+def test_hook_posttool_write_records_write_session_cache_e2e(
+    tmp_path, monkeypatch,
+) -> None:
+    """#31 Commit A: a real PostToolUse:Write populates write_session_cache
+    (collection only — nothing reads this table for ranking yet)."""
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cli._cmd_init(argparse.Namespace(project_path=str(proj)))
+
+    target = proj / "gateway.py"
+    target.write_text("def go():\n    return 1\n", encoding="utf-8")
+
+    env = {**os.environ, "COGNIKERNEL_DIR": str(tmp_path / "data")}
+    payload = json.dumps({
+        "hook_event_name": "PostToolUse", "tool_name": "Write",
+        "tool_input": {"file_path": str(target)},
+        "session_id": "sess-write", "cwd": str(proj),
+    })
+    r = subprocess.run(
+        [sys.executable, "-m", "cognikernel", "hook-posttool"],
+        input=payload, text=True, capture_output=True, timeout=60, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+
+    from cognikernel.config import Config
+    from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+    from cognikernel.storage.write_cache import get_write
+
+    pid = hash_project_path(str(proj))
+    db = get_db_path(Config.load(project_path=str(proj)), pid)
+    with get_connection(db) as conn:
+        entry = get_write(conn, pid, "sess-write", "gateway.py")
+    assert entry is not None
+    assert entry.last_write_action == "Write"
+    assert entry.write_count == 1
+
+
+def test_hook_posttool_multiedit_updates_symbol_graph_and_write_cache_e2e(
+    tmp_path, monkeypatch,
+) -> None:
+    """MultiEdit was previously invisible to PostToolUse entirely (the tool_name
+    gate excluded it) — the symbol graph never refreshed and no write signal was
+    recorded. Both must now fire, same as Write/Edit."""
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cli._cmd_init(argparse.Namespace(project_path=str(proj)))
+
+    target = proj / "api.py"
+    target.write_text("def handler():\n    return 1\n", encoding="utf-8")
+
+    env = {**os.environ, "COGNIKERNEL_DIR": str(tmp_path / "data")}
+    payload = json.dumps({
+        "hook_event_name": "PostToolUse", "tool_name": "MultiEdit",
+        "tool_input": {"file_path": str(target), "edits": [
+            {"old_string": "return 1", "new_string": "return 2"},
+        ]},
+        "session_id": "sess-multiedit", "cwd": str(proj),
+    })
+    r = subprocess.run(
+        [sys.executable, "-m", "cognikernel", "hook-posttool"],
+        input=payload, text=True, capture_output=True, timeout=60, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+
+    from cognikernel.config import Config
+    from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+    from cognikernel.storage.write_cache import get_write
+
+    pid = hash_project_path(str(proj))
+    db = get_db_path(Config.load(project_path=str(proj)), pid)
+    with get_connection(db) as conn:
+        entry = get_write(conn, pid, "sess-multiedit", "api.py")
+        symbol_row = conn.execute(
+            "SELECT scan_status FROM symbol_files WHERE project_id=? AND path=?",
+            (pid, "api.py"),
+        ).fetchone()
+    assert entry is not None
+    assert entry.last_write_action == "MultiEdit"
+    assert symbol_row is not None  # symbol graph was refreshed for this file

@@ -37,7 +37,7 @@ def test_init_writes_claude_settings_with_posttool_read_hook(
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
     matchers = {entry["matcher"] for entry in settings["hooks"]["PostToolUse"]}
 
-    assert matchers == {"Write", "Edit", "Read", "Grep"}
+    assert matchers == {"Write", "Edit", "MultiEdit", "Read", "Grep"}
     # CK-6a: path-portable `python -m cognikernel hook-posttool[-read]` (no abs script path).
     for entry in settings["hooks"]["PostToolUse"]:
         cmd = entry["hooks"][0]["command"]

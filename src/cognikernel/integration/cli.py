@@ -746,6 +746,12 @@ def _cmd_init(args: argparse.Namespace) -> None:
                 ],
             },
             {
+                "matcher": "MultiEdit",
+                "hooks": [
+                    {"type": "command", "command": _hook_cmd("hook-posttool")}
+                ],
+            },
+            {
                 "matcher": "Read",
                 "hooks": [
                     {"type": "command", "command": _hook_cmd("hook-posttool-read")}

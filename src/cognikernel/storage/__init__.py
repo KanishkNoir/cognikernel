@@ -73,6 +73,13 @@ from cognikernel.storage.symbol_files import (
     most_recent_refresh,
     upsert as upsert_symbol_file,
 )
+from cognikernel.storage.write_cache import (
+    WriteCacheEntry,
+    clear_session as clear_write_cache_session,
+    get_write,
+    record_write,
+    was_written_in_session,
+)
 
 __all__ = [
     # connection
@@ -126,6 +133,12 @@ __all__ = [
     "was_read_in_session",
     "cleanup_old_read_cache",
     "clear_read_cache_session",
+    # write_cache (#31 Commit A)
+    "WriteCacheEntry",
+    "record_write",
+    "get_write",
+    "was_written_in_session",
+    "clear_write_cache_session",
     # symbol_files (C0)
     "SymbolFile",
     "CoverageStats",

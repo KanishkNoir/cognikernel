@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 VALID_FRESHNESS = frozenset({"fresh", "stale"})
 VALID_SCAN_STATUS = frozenset({"scanned", "parse_error", "ignored", "pending"})
-VALID_ACTIONS = frozenset({"Write", "Edit", "scan", ""})
+VALID_ACTIONS = frozenset({"Write", "Edit", "MultiEdit", "scan", ""})
 
 
 @dataclass(frozen=True)

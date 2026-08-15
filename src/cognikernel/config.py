@@ -8,7 +8,7 @@ from pathlib import Path
 
 _log = logging.getLogger("cognikernel.config")
 
-EXPECTED_SCHEMA_VERSION: int = 19
+EXPECTED_SCHEMA_VERSION: int = 20
 EXPECTED_PROJECTION_VERSION: int = 1
 
 VALID_HOOK_POLICIES = frozenset({"advisory", "strict"})

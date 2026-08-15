@@ -496,13 +496,13 @@ def _pretool_grep(payload: dict) -> None:
         _pretool("allow")
 
 
-# ── PostToolUse (Write/Edit → symbol graph) ───────────────────────────────────
+# ── PostToolUse (Write/Edit/MultiEdit → symbol graph + write_session_cache) ───
 
 
 def posttool_main() -> None:
     payload = _read_payload(strip_bom=True)
     tool_name = payload.get("tool_name", "")
-    if tool_name not in ("Write", "Edit"):
+    if tool_name not in ("Write", "Edit", "MultiEdit"):
         return
     tool_input = payload.get("tool_input", {})
     file_path = tool_input.get("file_path", "")
@@ -539,6 +539,9 @@ def posttool_main() -> None:
                 session_id=session_id,
                 last_action=tool_name,
             )
+            if session_id:
+                from cognikernel.storage import write_cache as wc
+                wc.record_write(conn, project_id, session_id, rel_path, action=tool_name)
             if config.grep_cache_enabled:
                 from cognikernel.storage.grep_cache import invalidate_project_cache
                 invalidate_project_cache(conn, project_id, changed_path=rel_path)
