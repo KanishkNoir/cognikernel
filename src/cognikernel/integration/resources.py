@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 
 from cognikernel.config import Config
-from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
 from cognikernel.storage.migrations import run_migrations
 
 _NOT_FOUND = "No CogniKernel data for this project. Run `cognikernel init <project_path>`."
@@ -87,6 +87,13 @@ def list_projects(config: Config | None = None, current_path: str | None = None)
     the caller needed. Falls back to the full (unscoped) list when
     `current_path` is absent or unresolvable, preserving discovery for a
     generic MCP client that doesn't know its own project path.
+
+    Resolution goes through `resolve_project_id` (the same function every
+    other project-id call site uses — init, hooks, CLI, the other MCP tools),
+    not a bare `hash_project_path`, so a project using the `project_identity`
+    override or accessed via a WSL/Windows path alias still scopes correctly
+    instead of silently falling through to the full list — a real gap in an
+    earlier version of this scoping, caught by review before it shipped.
     """
     config = config or Config.load()
     projects_dir = config.projects_dir
@@ -96,7 +103,8 @@ def list_projects(config: Config | None = None, current_path: str | None = None)
     db_files = sorted(projects_dir.glob("*.db"))
     if current_path:
         try:
-            current_id = hash_project_path(current_path)
+            scoped_config = Config.load(project_path=current_path)
+            current_id = resolve_project_id(current_path, scoped_config)
         except Exception:
             current_id = None
         if current_id is not None:

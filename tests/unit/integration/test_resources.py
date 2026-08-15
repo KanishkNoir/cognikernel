@@ -98,6 +98,43 @@ def test_list_projects_scopes_to_current_path_when_resolvable(
     )
 
 
+def test_list_projects_scopes_correctly_with_project_identity_override(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Caught by review before it shipped: scoping via a bare
+    hash_project_path(current_path) misses the project_identity escape hatch
+    (.cognikernel/config.toml, read by resolve_project_id — the same
+    function init/hooks/CLI/every other MCP tool uses to compute a project's
+    DB id) and silently falls through to the full unscoped list for exactly
+    the multi-checkout users the README's Cross-platform section targets."""
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+    proj = tmp_path / "identityproject"
+    (proj / ".cognikernel").mkdir(parents=True)
+    (proj / ".cognikernel" / "config.toml").write_text(
+        'project_identity = "shared-identity"\n', encoding="utf-8",
+    )
+    cli._cmd_init(argparse.Namespace(project_path=str(proj)))
+
+    from cognikernel.config import Config
+    from cognikernel.storage.connection import hash_project_identity, resolve_project_id
+    cfg = Config.load(project_path=str(proj))
+    identity_id = hash_project_identity("shared-identity")
+    # init must have actually stored the DB under the identity id, or this
+    # test would pass for the wrong reason.
+    assert resolve_project_id(str(proj), cfg) == identity_id
+    assert (cfg.projects_dir / f"{identity_id}.db").exists()
+
+    other = tmp_path / "otherproject"
+    other.mkdir()
+    cli._cmd_init(argparse.Namespace(project_path=str(other)))
+
+    result = json.loads(list_projects(cfg, current_path=str(proj)))
+    ids = [p["id"] for p in result]
+    assert ids == [identity_id], (
+        f"expected only the identity-scoped project, got: {ids}"
+    )
+
+
 def test_list_projects_falls_back_to_full_list_when_path_unresolvable(
     project, tmp_path: Path,
 ) -> None:
