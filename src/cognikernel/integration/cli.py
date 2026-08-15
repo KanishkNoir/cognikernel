@@ -935,7 +935,7 @@ or any file.
     print(f"Initialised project {project_id}")
     print(f"  path: {project_path}")
     print(f"  wrote: .claude/settings.json  (hooks: SessionStart/Stop/UserPromptSubmit/SubagentStop, "
-          f"PreTool [Read/Write/Edit/MultiEdit], PostTool [Write/Edit/Read/Grep])")
+          f"PreTool [Read/Write/Edit/MultiEdit], PostTool [Write/Edit/MultiEdit/Read/Grep])")
     print(f"  wrote: .mcp.json              (cognikernel MCP server)")
     print(f"  wrote: .codex/config.toml     (Codex MCP server — cross-platform)")
     print(f"  wrote: AGENTS.md              (Codex memory instruction)")

@@ -7,7 +7,89 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [0.1.1] — unreleased
+## [0.1.2] — unreleased
+
+Four fixes to how CogniKernel decides which files belong in your project
+skeleton (the summary Claude sees instead of reading every file), one fix
+to a tool that was silently missing an entire category of edits, and one
+promise the `skeleton` tool made that it wasn't actually keeping.
+
+### Fixed
+
+- **Large projects got worse file rankings than small ones, for no reason
+  related to the code itself.** A scoring bug meant a file's "how central
+  is this file to the rest of the codebase" score counted for a lot on a
+  small project and almost nothing on a large one — so the same file could
+  rank very differently depending only on how many files were around it,
+  not on anything about the file. This is now scale-independent: a file's
+  importance is measured the same way regardless of project size.
+
+- **CogniKernel was making files worse before it removed them.** When a
+  project had too many files to fit in the budget, it used to first strip
+  detail (methods, signatures) from *every* file, and only then start
+  removing whole files. That meant you'd sometimes get thin, stripped-down
+  summaries of files you'd never touch, while a file you actually needed
+  got cut anyway. It now drops the least useful whole files first, and only
+  trims detail as a last resort if one remaining file still doesn't fit.
+
+- **Test files were pushing real source code out of the picture.** Test
+  files naturally contain lots of small functions (one per test case), which
+  made them look "important" by the old scoring and let them outrank the
+  actual application code — in this project's own skeleton, a test file
+  ranked *above every real source file*. Test and tooling files are now
+  deliberately weighted lower (not hidden — you still work on tests), so
+  real source code wins the limited space by default.
+
+- **A "this file was recently worked on" bonus couldn't tell files apart.**
+  Any file mentioned a couple of times got the exact same boost, whether
+  that activity was from an hour ago or several sessions back — and a file
+  touched only once, even in the session that just ended, got no boost at
+  all. In a real, measured case this caused a file someone had *just
+  edited* to be dropped from the skeleton in favor of an older file that
+  happened to be mentioned more times, further in the past. The boost is
+  now a sliding scale that weighs both how recently and how often a file
+  came up, so a just-edited file reliably outranks a stale one it previously
+  lost to.
+
+- **Editing files with `MultiEdit` didn't update CogniKernel's understanding
+  of them at all.** `MultiEdit` — the tool Claude Code uses for most
+  multi-part edits — was never wired up to refresh a file's entry after a
+  change, so its skeleton listing could silently go stale the moment you
+  used it. This is now treated exactly like a normal edit.
+
+- **The `skeleton` tool's "you'll get the full picture" promise wasn't
+  fully true.** This tool exists so you can ask for one file's complete,
+  unabridged details — notably, it's what CogniKernel itself tells you to
+  use after declining to let you re-read a file it's already summarized.
+  But a separate internal limit meant a class with, say, 18 methods still
+  only showed 5 of them, even through this "full detail" path. It now
+  genuinely returns everything for that file.
+
+- **Trimmed-down file listings didn't say anything was missing.** If a file
+  had more methods or functions than fit in the summary, the extra ones were
+  quietly dropped with no indication anything had been cut — it just looked
+  complete. Listings now say so explicitly, e.g. `(+3 more public symbols
+  not shown)`, so you know to look closer instead of assuming you've seen
+  everything.
+
+### Added
+
+- **The groundwork for smarter "recently active" tracking.** CogniKernel now
+  records every real file edit per work session in its own dedicated table.
+  Nothing uses this data yet in this release — it's being collected so a
+  future release can rank files by genuine edit activity instead of the
+  current mention-based heuristic.
+
+### Notes
+
+- Schema migrates automatically on first open (v19 → v20). Existing stores
+  are not rewritten.
+- Adaptive per-project token budgets remain designed but not shipped in this
+  release.
+
+---
+
+## [0.1.1] — 2026-08
 
 ### Fixed
 
