@@ -439,46 +439,84 @@ class TestRenderStateThreadSelection:
         # event as budget-exempt mandatory, threads included. When that zone
         # overflows, _compress_mandatory drops WHOLE events ranked by
         # (_AUTHORITY_RANK, weight) — all user_stated tie at rank 3, so a heavy
-        # thread that renders nothing could beat a real constraint and delete it.
+        # thread that renders nothing could beat a real constraint and delete
+        # it.
         #
-        # The loser set is SIZED AT RUNTIME, never hardcoded. token_count.py
-        # uses exact tiktoken when the `tokens` extra is installed and a len/4
-        # heuristic otherwise, and a run of repeated characters tokenises far
-        # cheaper under tiktoken (measured: 380 z's cost ~57 tok, not ~95). A
-        # fixed count that overflows the mandatory zone under one counter fails
-        # to overflow it under the other — and without the overflow
-        # _compress_mandatory never fires, so this guard would pass before AND
-        # after the fix, proving nothing.
+        # Zone OVERFLOW alone is not sufficient to prove eviction: the keep
+        # loop in _compress_mandatory (greedy.py:141-151), like greedy_fill's
+        # own Phase 2, never breaks early. If a large loser doesn't fit, the
+        # walk moves on and a SMALL item further down the sorted order (the
+        # hard constraint, which ties last at authority rank 2) can still
+        # slip into whatever slack is left over. A first version of this test
+        # used a few large losers (~199 tok each against a 500 tok limit at
+        # the 1500-budget scale) and left ~95 tok of residual slack — plenty
+        # of room for a 13 tok constraint, so the constraint always survived
+        # and the test passed identically before and after the fix, proving
+        # nothing. The binding condition is residual slack strictly less than
+        # the hard constraint's own cost, not overflow by itself. So losers
+        # here are SMALL and NUMEROUS: many small increments pack tightly
+        # against mandatory_limit and leave almost no slack, and the hard
+        # constraint (13 tok, unchanged) is sized larger than a single loser
+        # so it cannot fit in whatever sliver remains.
+        #
+        # Everything is SIZED AT RUNTIME, never hardcoded — including the
+        # winner's own cost, which also occupies the mandatory zone (it is
+        # user_stated too, and sorts first at weight 50). token_count.py uses
+        # exact tiktoken when the `tokens` extra is installed and a len/4
+        # heuristic otherwise; the two counters do not agree on cost for the
+        # same string, so a fixed packing that lands tightly under one
+        # counter can leave a different residual under the other.
         mandatory_limit = int(500 * (cfg.token_budget / 1500.0))
 
         project_id = init_project(project_path, config=cfg)
         db_path = get_db_path(cfg, project_id)
+        winner = _thread(
+            "Ship the router.", weight=50.0, authority="user_stated",
+            project_id=project_id, session_id="s1",
+        )
+        hard = Event(
+            project_id=project_id, session_id="s1", event_type="CONSTRAINT_HARD",
+            payload={"description": "Never call the billing API from a hook.",
+                     "rationale": "", "authority": "assistant_decided"},
+            content_hash="hardc".ljust(64, "0"), weight=0.5,
+        )
         with get_connection(db_path) as conn:
             run_migrations(conn)
             # The winner, which will render.
-            insert_event(conn, _thread(
-                "Ship the router.", weight=50.0, authority="user_stated",
-                project_id=project_id, session_id="s1",
-            ))
-            # Losers: heavy, user_stated, and therefore mandatory today. Keep
-            # adding until they provably exceed mandatory_limit.
-            spent = 0
+            insert_event(conn, winner)
+            # Losers: small, numerous, user_stated, and therefore mandatory
+            # today. Keep packing while the next one still fits alongside the
+            # winner, so the walk lands as close to mandatory_limit as a
+            # loser-sized increment allows — this is what makes the residual
+            # slack tiny instead of the ~95 tok a few large losers left.
+            spent = estimate_tokens(winner)
             i = 0
-            while spent <= mandatory_limit:
+            while True:
                 loser = _thread(
-                    "Losing thread %d: %s" % (i, "z" * 380), weight=40.0,
-                    authority="user_stated", project_id=project_id, session_id="s1",
+                    "L%04d" % i, weight=40.0, authority="user_stated",
+                    project_id=project_id, session_id="s1",
                 )
+                cost = estimate_tokens(loser)
+                if spent + cost > mandatory_limit:
+                    break
                 insert_event(conn, loser)
-                spent += estimate_tokens(loser)
+                spent += cost
                 i += 1
-            insert_event(conn, Event(
-                project_id=project_id, session_id="s1", event_type="CONSTRAINT_HARD",
-                payload={"description": "Never call the billing API from a hook.",
-                         "rationale": "", "authority": "assistant_decided"},
-                content_hash="hardc".ljust(64, "0"), weight=0.5,
-            ))
+            insert_event(conn, hard)
             conn.commit()
+
+        # THE precondition that makes this guard meaningful. If the packing
+        # above ever leaves residual slack >= the hard constraint's cost
+        # (e.g. because a future edit changes loser size or weight), the
+        # keep loop's no-early-break behaviour lets the constraint through
+        # regardless of whether D2 is fixed, and the assertion below would
+        # pass either way — silently reverting to a decorative test. Fail
+        # loudly here instead of letting that happen quietly.
+        residual_slack = mandatory_limit - spent
+        assert residual_slack < estimate_tokens(hard), (
+            f"residual slack {residual_slack} >= hard constraint cost "
+            f"{estimate_tokens(hard)} — this test no longer discriminates D2"
+        )
 
         rendered = render_state(project_path, config=cfg)
         assert "Never call the billing API from a hook." in rendered
