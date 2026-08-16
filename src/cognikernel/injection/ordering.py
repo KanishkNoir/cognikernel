@@ -115,6 +115,24 @@ def partition_events(events: list[Event]) -> dict[str, list[Event]]:
     return buckets
 
 
+def select_active_thread(events: list[Event]) -> Event | None:
+    """The single THREAD_OPEN that will occupy the Active thread slot, or None.
+
+    Derived from `partition_events` rather than re-implementing the sort so
+    selection cannot drift from routing. `partition_events` diverts on AUTHORITY
+    before event_type, so a thread whose authority routes it to
+    pending_confirmations must not be selected here — the caller reserves render
+    budget for whatever this returns, and reserving for a section that then
+    renders nothing is a silent waste. Deriving the answer from the same
+    function the renderer is fed makes that structural rather than documented.
+
+    Deliberately NOT exported from injection/__init__.py: it is private API so
+    the thread-lifecycle work (THREAD_CLOSE, staleness) can change the signature
+    without a compatibility burden.
+    """
+    return next(iter(partition_events(events)["active_threads"]), None)
+
+
 def _subject_of(event) -> str:
     """Best-effort subject extraction from an event payload.
 
