@@ -126,3 +126,47 @@ class TestGreedyFill:
         descriptions = {e.payload["description"] for e in result}
         assert "JWT authentication end-to-end." in descriptions
         assert "Maybe revisit membership tiers." not in descriptions
+
+
+class TestReservedTokens:
+    """reserved_tokens lets a caller pay for content it will append after the
+    fill (the active thread), without that reservation shrinking the zone caps
+    that are derived from the CONFIGURED budget."""
+
+    @staticmethod
+    def _descs(events: list[Event]) -> list[str]:
+        return [e.payload["description"] for e in events]
+
+    def test_zero_reserve_is_identical_to_omitting_the_argument(self) -> None:
+        events = [_make_event(f"Event number {i}", weight=float(i)) for i in range(10)]
+        assert self._descs(greedy_fill(events, 200, reserved_tokens=0)) == \
+               self._descs(greedy_fill(events, 200))
+
+    def test_reserve_reduces_phase_two_admissions(self) -> None:
+        # Self-calibrating: sizes the budget from the events' real cost so the
+        # test cannot silently pass if estimate_tokens changes. A hardcoded
+        # budget large enough to hold everything makes this assertion vacuous.
+        events = [_make_event(f"Event number {i}", weight=float(i)) for i in range(10)]
+        total = sum(estimate_tokens(e) for e in events)
+        budget = total + 10                      # everything fits with room to spare
+        full = greedy_fill(events, budget)
+        reserved = greedy_fill(events, budget, reserved_tokens=total // 2)
+        assert len(full) == 10
+        assert len(reserved) < 10
+
+    def test_reserve_does_not_shrink_the_mandatory_zone(self) -> None:
+        # THE GUARD for spec section 2.2. mandatory_limit = int(500 * budget/1500);
+        # at budget 3500 that is 1166. These ten constraints cost ~1000 tokens, so
+        # they all fit and _compress_mandatory never fires.
+        # If reserved_tokens fed `scale` (the rejected design), the limit would be
+        # int(500 * 500/1500) = 166 and _compress_mandatory would collapse them.
+        hard = [
+            _make_event("Constraint %d: %s" % (i, "x" * 380),
+                        event_type="CONSTRAINT_HARD",
+                        content_hash=("hard%d" % i).ljust(64, "0"))
+            for i in range(10)
+        ]
+        without = greedy_fill(hard, 3500)
+        with_reserve = greedy_fill(hard, 3500, reserved_tokens=3000)
+        assert len(without) == 10
+        assert len(with_reserve) == 10
