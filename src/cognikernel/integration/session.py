@@ -4,12 +4,15 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cognikernel.config import Config
 from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
 from cognikernel.storage.migrations import run_migrations
 from cognikernel.storage.projections import Projection, load_or_rebuild
+
+if TYPE_CHECKING:
+    from cognikernel.storage.events import Event
 
 _log = logging.getLogger("cognikernel.integration")
 
@@ -620,7 +623,7 @@ def get_projection(
         return load_or_rebuild(conn, project_id)
 
 
-def _active_thread_reserve(thread) -> int:
+def _active_thread_reserve(thread: "Event | None") -> int:
     """Tokens the Active thread section will cost once rendered, or 0.
 
     Measured from the rendered section, NOT from `estimate_tokens`: the two
@@ -698,6 +701,15 @@ def render_state(
     # been shown. Select first, reserve the rendered cost, exclude the rest.
     active_thread = select_active_thread(events)
     reserve = _active_thread_reserve(active_thread)
+    # This drops EVERY THREAD_OPEN from the fill, not just the loser(s); only
+    # `active_thread` (the select_active_thread winner) is appended back
+    # below. A thread whose authority routes it to pending_confirmations
+    # (assistant_answer_to_user_question — ordering.py:86-92) makes
+    # select_active_thread return None for it, so such a thread now never
+    # reaches the renderer at all, where previously it could still render in
+    # the pending-confirmation section. Unreachable today: the only producer
+    # of that authority is windowing.py:359, hard-wired to
+    # event_type="CONSTRAINT_SOFT", which is never a THREAD_OPEN.
     candidates = [e for e in events if e.event_type not in THREAD_TYPES]
     selected = greedy_fill(candidates, config.token_budget, reserved_tokens=reserve)
     if active_thread is not None:

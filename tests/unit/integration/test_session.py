@@ -620,3 +620,128 @@ class TestRenderStateThreadSelection:
 
         rendered = render_state(project_path, config=cfg)
         assert "Never call the billing API from a hook." in rendered
+
+
+# ── the task-2/task-3 seam: reserved_tokens=reserve actually reaching greedy_fill ──
+
+class TestReservedTokensReachesGreedyFill:
+    """Closes the wiring gap between `select_active_thread` (task 2) and
+    `greedy_fill(reserved_tokens=...)` (task 3): render_state must actually
+    pass the real reserve through, not just compute it.
+
+    TestActiveThreadReserve (above) only proves `_active_thread_reserve`
+    computes the right number in isolation. TestReservedTokens (in
+    test_greedy.py) only proves `greedy_fill` honours whatever value it's
+    given. Neither proves session.py's `greedy_fill(candidates,
+    config.token_budget, reserved_tokens=reserve)` call site actually wires
+    the two together — `reserved_tokens=0` there would leave selection,
+    exclusion and the post-fill append all intact and every OTHER test in
+    this suite green, because the reserve is the only thing standing between
+    the unconditionally-appended active thread and pure budget growth (see
+    greedy.py's `reserved_tokens` docstring).
+
+    This test sizes `token_budget` so a marginal DECISION fits in Phase 2
+    when `reserved_tokens=0` but not at the real reserve, then renders
+    through the full `render_state` pipeline (not a raw `greedy_fill` call)
+    and asserts the decision's text is absent.
+
+    Non-obvious construction note: the render's own backstop
+    (template.py:523, "while actual > ctx.token_budget and ctx.decisions:
+    pop()") is STRICTER than greedy_fill's Phase-2 check — it counts the
+    accurate rendered bytes of the header, the active-thread section and the
+    summary, none of which greedy_fill's `estimate_tokens` ever sees. Sitting
+    a decision right at the reserve boundary (`reserved_tokens=0` admits it,
+    the real reserve excludes it) means the backstop's extra accounting will
+    ALWAYS exceed that boundary by a small fixed amount and strip the
+    decision anyway — making the render-level assertion pass under BOTH the
+    correct code and the `reserved_tokens=0` mutation, i.e. decorative. This
+    is fixed by giving the marginal decision an oversized `path` field:
+    `estimate_tokens` (token_count.py:47-64) counts `path` toward the
+    event's Phase-2 cost, but `_render_decisions` (template.py:362-384) never
+    reads `path` for a DECISION — only `description`/`rationale`. Padding
+    `path` inflates the event's greedy-fill cost far past what it actually
+    costs to render, which buys enough slack that the backstop's extra
+    accounting can never catch up to the boundary, regardless of how tight
+    the boundary itself is. The thread's own render cost is real either way
+    (it renders unconditionally) and is measured, not assumed.
+    """
+
+    def test_marginal_decision_survives_only_without_the_real_reserve(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        project_id = init_project(project_path, config=cfg)
+        db_path = get_db_path(cfg, project_id)
+
+        winner = _thread(
+            "Ship the router.", weight=1.0, authority="assistant_decided",
+            state="Half done — the fallback loop is wired but untested.",
+            next_steps="Confirm the retry budget, then land the change.",
+            project_id=project_id, session_id="s1",
+        )
+        # `path` is counted by estimate_tokens but never rendered for a
+        # DECISION (see class docstring) — padding it inflates the Phase-2
+        # cost far past the real render cost, which is what makes it
+        # possible to sit at the reserve boundary without the render
+        # backstop's stricter accounting (header/thread/summary bytes
+        # greedy_fill never sees) swallowing the decision regardless of the
+        # reserved_tokens value under test.
+        padding = " ".join(f"pad{i}" for i in range(500))
+        marginal = Event(
+            project_id=project_id, session_id="s1", event_type="DECISION",
+            payload={
+                "description": "Adopt the retry budget for flaky writes.",
+                "rationale": "", "subject": "marginal_topic", "path": padding,
+            },
+            content_hash="marginal_decision".ljust(64, "0"), weight=1.0,
+        )
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            insert_event(conn, winner)
+            insert_event(conn, marginal)
+            conn.commit()
+
+        # Real post-projection values, not the pre-insertion Python objects
+        # (load_or_rebuild discards insert-time weight; projections.py:267+).
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            events = projection_to_events(load_or_rebuild(conn, project_id))
+        winner_ev = next(e for e in events if e.event_type == "THREAD_OPEN")
+        marginal_ev = next(e for e in events if e.event_type == "DECISION")
+
+        reserve = _active_thread_reserve(winner_ev)
+        m_cost = estimate_tokens(marginal_ev)
+        assert reserve > 0, (
+            "thread reserve is 0 — this fixture cannot create a reserve "
+            "boundary to test against"
+        )
+
+        # Exactly `reserve - 1` tokens above the marginal's own cost: enough
+        # slack for reserved_tokens=0 to admit it, one token short of enough
+        # for reserved_tokens=reserve to admit it too.
+        token_budget = m_cost + reserve - 1
+        tight = Config(cognikernel_dir=cfg.cognikernel_dir, token_budget=token_budget)
+
+        # THE preconditions that make this guard meaningful, checked against
+        # the same greedy_fill call render_state makes internally (threads
+        # filtered out, exactly like session.py's `candidates` line) — fail
+        # loudly instead of silently proving nothing if a future change
+        # shifts either boundary.
+        non_thread = [e for e in events if e.event_type != "THREAD_OPEN"]
+        admitted_zero = greedy_fill(non_thread, token_budget, reserved_tokens=0)
+        assert marginal_ev.id in {e.id for e in admitted_zero}, (
+            "marginal decision not admitted at reserved_tokens=0 — the "
+            "budget is too tight for this fixture to discriminate anything"
+        )
+        admitted_real = greedy_fill(non_thread, token_budget, reserved_tokens=reserve)
+        assert marginal_ev.id not in {e.id for e in admitted_real}, (
+            "marginal decision still admitted at the real reserve — this "
+            "fixture no longer sits at the reserve boundary"
+        )
+
+        rendered = render_state(project_path, config=tight)
+        assert "Adopt the retry budget for flaky writes." not in rendered, (
+            "marginal decision rendered even though the real reserve "
+            "should have excluded it in greedy_fill's Phase 2 — if this "
+            "fails, check that render_state is passing the real reserve "
+            "(not 0) as `reserved_tokens` to greedy_fill"
+        )

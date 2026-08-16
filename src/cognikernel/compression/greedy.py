@@ -61,6 +61,18 @@ def greedy_fill(
     would shrink `mandatory_limit` by reserve/3 and, at small configured
     budgets, drive it to 0 — where `_compress_mandatory` silently collapses
     every hard constraint to one.
+
+    Note what this does NOT guarantee: the reserve reclaims Phase-2
+    admissions so the caller's post-fill append doesn't grow the block
+    unchecked, but it does not bound the rendered block, because the render
+    backstop (template.py:523-538) can drop decisions, components and
+    skeleton entries, but never the active thread. If the mandatory zone plus
+    that undroppable floor already consume the whole budget, the reserve is
+    a no-op and the thread renders on top of it regardless. That gap is
+    currently one line (`_render_active_thread` emits description/state/
+    next_steps plus four lines of scaffolding) but grows if a field is ever
+    added there — the deferred thread-lifecycle work's staleness marker is
+    the obvious candidate.
     """
     non_archived = [e for e in events if not e.archived]
 

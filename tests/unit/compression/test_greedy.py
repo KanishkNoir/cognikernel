@@ -156,8 +156,11 @@ class TestReservedTokens:
 
     def test_reserve_does_not_shrink_the_mandatory_zone(self) -> None:
         # THE GUARD for spec section 2.2. mandatory_limit = int(500 * budget/1500);
-        # at budget 3500 that is 1166. These ten constraints cost ~1000 tokens, so
-        # they all fit and _compress_mandatory never fires.
+        # at budget 3500 that is 1166. These ten constraints cost 570 tokens under
+        # tiktoken (installed here) and ~1030 under the len/4 heuristic — the two
+        # counters disagree, but both sit between the mutated limit (166, below)
+        # and the correct limit (1166), so they all fit and _compress_mandatory
+        # never fires under either counter.
         # If reserved_tokens fed `scale` (the rejected design), the limit would be
         # int(500 * 500/1500) = 166 and _compress_mandatory would collapse them.
         hard = [
