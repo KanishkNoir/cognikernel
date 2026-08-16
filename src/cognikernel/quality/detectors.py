@@ -104,14 +104,17 @@ def detect_junk_constraint(text: str, event_type: str) -> DetectorHit | None:
 
 # ── D4: harness boilerplate captured as memory ───────────────────────────────
 #
-# Phrases emitted by the agent harness (compaction summaries, resume banners)
-# and by CogniKernel's own injected block. None of these are project facts.
+# Phrases emitted by the agent harness (compaction summaries, resume banners),
+# by CogniKernel's own injected block, or by the agent narrating a check of
+# CogniKernel's own state (e.g. echoing CLAUDE.md/trust-header "greenfield"
+# guidance back as if it were a project fact). None of these are project facts.
 
 _BOILERPLATE = re.compile(
     r"read the full transcript at|continue the conversation from|"
     r"resume directly|do not acknowledge the summary|"
     r"do not recap what was happening|pick up the last task|"
-    r"session context \[auto-generated|as if the break never happened",
+    r"session context \[auto-generated|as if the break never happened|"
+    r"no prior decisions stored|confirmed greenfield",
     re.IGNORECASE,
 )
 
