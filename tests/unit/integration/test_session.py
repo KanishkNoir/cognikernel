@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from cognikernel.config import Config
+from cognikernel.compression.greedy import greedy_fill
 from cognikernel.compression.token_count import estimate_tokens
 from cognikernel.integration.session import (
     _active_thread_reserve,
@@ -20,6 +21,7 @@ from cognikernel.injection.template import _render_active_thread, count_tokens_a
 from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
 from cognikernel.storage.events import Event, insert_event
 from cognikernel.storage.migrations import run_migrations
+from cognikernel.storage.projections import load_or_rebuild, projection_to_events
 from cognikernel.storage.render_ledger import rendered_event_ids
 
 
@@ -408,27 +410,125 @@ class TestRenderStateThreadSelection:
     def test_high_authority_low_weight_thread_still_renders(
         self, project_path: Path, cfg: Config
     ) -> None:
-        # Regression guard for BOTH rejected designs (spec section 4). Leaving
-        # the winner in greedy_fill's input lost the section in 2/52 real
-        # stores; forcing it into the mandatory zone lost it in 8/52.
+        # Regression guard for the "leave the winner in greedy_fill's input"
+        # design (spec section 4), which lost the Active thread section in
+        # 2/52 real stores. select_active_thread picks the winner among
+        # THREADS ONLY, by (authority_priority, -weight); greedy_fill Phase 2
+        # then sorts by weight across EVERY candidate, threads included, when
+        # a thread is left in its input. A thread that wins selection can
+        # therefore still be starved out by heavier events under budget
+        # pressure — this fixture reproduces exactly that: the winner's
+        # authority is assistant_decided, NOT user_stated, so it is a genuine
+        # Phase-2 candidate (competing purely on weight) rather than
+        # budget-exempt mandatory content. It must still render because
+        # render_state excludes it from greedy_fill's candidates by
+        # event_type and appends it to `selected` AFTER greedy_fill returns
+        # (session.py), rather than leaving it in greedy_fill's input to
+        # compete for a Phase-2 slot on its own weight.
+        #
+        # This does NOT guard the "force it into the mandatory zone" design
+        # (the 8/52 loss) — that failure mode requires mandatory-zone
+        # contention, which this fixture (assistant_decided, non-mandatory)
+        # does not create. See
+        # test_losing_user_stated_thread_no_longer_evicts_a_hard_constraint
+        # for the mandatory-zone guard.
+        #
+        # Two non-obvious pitfalls, both found by tracing this fixture
+        # through the real pipeline rather than assuming insert-time values
+        # survive to greedy_fill:
+        #
+        # 1. The weight set at insert time (99.0 here) is NOT what
+        #    greedy_fill sees. load_or_rebuild recomputes every event's
+        #    weight via the composite model (compression.weights.compute_weight
+        #    — base x recency x repetition x centrality x activity x type;
+        #    projections.py:_apply_composite_weights), discarding the raw
+        #    value entirely. Measured: 40 decisions inserted at weight 99.0
+        #    came back from the projection at ~0.7-0.85 — barely above the
+        #    winner's own recomputed weight (~0.72), not the crushing 0.01
+        #    vs 99 margin the raw insert implies.
+        # 2. DECISION is in the choice family (storage/consolidate.py), and
+        #    identical/near-identical decisions collapse to ONE golden
+        #    record at projection time by normalized `decision_key`. All 40
+        #    decisions here share the description template "Heavy decision
+        #    N: yyy..."; `derive_decision_key` strips the numeral, so every
+        #    one normalizes to the SAME key ('decision heavy') and 39 of the
+        #    40 are silently deleted by consolidation before greedy_fill ever
+        #    runs. Giving each decision a distinct `subject` bypasses this —
+        #    `derive_decision_key` prefers `payload['subject']` over the
+        #    description-derived key, and `subject` is not one of the fields
+        #    `estimate_tokens` counts (description/rationale/path/
+        #    affected_files), so this changes the key without changing the
+        #    event's token cost.
         project_id = init_project(project_path, config=cfg)
         db_path = get_db_path(cfg, project_id)
+        winner = _thread(
+            "Ship the router.", weight=0.01, authority="assistant_decided",
+            project_id=project_id, session_id="s1",
+        )
+        decisions = [
+            Event(
+                project_id=project_id, session_id="s1", event_type="DECISION",
+                payload={"description": "Heavy decision %d: %s" % (i, "y" * 300),
+                         "rationale": "", "subject": "topic%d" % i},
+                content_hash=("dec%d" % i).ljust(64, "0"), weight=99.0,
+            )
+            for i in range(40)
+        ]
         with get_connection(db_path) as conn:
             run_migrations(conn)
-            insert_event(conn, _thread(
-                "Ship the router.", weight=0.01, authority="user_stated",
-                project_id=project_id, session_id="s1",
-            ))
-            for i in range(40):
-                insert_event(conn, Event(
-                    project_id=project_id, session_id="s1", event_type="DECISION",
-                    payload={"description": "Heavy decision %d: %s" % (i, "y" * 300),
-                             "rationale": ""},
-                    content_hash=("dec%d" % i).ljust(64, "0"), weight=99.0,
-                ))
+            insert_event(conn, winner)
+            for d in decisions:
+                insert_event(conn, d)
             conn.commit()
 
-        tight = Config(cognikernel_dir=cfg.cognikernel_dir, token_budget=400)
+        # The precondition and the tight budget are both derived from the
+        # ACTUAL post-projection events — projection_to_events(load_or_rebuild(...))
+        # is exactly what render_state feeds to greedy_fill internally — not
+        # from the pre-insertion Python objects above, whose weights and
+        # count do not survive the pipeline (see pitfalls 1-2). Budget is set
+        # to precisely the summed cost of every event that outweighs the
+        # winner post-projection, so the greedy walk has ZERO residual slack
+        # left for the winner by construction: it cannot slip in on its own
+        # merits regardless of how composite weighting happens to land.
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            events = projection_to_events(load_or_rebuild(conn, project_id))
+        winner_ev = next(e for e in events if e.event_type == "THREAD_OPEN")
+        heavier = [
+            e for e in events
+            if e.event_type != "THREAD_OPEN" and e.weight > winner_ev.weight
+        ]
+        # Guards against a degenerate zero budget: if nothing outweighs the
+        # winner post-projection, `tight_budget` would be 0 and "winner not
+        # in raw_fill" would pass for the wrong reason (no budget at all,
+        # not genuine competition) — a false green identical in shape to the
+        # decision-collapse bug above.
+        assert heavier, (
+            "no decision outweighs the winner post-projection — this "
+            "fixture cannot create the budget pressure it claims to guard"
+        )
+        tight_budget = sum(estimate_tokens(e) for e in heavier)
+        tight = Config(cognikernel_dir=cfg.cognikernel_dir, token_budget=tight_budget)
+
+        # THE precondition that makes this guard meaningful: on its own
+        # merits — the same greedy_fill call render_state makes internally,
+        # before the active thread is appended — the winner must NOT
+        # survive. If it did, this fixture would render "Working on: Ship
+        # the router." whether or not render_state appends the thread
+        # post-fill, and the assertion after render() would prove nothing
+        # about the 2/52-store regression. Fail loudly here instead of
+        # letting that happen quietly. Matched by id, not by Event equality:
+        # Event is a plain @dataclass with a `created_at` default_factory
+        # timestamp, so two Event objects built from the same DB row at
+        # different moments are never `==` — id is the only stable identity
+        # that survives projection_to_events being called twice.
+        raw_fill = greedy_fill(events, tight_budget)
+        assert winner_ev.id not in {e.id for e in raw_fill}, (
+            "winner survived greedy_fill on its own weight — this fixture "
+            "no longer discriminates the 'leave the winner in the fill' "
+            "regression"
+        )
+
         rendered = render_state(project_path, config=tight)
         assert "Working on: Ship the router." in rendered
 
