@@ -7,14 +7,20 @@ from pathlib import Path
 import pytest
 
 from cognikernel.config import Config
+from cognikernel.compression.token_count import estimate_tokens
 from cognikernel.integration.session import (
+    _active_thread_reserve,
     get_projection,
     init_project,
     render_state,
     replay_job,
     session_end,
 )
+from cognikernel.injection.template import _render_active_thread, count_tokens_accurate
 from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.storage.events import Event, insert_event
+from cognikernel.storage.migrations import run_migrations
+from cognikernel.storage.render_ledger import rendered_event_ids
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -334,3 +340,145 @@ class TestSessionEndCursorMonotonicGuard:
         with get_connection(db_path) as conn:
             cursor = get_cursor(conn, project_id, "sess-guard")
         assert cursor is not None and cursor.last_line_count == 30  # not rewound
+
+
+# ── active thread selection and reservation (Spec 2.3, D1/D2) ─────────────────
+
+def _thread(desc: str, *, weight: float = 1.0, authority: str = "assistant_decided",
+            project_id: str = "p1", session_id: str = "s1", **extra) -> Event:
+    return Event(
+        project_id=project_id, session_id=session_id, event_type="THREAD_OPEN",
+        payload={"description": desc, "authority": authority, **extra},
+        content_hash=desc[:32].ljust(64, "0"), weight=weight,
+    )
+
+
+class TestActiveThreadReserve:
+    """THE GUARD for spec section 2.3. The reserve couples session.py to
+    template.py's private _render_active_thread. If a field is later added to
+    that renderer (a staleness marker is the obvious trigger) and the reserve
+    is not updated, it silently undershoots and the backstop starts firing on
+    routine renders."""
+
+    def test_returns_zero_for_none(self) -> None:
+        assert _active_thread_reserve(None) == 0
+
+    def test_equals_the_rendered_section_token_count(self) -> None:
+        t = _thread("Ship the router.", state="Half done.",
+                    next_steps="Wire the fallback loop.")
+        assert _active_thread_reserve(t) == count_tokens_accurate(_render_active_thread([t]))
+
+    def test_counts_state_and_next_steps_not_only_description(self) -> None:
+        rich = _thread("Ship the router.", state="Half done.",
+                       next_steps="Wire the fallback loop.")
+        bare = _thread("Ship the router.")
+        assert _active_thread_reserve(rich) > _active_thread_reserve(bare)
+
+
+class TestRenderStateThreadSelection:
+    def test_ledger_records_only_the_thread_that_rendered(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        # The CK-1 suppression bug: every surviving THREAD_OPEN used to be
+        # recorded as verbatim-exposed, so threads the model never saw were
+        # suppressed from per-prompt injection for the rest of the session.
+        project_id = init_project(project_path, config=cfg)
+        db_path = get_db_path(cfg, project_id)
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            for i in range(4):
+                insert_event(conn, _thread(
+                    f"Thread number {i}", weight=float(i + 1),
+                    project_id=project_id, session_id="s1",
+                ))
+            conn.commit()
+
+        render_state(project_path, config=cfg, session_id="s2")
+
+        with get_connection(db_path) as conn:
+            seen = rendered_event_ids(conn, project_id, "s2")
+            thread_ids = {
+                r[0] for r in conn.execute(
+                    "SELECT id FROM events WHERE project_id=? AND event_type='THREAD_OPEN'",
+                    (project_id,),
+                )
+            }
+        assert len(seen & thread_ids) == 1
+
+    def test_high_authority_low_weight_thread_still_renders(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        # Regression guard for BOTH rejected designs (spec section 4). Leaving
+        # the winner in greedy_fill's input lost the section in 2/52 real
+        # stores; forcing it into the mandatory zone lost it in 8/52.
+        project_id = init_project(project_path, config=cfg)
+        db_path = get_db_path(cfg, project_id)
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            insert_event(conn, _thread(
+                "Ship the router.", weight=0.01, authority="user_stated",
+                project_id=project_id, session_id="s1",
+            ))
+            for i in range(40):
+                insert_event(conn, Event(
+                    project_id=project_id, session_id="s1", event_type="DECISION",
+                    payload={"description": "Heavy decision %d: %s" % (i, "y" * 300),
+                             "rationale": ""},
+                    content_hash=("dec%d" % i).ljust(64, "0"), weight=99.0,
+                ))
+            conn.commit()
+
+        tight = Config(cognikernel_dir=cfg.cognikernel_dir, token_budget=400)
+        rendered = render_state(project_path, config=tight)
+        assert "Working on: Ship the router." in rendered
+
+    def test_losing_user_stated_thread_no_longer_evicts_a_hard_constraint(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        # Defect D2 (spec section 1). greedy.py:63-67 treats ANY user_stated
+        # event as budget-exempt mandatory, threads included. When that zone
+        # overflows, _compress_mandatory drops WHOLE events ranked by
+        # (_AUTHORITY_RANK, weight) — all user_stated tie at rank 3, so a heavy
+        # thread that renders nothing could beat a real constraint and delete it.
+        #
+        # The loser set is SIZED AT RUNTIME, never hardcoded. token_count.py
+        # uses exact tiktoken when the `tokens` extra is installed and a len/4
+        # heuristic otherwise, and a run of repeated characters tokenises far
+        # cheaper under tiktoken (measured: 380 z's cost ~57 tok, not ~95). A
+        # fixed count that overflows the mandatory zone under one counter fails
+        # to overflow it under the other — and without the overflow
+        # _compress_mandatory never fires, so this guard would pass before AND
+        # after the fix, proving nothing.
+        mandatory_limit = int(500 * (cfg.token_budget / 1500.0))
+
+        project_id = init_project(project_path, config=cfg)
+        db_path = get_db_path(cfg, project_id)
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            # The winner, which will render.
+            insert_event(conn, _thread(
+                "Ship the router.", weight=50.0, authority="user_stated",
+                project_id=project_id, session_id="s1",
+            ))
+            # Losers: heavy, user_stated, and therefore mandatory today. Keep
+            # adding until they provably exceed mandatory_limit.
+            spent = 0
+            i = 0
+            while spent <= mandatory_limit:
+                loser = _thread(
+                    "Losing thread %d: %s" % (i, "z" * 380), weight=40.0,
+                    authority="user_stated", project_id=project_id, session_id="s1",
+                )
+                insert_event(conn, loser)
+                spent += estimate_tokens(loser)
+                i += 1
+            insert_event(conn, Event(
+                project_id=project_id, session_id="s1", event_type="CONSTRAINT_HARD",
+                payload={"description": "Never call the billing API from a hook.",
+                         "rationale": "", "authority": "assistant_decided"},
+                content_hash="hardc".ljust(64, "0"), weight=0.5,
+            ))
+            conn.commit()
+
+        rendered = render_state(project_path, config=cfg)
+        assert "Never call the billing API from a hook." in rendered
