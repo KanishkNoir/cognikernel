@@ -1,7 +1,7 @@
 # CogniKernel
 
+[![PyPI](https://img.shields.io/pypi/v/cognikernel.svg)](https://pypi.org/project/cognikernel/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/cognikernel?period=total&units=NONE&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cognikernel)
-[![Downloads](https://static.pepy.tech/badge/cognikernel)](https://pepy.tech/project/cognikernel)
 [![Python](https://img.shields.io/pypi/pyversions/cognikernel.svg)](https://pypi.org/project/cognikernel/)
 [![License](https://img.shields.io/github/license/KanishkNoir/cognikernel.svg)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/KanishkNoir/cognikernel.svg)](https://github.com/KanishkNoir/cognikernel/commits/main)
