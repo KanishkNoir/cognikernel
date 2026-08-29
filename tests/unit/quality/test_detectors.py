@@ -98,6 +98,15 @@ class TestDetectBoilerplate:
     def test_flags_cognikernel_own_injection_header(self) -> None:
         assert detect_boilerplate("## Session context [auto-generated — do not edit]") is not None
 
+    def test_flags_greenfield_self_echo(self) -> None:
+        text = "Confirmed greenfield — no prior decisions stored. Here's a concrete proposal."
+        hit = detect_boilerplate(text)
+        assert hit is not None
+        assert hit.rule_id == "D4"
+
+    def test_flags_no_prior_decisions_stored_alone(self) -> None:
+        assert detect_boilerplate("No prior decisions stored for this component.") is not None
+
     def test_allows_ordinary_statement(self) -> None:
         assert detect_boilerplate("The worker retries twice before dead-lettering.") is None
 

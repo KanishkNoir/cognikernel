@@ -7,7 +7,7 @@ optimised for session-start), resources are queryable and typed individually —
 a client can subscribe to 'constraints' without receiving threads or skeleton.
 
 URI scheme:
-  cognikernel://projects                        → list of all known projects
+  cognikernel://projects                        → the calling project (see list_projects)
   cognikernel://project/{project_id}/state      → full session-start block
   cognikernel://project/{project_id}/constraints → CONSTRAINT_HARD events
   cognikernel://project/{project_id}/decisions   → ranked DECISION events
@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 
 from cognikernel.config import Config
-from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
 from cognikernel.storage.migrations import run_migrations
 
 _NOT_FOUND = "No CogniKernel data for this project. Run `cognikernel init <project_path>`."
@@ -73,19 +73,47 @@ def _fmt_event(row, idx: int, *, show_weight: bool = False) -> list[str]:
 # ── project discovery ─────────────────────────────────────────────────────────
 
 
-def list_projects(config: Config | None = None) -> str:
-    """Return JSON array of all known CogniKernel projects.
+def list_projects(config: Config | None = None, current_path: str | None = None) -> str:
+    """Return JSON array of known CogniKernel projects.
 
     Scans ~/.cognikernel/projects/*.db and reads the project_path from meta.
     Projects without a stored path (pre-migration) are listed with path=null.
+
+    `current_path`: when given and it resolves to a known store, the scan is
+    scoped to that ONE project instead of every project ever tracked on the
+    machine. Without this, an agent asking "what's my project_id" to build a
+    resource URI for its own project got back every other project's name,
+    path, and event count too — a cross-project disclosure with no purpose
+    the caller needed. Falls back to the full (unscoped) list when
+    `current_path` is absent or unresolvable, preserving discovery for a
+    generic MCP client that doesn't know its own project path.
+
+    Resolution goes through `resolve_project_id` (the same function every
+    other project-id call site uses — init, hooks, CLI, the other MCP tools),
+    not a bare `hash_project_path`, so a project using the `project_identity`
+    override or accessed via a WSL/Windows path alias still scopes correctly
+    instead of silently falling through to the full list — a real gap in an
+    earlier version of this scoping, caught by review before it shipped.
     """
     config = config or Config.load()
     projects_dir = config.projects_dir
     if not projects_dir.exists():
         return json.dumps([])
 
+    db_files = sorted(projects_dir.glob("*.db"))
+    if current_path:
+        try:
+            scoped_config = Config.load(project_path=current_path)
+            current_id = resolve_project_id(current_path, scoped_config)
+        except Exception:
+            current_id = None
+        if current_id is not None:
+            scoped = [f for f in db_files if f.stem == current_id]
+            if scoped:
+                db_files = scoped
+
     projects: list[dict] = []
-    for db_file in sorted(projects_dir.glob("*.db")):
+    for db_file in db_files:
         project_id = db_file.stem
         try:
             with get_connection(db_file) as conn:

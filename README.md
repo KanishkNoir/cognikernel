@@ -7,10 +7,37 @@
 [![Last commit](https://img.shields.io/github/last-commit/KanishkNoir/cognikernel.svg)](https://github.com/KanishkNoir/cognikernel/commits/main)
 [![Stars](https://img.shields.io/github/stars/KanishkNoir/cognikernel.svg?style=flat)](https://github.com/KanishkNoir/cognikernel/stargazers)
 
-**Persistent, structured project memory for Claude Code and Codex (yet...).** Your agent
-stops re-deciding what you already decided. No extra LLM in the loop, no API keys, no
-tokens billed, extraction runs on two small local encoder models, and nothing
-leaves your machine.
+**Your AI coding agent has amnesia by design.** Every session starts from zero —
+it re-reads the same files, re-derives the same architecture, and re-asks
+questions you already answered last week. CogniKernel gives the *project* a
+memory that outlives any one session, so the agent stops paying the same cost
+twice:
+
+```
+  WITHOUT MEMORY                          WITH COGNIKERNEL
+  ───────────────                          ─────────────────
+  Session 1                                Session 1
+    "explain the auth flow"                  "explain the auth flow"
+    -> reads 12 files, learns it             -> reads 12 files, learns it
+    -> session ends, all of it lost          -> session ends
+                                              -> decisions captured & stored
+
+  Session 2                                Session 2
+    "explain the auth flow"                  already knows: the auth flow,
+    -> reads 12 files again                  why Redis beat an in-process
+    -> re-derives the same thing             cache, and the approach that
+    -> session ends, nothing kept            was tried and abandoned
+                                              -> picks up where it left off
+
+  Session 3                                Session 3
+    "explain the auth flow"                  already knows everything
+    -> reads 12 files a third time           sessions 1 and 2 settled
+    -> context resets again                  -> starts from where YOU are,
+                                                 not from zero
+```
+
+No extra LLM in the loop, no API keys, no tokens billed for memory itself, and
+nothing leaves your machine.
 
 ---
 
@@ -29,7 +56,7 @@ Prefer an isolated global CLI? `pipx install "cognikernel[embedding]"` or `uv to
 
 ```sh
 cognikernel init .            # register the project + install hooks and MCP for Claude Code and Codex
-cognikernel install-heads     # download the fine-tuned encoder models (~270 MB, one-time, sha256-verified)
+cognikernel install-heads     # optional, recommended: fine-tuned encoder models (~270 MB, one-time, sha256-verified)
 cognikernel doctor .          # verify everything is wired up
 ```
 
@@ -39,12 +66,37 @@ next session start — nothing else to do. (`install-heads` is optional but
 recommended: without it, extraction falls back to a weaker lexical path, and
 `doctor` tells you which is active — see [Setup details](#setup-details).)
 
-**Persistent, structured project memory for Claude Code — and Codex.** 
-CogniKernel watches a coding session through its hook surfaces, extracts the *decisions, constraints, and abandoned approaches* worth keeping, consolidates them into an event-sourced store, and injects them back as a compact context block the next time you work — so the agent stops re-deciding what you already decided.  
+---
 
-The store is keyed on the project path, so memory made in one tool travels to the other. It is **not** a vector-database wrapper. It is an event-sourced log of *typed* memory with lexical-primary retrieval, write-time consolidation, and a fail-open reliability spine designed never to break your session. **And there is no extra LLM in the loop.** Most memory tools work by sending your transcripts to a generative model to "summarize what mattered" — another API key, per-session token cost, added latency, and your session content leaving the machine. 
+## What CogniKernel actually is
 
-CogniKernel treats extraction as *classification, not generation*: a deterministic sanitize → classify → consolidate pipeline, with two small fine-tuned encoder models (~130 MB ONNX, run locally on CPU in milliseconds)scoring salience and detecting when a new decision supersedes an old one. No API calls, no tokens billed, nothing leaves your machine. The only LLM involved is the coding agent you already run — CogniKernel makes it remember. 
+AI coding agents don't remember anything between sessions by default — the
+model's weights are frozen, so its only memory is whatever fits in that
+session's context window. Two consequences of that are common enough now to
+have names: **context rot**, where a long session's own window fills with
+stale tool output and superseded instructions until quality degrades, and
+**cold-start re-derivation**, where the moment a session ends, all of that
+understanding is gone and the next one pays the "getting up to speed" cost
+again. At scale, that repeated cost is a real reason AI coding spend has
+become something engineering orgs actively budget and worry about — this
+project is one attempt at closing that gap.
+
+CogniKernel watches a coding session through its hook surfaces, extracts the
+*decisions, constraints, and abandoned approaches* worth keeping, consolidates
+them into an event-sourced store, and injects them back as a compact context
+block the next time you work. The store is keyed on the project path, so
+memory made in one tool travels to the other.
+
+It is **not** a vector-database wrapper, and it is **not** another LLM
+summarizing your transcripts. Most memory tools work that way — send your
+session to a generative model to "summarize what mattered," which means
+another API key, per-session token cost, added latency, and your session
+content leaving the machine. CogniKernel treats extraction as *classification,
+not generation*: a deterministic sanitize → classify → consolidate pipeline,
+with two small fine-tuned encoder models (~130 MB ONNX, milliseconds on CPU)
+scoring salience and detecting when a new decision supersedes an old one. No
+API calls, no tokens billed, nothing leaves your machine. The only LLM
+involved is the coding agent you already run — CogniKernel makes it remember.
 
 **What you get, out of the box:**
 
@@ -148,6 +200,15 @@ session continues. `salience_v2` and `supersession_xenc` (above) do the
 classification behind Capture and Session block; nothing here is a hardcoded
 keyword list unless the fallback path is active.
 
+```
+  SessionStart          UserPromptSubmit         PreToolUse            Stop
+  ─────────────         ─────────────────        ──────────           ──────
+  inject the block  ──▶  surface relevant    ──▶  warn before a   ──▶  extract &
+  memory picks up        memory as you type       past decision        persist what
+  where you left off     it, unasked               gets violated        this session
+                                                                         decided
+```
+
 | Surface | Hook | Authority | What it does | Why you care |
 |---|---|---|---|---|
 | **Session block** | `SessionStart` | advisory | injects the canonical decisions/constraints/skeleton block | a new session already knows what the last one decided — no "let me re-read the codebase to remember where we were" |
@@ -197,20 +258,33 @@ memory — with real agent sessions across four multi-session projects. Full
 methodology, per-project tables, and the honest caveats (including where
 CogniKernel ties or loses) are in [`docs/benchmark.md`](docs/benchmark.md):
 
-- **File reads: the universal win.** The CogniKernel arm made the fewest file
-  reads in *every* project — typically **2–4× fewer** (23 vs 63, 16 vs 47/53,
-  40 vs 89/83), and in the best case **3 reads vs 29** because the injected
-  block + AST skeleton carried the whole repo's shape. Fewer reads means fewer
-  tool round-trips and more of the context window left for actual work — your
-  session gets *longer* before compaction, not just cheaper.
-- **Tokens: ~30–40% leaner than auto-memory where memory matters.** On projects
-  with evolving decisions and cross-file dependencies, CogniKernel used roughly
-  **30–40% fewer tokens** than a native auto-memory arm — and stays ahead once
-  price-weighted (cache-read is billed 0.1×, so ~95% of any session's bill is
-  discounted cache-read; the weighted edge is real but smaller than the raw
-  figure). Roughly a wash on small implementation-heavy projects. Precise
-  per-project figures are pending a single-model re-benchmark — see
-  [`docs/benchmark.md`](docs/benchmark.md).
+```
+  Orientation reads — reads before the first line of code, i.e. the cost of
+  working out where you are. CogniKernel vs. Claude Code native auto-memory.
+  (bar scale: 20 chars = 40%; see docs/benchmark.md §3)
+
+  project stresses…      CK / auto    reduction vs auto-memory
+
+  evolving decisions     27 / 39   ███████████████░░░░░  -30.8%
+  small, re-readable     17 / 20   ████████░░░░░░░░░░░░  -15.0%
+  quality invariants     97 / 104  ███░░░░░░░░░░░░░░░░░   -6.7%
+  self-authored API      90 / 92   █░░░░░░░░░░░░░░░░░░░   -2.2%
+```
+
+- **Orientation reads: the one win that holds everywhere.** Lower on **4 of 4**
+  projects. This is precisely what an injected block is for — the agent starts
+  already knowing the repo's shape instead of paying to rediscover it. Fewer
+  round-trips also means more of the context window left for actual work, so
+  your session runs *longer* before compaction, not just cheaper.
+- **Total reads and tokens: a split result, not a sweep.** Once you count every
+  read rather than just orientation, CogniKernel is ahead on one project of four
+  (Relay, −38.1%) and slightly behind on the rest. Tokens track the same split:
+  **−17.5% raw / −15.1% price-weighted on Relay** and **−17.9% / −13.3% on
+  Toolbelt**, but *more* expensive on Conductor (+5.3%) and Taskflow (+32.5%).
+  Structured memory repays its overhead on projects with several evolving
+  decisions and several abandoned approaches; on small re-readable ones, reading
+  the files is simply cheaper than remembering them.
+
 - **Recall instead of re-derivation.** Where memory earns its keep is projects
   whose state is too large, too evolving, or too long-lived to re-derive
   cheaply: the agent starts already knowing the decisions, constraints, and
@@ -340,6 +414,7 @@ tests/
 
 ## Status
 
-Schema **v18** (includes the Codex cross-platform capture). Architecture
-contracts: 3 kept / 0 broken. CI gate: lint + full suite on Ubuntu (3.11/3.12) and
-Windows. See `CONTRIBUTING.md` for the Definition of Done that gates every change.
+Schema **v20** (includes the Codex cross-platform capture and per-session write
+tracking). Architecture contracts: 3 kept / 0 broken. CI gate: lint + full suite
+on Ubuntu (3.11/3.12) and Windows. See `CONTRIBUTING.md` for the Definition of
+Done that gates every change.
