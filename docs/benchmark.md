@@ -191,6 +191,10 @@ session whether it is used or not. On Toolbelt it is cheaper on both.
   internal-import coupling (missed relative imports), and test-suite ratios on
   projects where the arms wrote no tests.
 
-Full method: `research/benchmarking/methodology_llm_judged_2026-08.md`
-Replication runbook: `research/benchmarking/RUNBOOK.md`
-Per-project vectors: `research/benchmarking/SUITE_VECTOR.md`
+- **The fixtures and graded transcripts are not published**, so these exact
+  numbers are **not turn-key reproducible from this repo**. The four project
+  run sheets, the scoring harness, the per-project vectors and the full method
+  write-up are kept private alongside the session transcripts they grade, which
+  contain project data that is not ours to publish. What is stated above —
+  every denominator, every adverse result, and the excluded-metric list — is
+  the complete set of findings, not a selection from a larger private set.

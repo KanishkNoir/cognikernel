@@ -259,33 +259,32 @@ methodology, per-project tables, and the honest caveats (including where
 CogniKernel ties or loses) are in [`docs/benchmark.md`](docs/benchmark.md):
 
 ```
-  File reads per session — CogniKernel vs. a hand-maintained CONTEXT.md
-  (the disciplined-developer baseline, not an empty one — reads measured on
-  the earlier same-script run; see docs/benchmark.md)
+  Orientation reads — reads before the first line of code, i.e. the cost of
+  working out where you are. CogniKernel vs. Claude Code native auto-memory.
+  (bar scale: 20 chars = 40%; see docs/benchmark.md §3)
 
-  project stresses…     CogniKernel / flat notes   reads, relative to flat notes
+  project stresses…      CK / auto    reduction vs auto-memory
 
-  small project         3 / 29    ██░░░░░░░░░░░░░░░░░░  -90% fewer reads
-  evolving decisions    23 / 63   ███████░░░░░░░░░░░░░  -63% fewer reads
-  cross-file API        16 / 47   ███████░░░░░░░░░░░░░  -66% fewer reads
-  implementation-heavy  40 / 89   █████████░░░░░░░░░░░  -55% fewer reads
+  evolving decisions     27 / 39   ███████████████░░░░░  -30.8%
+  small, re-readable     17 / 20   ████████░░░░░░░░░░░░  -15.0%
+  quality invariants     97 / 104  ███░░░░░░░░░░░░░░░░░   -6.7%
+  self-authored API      90 / 92   █░░░░░░░░░░░░░░░░░░░   -2.2%
 ```
 
-- **File reads: the universal win.** The CogniKernel arm made the fewest file
-  reads in *every* project — typically **2–4× fewer than even a
-  hand-maintained `CONTEXT.md`** (3 vs 29, 23 vs 63, 16 vs 47, 40 vs 89),
-  because the injected block + AST skeleton carried the whole repo's shape.
-  Fewer reads means fewer tool round-trips and more of the context
-  window left for actual work — your session gets *longer* before compaction,
-  not just cheaper.
-- **Tokens: ~30–40% leaner than auto-memory where memory matters.** On projects
-  with evolving decisions and cross-file dependencies, CogniKernel used roughly
-  **30–40% fewer tokens** than a native auto-memory arm — and stays ahead once
-  price-weighted (cache-read is billed 0.1×, so ~95% of any session's bill is
-  discounted cache-read; the weighted edge is real but smaller than the raw
-  figure). Roughly a wash on small implementation-heavy projects. Precise
-  per-project figures are pending a single-model re-benchmark — see
-  [`docs/benchmark.md`](docs/benchmark.md).
+- **Orientation reads: the one win that holds everywhere.** Lower on **4 of 4**
+  projects. This is precisely what an injected block is for — the agent starts
+  already knowing the repo's shape instead of paying to rediscover it. Fewer
+  round-trips also means more of the context window left for actual work, so
+  your session runs *longer* before compaction, not just cheaper.
+- **Total reads and tokens: a split result, not a sweep.** Once you count every
+  read rather than just orientation, CogniKernel is ahead on one project of four
+  (Relay, −38.1%) and slightly behind on the rest. Tokens track the same split:
+  **−17.5% raw / −15.1% price-weighted on Relay** and **−17.9% / −13.3% on
+  Toolbelt**, but *more* expensive on Conductor (+5.3%) and Taskflow (+32.5%).
+  Structured memory repays its overhead on projects with several evolving
+  decisions and several abandoned approaches; on small re-readable ones, reading
+  the files is simply cheaper than remembering them.
+
 - **Recall instead of re-derivation.** Where memory earns its keep is projects
   whose state is too large, too evolving, or too long-lived to re-derive
   cheaply: the agent starts already knowing the decisions, constraints, and
