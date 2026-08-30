@@ -191,10 +191,12 @@ session whether it is used or not. On Toolbelt it is cheaper on both.
   internal-import coupling (missed relative imports), and test-suite ratios on
   projects where the arms wrote no tests.
 
-- **The fixtures and graded transcripts are not published**, so these exact
-  numbers are **not turn-key reproducible from this repo**. The four project
-  run sheets, the scoring harness, the per-project vectors and the full method
-  write-up are kept private alongside the session transcripts they grade, which
-  contain project data that is not ours to publish. What is stated above —
-  every denominator, every adverse result, and the excluded-metric list — is
-  the complete set of findings, not a selection from a larger private set.
+- **The full method — criteria, validity gates, metric taxonomy, judge controls
+  and reporting rules — is published at
+  [`benchmark_method.md`](benchmark_method.md).** The fixtures and graded
+  transcripts are **not**, so these exact numbers are **not turn-key reproducible
+  from this repo**: the run sheets, the scoring harness and
+  the graded transcripts stay private, because they contain session data that is
+  not ours to publish. What is stated above — every denominator, every adverse
+  result, and the excluded-metric list — is the complete set of findings, not a
+  selection from a larger private set.

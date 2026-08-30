@@ -255,8 +255,10 @@ Lexical-primary, with dense as a fused signal — never pure vector:
 
 Benchmarked in a three-arm comparison — CogniKernel vs flat curated notes vs no
 memory — with real agent sessions across four multi-session projects. Full
-methodology, per-project tables, and the honest caveats (including where
-CogniKernel ties or loses) are in [`docs/benchmark.md`](docs/benchmark.md):
+per-project tables and the honest caveats (including where CogniKernel ties or
+loses) are in [`docs/benchmark.md`](docs/benchmark.md); the criteria, validity
+gates and scoring rules are in
+[`docs/benchmark_method.md`](docs/benchmark_method.md):
 
 ```
   Orientation reads — reads before the first line of code, i.e. the cost of
