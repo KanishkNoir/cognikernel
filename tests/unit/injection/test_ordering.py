@@ -7,7 +7,7 @@ from cognikernel.extraction.authority import (
     LLM,
     USER_STATED,
 )
-from cognikernel.injection.ordering import make_injection_context, partition_events
+from cognikernel.injection.ordering import make_injection_context, partition_events, select_active_thread
 from cognikernel.storage.events import Event, VALID_EVENT_TYPES
 
 
@@ -210,3 +210,42 @@ class TestMakeInjectionContext:
     def test_token_budget_custom(self) -> None:
         ctx = make_injection_context([], "proj", 1, 1, 1, token_budget=400)
         assert ctx.token_budget == 400
+
+
+class TestSelectActiveThread:
+    """The selector must agree with partition_events by construction, because
+    render_state reserves budget for whatever it returns. If it picks an event
+    that partition_events routes elsewhere, the reserve is spent on a section
+    that renders nothing."""
+
+    def test_returns_none_for_no_events(self) -> None:
+        assert select_active_thread([]) is None
+
+    def test_returns_none_when_no_threads_present(self) -> None:
+        assert select_active_thread([_event("DECISION", "Use SQLite.")]) is None
+
+    def test_picks_user_stated_over_higher_weight_assistant(self) -> None:
+        user = _event("THREAD_OPEN", "Implement JWT auth.",
+                      weight=0.5, authority=USER_STATED)
+        assistant = _event("THREAD_OPEN", "Maybe a context manager.",
+                           weight=2.0, authority=ASSISTANT_DECIDED)
+        assert select_active_thread([assistant, user]) is user
+
+    def test_picks_higher_weight_within_same_authority(self) -> None:
+        low = _event("THREAD_OPEN", "Less important.", weight=0.5, authority=USER_STATED)
+        high = _event("THREAD_OPEN", "Critical.", weight=1.5, authority=USER_STATED)
+        assert select_active_thread([low, high]) is high
+
+    def test_ignores_thread_routed_to_pending_confirmations(self) -> None:
+        # partition_events diverts on authority BEFORE event_type (ordering.py:86-92),
+        # so this thread never reaches the active_threads bucket. Selecting it
+        # would reserve budget for a section that then renders nothing.
+        t = _event("THREAD_OPEN", "Is it Postgres?", weight=5.0,
+                   authority=ASSISTANT_ANSWER_TO_QUESTION)
+        assert select_active_thread([t]) is None
+
+    def test_agrees_with_partition_events_first_thread(self) -> None:
+        a = _event("THREAD_OPEN", "a", weight=1.0, authority=ASSISTANT_DECIDED)
+        b = _event("THREAD_OPEN", "b", weight=1.0, authority=USER_STATED)
+        events = [a, b]
+        assert select_active_thread(events) is partition_events(events)["active_threads"][0]

@@ -37,7 +37,11 @@ _AUTHORITY_RANK: dict[str, int] = {
 }
 
 
-def greedy_fill(events: list["Event"], budget_tokens: int) -> list["Event"]:
+def greedy_fill(
+    events: list["Event"],
+    budget_tokens: int,
+    reserved_tokens: int = 0,
+) -> list["Event"]:
     """Select events greedily by weight to maximize value within the token budget.
 
     Phase 1: include all mandatory events (CONSTRAINT_HARD,
@@ -47,6 +51,28 @@ def greedy_fill(events: list["Event"], budget_tokens: int) -> list["Event"]:
     Phase 2: sort remaining candidates by weight descending and fill greedily.
     The loop never breaks early — a small high-value item later in the list
     may still fit after a large item fails.
+
+    `reserved_tokens` charges the Phase-2 loop for content the CALLER will add
+    after this returns — the active thread, which must be appended post-fill
+    because the renderer treats it as undroppable (template.py:489, :506).
+    It deliberately does NOT feed `scale`: `scale` expresses the CONFIGURED
+    block size and sizes the mandatory/component zones, which the reserved
+    content never occupied. Folding the reserve into `budget_tokens` instead
+    would shrink `mandatory_limit` by reserve/3 and, at small configured
+    budgets, drive it to 0 — where `_compress_mandatory` silently collapses
+    every hard constraint to one.
+
+    Note what this does NOT guarantee: the reserve reclaims Phase-2
+    admissions so the caller's post-fill append doesn't grow the block
+    unchecked, but it does not bound the rendered block, because the render
+    backstop (template.py:523-538) can drop decisions, components and
+    skeleton entries, but never the active thread. If the mandatory zone plus
+    that undroppable floor already consume the whole budget, the reserve is
+    a no-op and the thread renders on top of it regardless. That gap is
+    currently one line (`_render_active_thread` emits description/state/
+    next_steps plus four lines of scaffolding) but grows if a field is ever
+    added there — the deferred thread-lifecycle work's staleness marker is
+    the obvious candidate.
     """
     non_archived = [e for e in events if not e.archived]
 
@@ -97,7 +123,7 @@ def greedy_fill(events: list["Event"], budget_tokens: int) -> list["Event"]:
             comp_tokens += cost
 
     selected: list[Event] = list(mandatory) + guaranteed_components
-    used = mandatory_tokens + comp_tokens
+    used = mandatory_tokens + comp_tokens + reserved_tokens
     guaranteed_ids = {id(e) for e in guaranteed_components}
 
     # Phase 2 — greedy fill from remaining budget

@@ -4,12 +4,15 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cognikernel.config import Config
 from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
 from cognikernel.storage.migrations import run_migrations
 from cognikernel.storage.projections import Projection, load_or_rebuild
+
+if TYPE_CHECKING:
+    from cognikernel.storage.events import Event
 
 _log = logging.getLogger("cognikernel.integration")
 
@@ -620,6 +623,27 @@ def get_projection(
         return load_or_rebuild(conn, project_id)
 
 
+def _active_thread_reserve(thread: "Event | None") -> int:
+    """Tokens the Active thread section will cost once rendered, or 0.
+
+    Measured from the rendered section, NOT from `estimate_tokens`: the two
+    cover different field sets. `estimate_tokens` counts description, rationale,
+    path and affected_files; `_render_active_thread` emits description, state,
+    next_steps and four lines of scaffolding. Their only overlap is description,
+    so `estimate_tokens` both undershoots (missing state/next_steps/headers) and
+    overcharges (rationale/path) on the same event. `count_tokens_accurate` is
+    the counter the render backstop uses, so this reserve is exact.
+    """
+    if thread is None:
+        return 0
+    # Imported inside the function, matching this module's existing style:
+    # render_state imports every injection module lazily (session.py:635-641),
+    # and integration/resources.py imports session — a module-level import of
+    # injection.template here risks a cycle.
+    from cognikernel.injection.template import _render_active_thread, count_tokens_accurate
+    return count_tokens_accurate(_render_active_thread([thread]))
+
+
 def render_state(
     project_path: str | Path,
     config: Config | None = None,
@@ -635,8 +659,9 @@ def render_state(
     from cognikernel.storage import symbol_files as sf
     from cognikernel.storage.projections import load_or_rebuild, projection_to_events
     from cognikernel.compression.greedy import greedy_fill
-    from cognikernel.injection.ordering import make_injection_context
+    from cognikernel.injection.ordering import make_injection_context, select_active_thread
     from cognikernel.injection.template import render_with_budget_enforcement_ex
+    from cognikernel.storage.sections import THREAD_TYPES
     from cognikernel.symbols.store import load_symbol_nodes, load_symbol_edges
     from cognikernel.symbols.projection import compress_to_skeleton
 
@@ -669,7 +694,31 @@ def render_state(
 
     project_name = Path(project_path).resolve().name
     hot_files = _compute_hot_files(events)
-    selected = greedy_fill(events, config.token_budget)
+    # Only one thread can ever render (template._render_active_thread takes
+    # threads[0]), so the rest are pure cost: they consume budget, and every
+    # surviving one was recorded in the render ledger as verbatim-exposed,
+    # which suppresses it from CK-1 for the whole session despite never having
+    # been shown. Select first, reserve the rendered cost, exclude the rest.
+    active_thread = select_active_thread(events)
+    reserve = _active_thread_reserve(active_thread)
+    # This drops EVERY THREAD_OPEN from the fill, not just the loser(s); only
+    # `active_thread` (the select_active_thread winner) is appended back
+    # below. A thread whose authority routes it to pending_confirmations
+    # (assistant_answer_to_user_question — ordering.py:86-92) makes
+    # select_active_thread return None for it, so such a thread now never
+    # reaches the renderer at all, where previously it could still render in
+    # the pending-confirmation section. Unreachable today: the only producer
+    # of that authority is windowing.py:359, hard-wired to
+    # event_type="CONSTRAINT_SOFT", which is never a THREAD_OPEN.
+    candidates = [e for e in events if e.event_type not in THREAD_TYPES]
+    selected = greedy_fill(candidates, config.token_budget, reserved_tokens=reserve)
+    if active_thread is not None:
+        # Appended, not left in the fill: the renderer treats the active thread
+        # as undroppable (template.py:489, :506), but greedy_fill would happily
+        # evict a high-authority/low-weight thread by weight. Position carries
+        # no meaning — partition_events re-buckets and re-sorts (ordering.py:108-114),
+        # and template.py:139 exempts threads from the structural/dedup pass.
+        selected.append(active_thread)
     hot_paths = _compute_hot_weights(events)
     skeleton = compress_to_skeleton(
         nodes, edges,

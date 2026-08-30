@@ -115,6 +115,37 @@ def partition_events(events: list[Event]) -> dict[str, list[Event]]:
     return buckets
 
 
+def select_active_thread(events: list[Event]) -> Event | None:
+    """The single THREAD_OPEN that will occupy the Active thread slot, or None.
+
+    Derived from `partition_events` rather than re-implementing the sort so
+    selection cannot drift from routing. `partition_events` diverts on AUTHORITY
+    before event_type, so a thread whose authority routes it to
+    pending_confirmations must not be selected here — the caller reserves render
+    budget for whatever this returns, and reserving for a section that then
+    renders nothing is a silent waste. Deriving the answer from the same
+    function the renderer is fed makes that structural rather than documented.
+
+    This derivation argument doesn't fully close the gap on its own: this
+    function partitions the FULL event list, while the renderer (via
+    `make_injection_context`) partitions the POST-FILL subset `greedy_fill`
+    returns, so the two calls to `partition_events` don't see the same input.
+    That only matters because `partition_events`'s pass 1 (`confirmed_subjects`)
+    makes routing set-dependent — dropping or keeping an
+    ASSISTANT_ANSWER_TO_QUESTION event elsewhere in the list can flip whether a
+    different one is suppressed into `pending_confirmations` or not. It's
+    still safe here because a thread of that authority is never selected by
+    this function in the first place (the routing check above sends it to
+    `pending_confirmations` before `active_threads` is ever populated), so the
+    set-dependent part of `partition_events` never bears on what this returns.
+
+    Deliberately NOT exported from injection/__init__.py: it is private API so
+    the thread-lifecycle work (THREAD_CLOSE, staleness) can change the signature
+    without a compatibility burden.
+    """
+    return next(iter(partition_events(events)["active_threads"]), None)
+
+
 def _subject_of(event) -> str:
     """Best-effort subject extraction from an event payload.
 
