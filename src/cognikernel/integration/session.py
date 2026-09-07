@@ -47,6 +47,7 @@ def session_end(
     evidence_content: str | bytes | None = None,
     evidence_source_type: str = "transcript",
     evidence_source_path: str = "",
+    head_sha: str | None = None,
 ) -> dict[str, Any]:
     """Extract events from *transcript* and merge them into the project DB.
 
@@ -103,7 +104,11 @@ def session_end(
                 evidence_content if evidence_content is not None else transcript
             ),
             source_path=evidence_source_path,
-            metadata={"git_diff": bool(git_diff), "delta_mode": delta_mode, "chain_delta": is_delta_store},
+            metadata={
+                "git_diff": bool(git_diff), "delta_mode": delta_mode,
+                "chain_delta": is_delta_store,
+                **({"head_sha": head_sha} if head_sha else {}),
+            },
             prev_evidence_id=prev_ev_id,
         )
         job_id = enqueue_extraction(
@@ -130,6 +135,7 @@ def session_end(
         )
         for event in candidates:
             event.evidence_id = evidence_id
+            event.captured_at_sha = head_sha
 
         with get_connection(db_path) as conn:
             ack_stage(conn, job_id, "PARSED", output_ref=f"events:{len(candidates)}")
@@ -187,6 +193,7 @@ def session_capture(
     git_diff: str | None = None,
     evidence_source_type: str = "jsonl_transcript",
     evidence_source_path: str = "",
+    head_sha: str | None = None,
 ) -> dict[str, Any]:
     """Store evidence + enqueue extraction job. Returns immediately without extracting.
 
@@ -203,6 +210,12 @@ def session_capture(
     (source_type='git_diff') and linked via the transcript evidence's metadata
     so the worker can pass it to extraction + the symbol graph. (Gamma
     post-mortem F5: the diff content used to be silently dropped.)
+
+    `head_sha` (T-103 / #13), when provided, rides the same evidence metadata
+    dict as git_diff_evidence_id rather than a new column or job field --
+    process_jobs reads it back and stamps every event this session produces
+    with captured_at_sha. None outside a git work tree or on a repo with no
+    commits; never guessed.
 
     Returns {"job_id": int|None, "evidence_id": int|None, "delta_mode": bool}.
     """
@@ -230,6 +243,8 @@ def session_capture(
 
     with get_connection(db_path) as conn:
         metadata: dict[str, Any] = {"chain_delta": is_delta_store}
+        if head_sha:
+            metadata["head_sha"] = head_sha
         if git_diff:
             git_ev_id = store_evidence(
                 conn,
@@ -475,12 +490,18 @@ def process_jobs(
                     cursor = get_cursor(conn, project_id, job.session_id)
                     evidence = load_evidence(conn, job.evidence_id)
                     git_diff: str | None = None
+                    head_sha: str | None = None
                     if evidence is not None:
                         git_eid = (evidence.metadata or {}).get("git_diff_evidence_id")
                         if git_eid:
                             git_ev = load_evidence(conn, int(git_eid))
                             if git_ev is not None:
                                 git_diff = git_ev.content.decode("utf-8", errors="replace")
+                        # T-103 (#13): carried from session_capture's evidence
+                        # metadata, set once here and reused for every event
+                        # this job produces (all events in a job share one
+                        # capture -> one commit).
+                        head_sha = (evidence.metadata or {}).get("head_sha")
 
                 raw = full_bytes.decode("utf-8", errors="replace")
                 extraction_slice, new_line_count, new_anchor = slice_jsonl_for_extraction(
@@ -504,6 +525,7 @@ def process_jobs(
                 )
                 for event in candidates:
                     event.evidence_id = job.evidence_id
+                    event.captured_at_sha = head_sha
 
                 with get_connection(db_path) as conn:
                     ack_stage(conn, job.id, "PARSED", output_ref=f"events:{len(candidates)}")

@@ -205,16 +205,26 @@ def apply_supersession(
     conn: sqlite3.Connection,
     new_event_id: int,
     superseded_ids: list[int],
+    reason: str | None = None,
 ) -> int:
     """Mark each superseded event as replaced by new_event_id. Returns count updated.
 
     Routes through set_superseded_by so a mutual match (new_event_id already
     superseded by one of superseded_ids) is refused rather than forming a
     cycle that would drop both events out of every live query.
+
+    `reason` (T-103 / #13) applies to every id in this call — one fixed
+    vocabulary value from storage.events.SUPERSEDE_REASONS (e.g. "lexical",
+    "subject_key"), for the debugger. Defaults to None so existing callers
+    that pre-date per-reason attribution are unaffected. A single call's
+    candidates can span more than one matching mechanism (see
+    find_superseded(with_reasons=True)); callers that need per-id attribution
+    should group by reason and call this once per group, as execute_merge
+    does, rather than passing one reason for a mixed batch.
     """
     return sum(
         1 for old_id in superseded_ids
-        if set_superseded_by(conn, old_id, new_event_id)
+        if set_superseded_by(conn, old_id, new_event_id, reason=reason)
     )
 
 
@@ -300,7 +310,8 @@ def find_superseded(
     *,
     use_embeddings: bool = True,
     use_cross_encoder: bool = False,
-) -> list[int]:
+    with_reasons: bool = False,
+) -> list[int] | list[tuple[int, str]]:
     """Gated supersession finder (temporal + authority + provenance + lexical/semantic).
 
     Returns ids of active, same-type events that `new_event` supersedes. The
@@ -319,6 +330,19 @@ def find_superseded(
     session's narration collapses to whichever statement was made last,
     instead of every "now doing X" surviving indefinitely to compete for the
     single render slot.
+
+    `with_reasons` (T-103 / #13) is opt-in and additive: default False keeps
+    the original `list[int]` shape every existing caller and test depends on
+    (find_superseded(...) == [], old_id in find_superseded(...), etc. all
+    keep working unmodified). True returns `list[tuple[id, reason]]` instead,
+    attributing EACH candidate to the specific mechanism that matched it —
+    cross_encoder > semantic > lexical > subject_key, in the same precedence
+    the boolean OR below already evaluates, so this never changes WHICH ids
+    are returned, only what execute_merge can additionally record about them.
+    Cross-type (F1) matches are always "subject_key" — it's the same
+    predicate as the same-type case, just applied across the choice family,
+    and `THREAD_OPEN` matches are always "thread_recency", since no topical
+    predicate ran for them at all.
     """
     if new_event.event_type not in _SUPERSESSION_TYPES:
         return []
@@ -416,6 +440,7 @@ def find_superseded(
     thread_scoped = new_event.event_type in _THREAD_SESSION_SCOPED_TYPES
 
     superseded: list[int] = []
+    reasons: dict[int, str] = {}
     for row in rows:
         # Provenance gate (E2): only supersede across a DIFFERENT transcript. A
         # match within the same evidence is a duplicate capture of one statement
@@ -464,16 +489,33 @@ def find_superseded(
             # "this is an earlier statement from the same session's narration
             # that the new one supersedes."
             superseded.append(row["id"])
+            reasons[row["id"]] = "thread_recency"
         elif row["event_type"] == new_event.event_type:
-            # Same type: full predicate — cross-encoder OR semantic OR lexical OR subject.
-            if (row["id"] in sem_matches or row["id"] in xenc_matches
-                    or supersedes(new_desc, cand_desc)):
+            # Same type: full predicate — cross-encoder OR semantic OR lexical OR
+            # subject, evaluated in that order so the reason attributed below
+            # (T-103 / #13) matches the most specific mechanism that actually
+            # fired without changing which candidates match (identical to the
+            # single combined `supersedes()` OR this replaces).
+            reason: str | None = None
+            if row["id"] in xenc_matches:
+                reason = "cross_encoder"
+            elif row["id"] in sem_matches:
+                reason = "semantic"
+            elif descriptions_overlap(new_desc, cand_desc):
+                reason = "lexical"
+            elif subject_supersedes(new_desc, cand_desc):
+                reason = "subject_key"
+            if reason is not None:
                 superseded.append(row["id"])
+                reasons[row["id"]] = reason
         else:
             # Cross type (F1): require the stronger structural signal — same derived
             # subject + Jaccard floor. Lexical-overlap-only / semantic-only is NOT
             # enough across types, to protect precision.
             if subject_supersedes(new_desc, cand_desc):
                 superseded.append(row["id"])
+                reasons[row["id"]] = "subject_key"
 
+    if with_reasons:
+        return [(sid, reasons[sid]) for sid in superseded]
     return superseded

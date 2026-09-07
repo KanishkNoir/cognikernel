@@ -605,6 +605,34 @@ def _warn(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+def _capture_head_sha(project_dir: str) -> str:
+    """`git rev-parse HEAD`, for events.captured_at_sha (T-103 / #13).
+
+    Returns '' (never None, to match the other git_diff_content-style
+    accumulators in stop_main) whenever there is no sha to anchor to — no
+    work tree, or a repo with zero commits (`rev-parse HEAD` then fails with
+    "ambiguous argument 'HEAD'"). Both are the ORDINARY, expected case and
+    stay silent, exactly like the git-diff call beside this one: no sha is
+    not a failure.
+
+    An exception (git missing, a timeout, a permission error) is a genuine
+    anomaly and DOES warn — a silently missing sha here must not read the
+    same as "there was no commit" (DoD #4).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", project_dir, "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        return ""
+    except Exception as exc:
+        _warn(f"cognikernel hook-stop: git rev-parse HEAD failed unexpectedly "
+              f"(captured_at_sha will be missing for this session): {exc}")
+        return ""
+
+
 def stop_main() -> None:
     payload = _read_payload()
     session_id = payload.get("session_id", "")
@@ -642,6 +670,8 @@ def stop_main() -> None:
     except Exception:
         pass
 
+    head_sha = _capture_head_sha(project_dir)
+
     # I4/I7c: capture (fast, evidence+enqueue) then a SYNCHRONOUS time-budgeted
     # drain. Detached workers are useless under Claude Code on Windows — the
     # hook's Job Object kills the whole tree at hook exit (after any liveness
@@ -654,6 +684,8 @@ def stop_main() -> None:
         sys.executable, "-m", "cognikernel", "capture",
         str(project_path), str(jsonl_path), "--auto-session-id", "--no-spawn",
     ]
+    if head_sha:
+        cmd += ["--head-sha", head_sha]
     git_diff_file = None
     if git_diff_content:
         try:

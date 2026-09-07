@@ -45,6 +45,14 @@ class Event:
     # '' = derivation found no key. Computed at merge time (the single mint
     # choke point) and lazily backfilled for pre-016 rows.
     decision_key: str | None = None
+    # T-103 (#13): the commit this claim was captured against, set once at
+    # first INSERT from the Stop hook's `git rev-parse HEAD` (via raw_evidence
+    # metadata -> session.py -> this field, never re-derived inside storage/
+    # delta). None outside a git work tree, on a repo with no commits, or for
+    # any pre-021 row -- never backfilled with a guess (021's own migration
+    # note: a guessed sha would make future replay confidently wrong rather
+    # than honestly bounded).
+    captured_at_sha: str | None = None
 
     def __post_init__(self) -> None:
         if self.event_type not in VALID_EVENT_TYPES:

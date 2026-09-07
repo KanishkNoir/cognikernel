@@ -23,6 +23,21 @@ MAX_EVENT_WEIGHT: float = 5.0
 # of truth — delta.decay imports this (it previously carried its own copy).
 ARCHIVE_THRESHOLD: float = 0.05
 
+# T-103 (#13): fixed vocabulary for events.supersede_reason -- for the
+# debugger ("why was this superseded?"), never free text. "semantic" covers
+# the pure-cosine axis in delta.supersede.find_superseded, which the original
+# design note for this column didn't enumerate separately from lexical/
+# cross_encoder; "decision_key" is reserved for the day the read-time
+# decision_key consolidation (migration 016) becomes a write-time
+# supersession instead of a projection-time reconciliation -- no call site
+# emits it today. Soft vocabulary: an unrecognized value logs a WARNING but
+# is still written, matching this module's fail-open posture (losing
+# attribution precision is acceptable; losing a session is not).
+SUPERSEDE_REASONS: frozenset[str] = frozenset({
+    "lexical", "subject_key", "semantic", "cross_encoder",
+    "cross_type_priority", "decision_key",
+})
+
 
 # ── writes ───────────────────────────────────────────────────────────────────
 
@@ -36,8 +51,9 @@ def insert_event(conn: sqlite3.Connection, event: Event) -> int:
             """
             INSERT INTO events
                 (project_id, session_id, created_at, event_type, payload,
-                 content_hash, weight, mention_count, evidence_id, decision_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 content_hash, weight, mention_count, evidence_id, decision_key,
+                 captured_at_sha)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.project_id,
@@ -50,6 +66,7 @@ def insert_event(conn: sqlite3.Connection, event: Event) -> int:
                 event.mention_count,
                 event.evidence_id,
                 event.decision_key,
+                event.captured_at_sha,
             ),
         )
         row_id = cursor.lastrowid  # type: ignore[assignment]
@@ -104,7 +121,12 @@ def insert_event(conn: sqlite3.Connection, event: Event) -> int:
 _MAX_CYCLE_WALK: int = 10_000
 
 
-def set_superseded_by(conn: sqlite3.Connection, event_id: int, by_id: int) -> bool:
+def set_superseded_by(
+    conn: sqlite3.Connection,
+    event_id: int,
+    by_id: int,
+    reason: str | None = None,
+) -> bool:
     """Point event_id at by_id as its replacement, guarding against cycles.
 
     Refuses a self-link (event_id == by_id) and refuses if event_id is
@@ -142,8 +164,20 @@ def set_superseded_by(conn: sqlite3.Connection, event_id: int, by_id: int) -> bo
     up in, rather than reading identically to a successful one (DoD #4 —
     silence must not read as success).
 
+    `reason` (T-103 / #13) names which gate fired -- see SUPERSEDE_REASONS
+    for the fixed vocabulary the debugger expects. An unrecognized value is
+    still written (fail-open) but logged, since a typo'd reason silently
+    breaking debugger attribution is exactly the kind of degradation that
+    must not read as success.
+
     Returns True if the link was written, False if guarded off.
     """
+    if reason is not None and reason not in SUPERSEDE_REASONS:
+        _log.warning(
+            "set_superseded_by: reason %r is not in the fixed vocabulary %s "
+            "-- writing it anyway (fail-open), but the debugger won't "
+            "recognize it", reason, sorted(SUPERSEDE_REASONS),
+        )
     if event_id == by_id:
         _log.warning(
             "set_superseded_by: refused self-link (event %s)", event_id
@@ -178,8 +212,12 @@ def set_superseded_by(conn: sqlite3.Connection, event_id: int, by_id: int) -> bo
             if cur is None:
                 break
         conn.execute(
-            "UPDATE events SET superseded_by = ? WHERE id = ?",
-            (by_id, event_id),
+            """
+            UPDATE events
+            SET superseded_by = ?, superseded_at = ?, supersede_reason = ?
+            WHERE id = ?
+            """,
+            (by_id, int(time.time() * 1000), reason, event_id),
         )
         return True
     except BaseException:
@@ -188,14 +226,22 @@ def set_superseded_by(conn: sqlite3.Connection, event_id: int, by_id: int) -> bo
         raise
 
 
-def mark_superseded(conn: sqlite3.Connection, event_id: int, by_id: int) -> None:
+def mark_superseded(
+    conn: sqlite3.Connection,
+    event_id: int,
+    by_id: int,
+    reason: str | None = None,
+) -> None:
     """Record that event_id has been replaced by by_id. Both rows are kept."""
-    set_superseded_by(conn, event_id, by_id)
+    set_superseded_by(conn, event_id, by_id, reason=reason)
     conn.commit()
 
 
 def mark_archived(conn: sqlite3.Connection, event_id: int) -> None:
-    conn.execute("UPDATE events SET archived = 1 WHERE id = ?", (event_id,))
+    conn.execute(
+        "UPDATE events SET archived = 1, archived_at = ? WHERE id = ?",
+        (int(time.time() * 1000), event_id),
+    )
     conn.commit()
 
 
@@ -354,4 +400,5 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         superseded_by=row["superseded_by"],
         archived=bool(row["archived"]),
         decision_key=row["decision_key"] if "decision_key" in keys else None,
+        captured_at_sha=row["captured_at_sha"] if "captured_at_sha" in keys else None,
     )
