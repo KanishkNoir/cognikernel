@@ -325,3 +325,64 @@ class TestOrphanRecovery:
         n = recover_orphaned_jobs(conn, pid_alive=lambda pid: True)
         assert n == 0
         assert get_job(conn, job.id).state == "claimed"
+
+
+class TestHeadShaEndToEnd:
+    """T-103 (#13): the REAL plumbing — session_capture(head_sha=...) carries
+    it through raw_evidence.metadata, process_jobs reads it back, and
+    execute_merge stamps it onto every event this session produces. The
+    hooks-level test (test_hooks.py::TestCaptureHeadSha) proves the sha gets
+    computed; the merge-level test (test_merge.py) proves execute_merge
+    stamps whatever Event.captured_at_sha it's handed. Neither proves the
+    wire between session_capture and process_jobs actually carries the value
+    — this does, with no mocks, through the real queue."""
+
+    def test_head_sha_reaches_stored_events_via_the_real_queue(self, tmp_path):
+        project_path = _make_project(tmp_path)
+        from cognikernel.integration.session import session_capture, process_jobs
+        from cognikernel.config import Config
+
+        raw = _jsonl(3)
+        sha = "c" * 40
+        result = session_capture(
+            str(project_path), "test-headsha", raw, head_sha=sha,
+        )
+        assert result["job_id"] is not None
+
+        summary = process_jobs(str(project_path))
+        assert summary["processed"] == 1
+        assert summary["failed"] == 0
+
+        config = Config.load(project_path=str(project_path))
+        pid = hash_project_path(str(project_path))
+        db_path = get_db_path(config, pid)
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                "SELECT captured_at_sha FROM events WHERE project_id = ?", (pid,)
+            ).fetchall()
+        assert rows, "no events were produced — the fixture didn't extract anything"
+        assert all(r["captured_at_sha"] == sha for r in rows), rows
+
+    def test_no_head_sha_leaves_captured_at_sha_null(self, tmp_path):
+        """The default path (no head_sha passed) must not silently invent
+        one — this is what a capture outside a git work tree looks like."""
+        project_path = _make_project(tmp_path)
+        from cognikernel.integration.session import session_capture, process_jobs
+        from cognikernel.config import Config
+
+        raw = _jsonl(3)
+        result = session_capture(str(project_path), "test-nosha", raw)
+        assert result["job_id"] is not None
+
+        summary = process_jobs(str(project_path))
+        assert summary["processed"] == 1
+
+        config = Config.load(project_path=str(project_path))
+        pid = hash_project_path(str(project_path))
+        db_path = get_db_path(config, pid)
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                "SELECT captured_at_sha FROM events WHERE project_id = ?", (pid,)
+            ).fetchall()
+        assert rows, "no events were produced — the fixture didn't extract anything"
+        assert all(r["captured_at_sha"] is None for r in rows), rows

@@ -84,3 +84,49 @@ class TestCrashReplayNoDrift:
         assert _event_stats(project.db) == baseline
         with get_connection(project.db) as conn:
             assert get_job(conn, dl_job).state == "completed"
+
+
+class TestCrashReplayPreservesHeadSha:
+    """T-103 (#13): captured_at_sha must survive a crash+replay cycle exactly
+    like every other event field the provenance guard already protects — a
+    replay that silently dropped or altered it would make future drift
+    detection trust a commit anchor that was never actually re-verified.
+    """
+
+    def test_replayed_evidence_keeps_the_original_sha(self, project, jsonl) -> None:
+        from cognikernel.integration.session import process_jobs, session_capture
+
+        sha = "d" * 40
+        raw = jsonl(6)
+        job_id = session_capture(project.path, "sess-orig", raw, head_sha=sha)["job_id"]
+        assert job_id is not None
+        assert process_jobs(project.path)["processed"] >= 1
+
+        with get_connection(project.db) as conn:
+            shas_before = [
+                r["captured_at_sha"]
+                for r in conn.execute("SELECT captured_at_sha FROM events").fetchall()
+            ]
+        assert shas_before, "first pass should have created events"
+        assert all(s == sha for s in shas_before)
+
+        # Re-queue the SAME evidence as a fresh job — the crash-recovery path.
+        # Its raw_evidence row (and therefore its metadata.head_sha) is
+        # untouched; only a NEW job is queued against it.
+        with get_connection(project.db) as conn:
+            evidence_id = get_job(conn, job_id).evidence_id
+            replay_job = enqueue_extraction(
+                conn, project.pid, "sess-replay", evidence_id, "extract.transcript"
+            )
+        replay_summary = process_jobs(project.path)
+        assert replay_summary["failed"] == 0
+
+        with get_connection(project.db) as conn:
+            shas_after = [
+                r["captured_at_sha"]
+                for r in conn.execute("SELECT captured_at_sha FROM events").fetchall()
+            ]
+        # The provenance guard makes the replay a no-op (proven by
+        # TestCrashReplayNoDrift above) — same events, same shas, not lost,
+        # not overwritten by a NULL, not duplicated onto a second row.
+        assert shas_after == shas_before
