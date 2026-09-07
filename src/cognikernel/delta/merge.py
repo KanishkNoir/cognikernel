@@ -41,6 +41,7 @@ from cognikernel.storage.events import (
     MAX_EVENT_WEIGHT,
     WEIGHT_INCREMENT_ON_DEDUP,
     insert_extraction_failure,
+    set_superseded_by,
 )
 from cognikernel.storage.quality_telemetry import record_verdict
 
@@ -481,17 +482,11 @@ def _cross_type_dedup(
         peer_priority = _DEDUP_PRIORITY[row["event_type"]]
         if new_priority < peer_priority:
             # New event wins — supersede the peer
-            conn.execute(
-                "UPDATE events SET superseded_by = ? WHERE id = ?",
-                (new_event_id, row["id"]),
-            )
-            superseded += 1
+            if set_superseded_by(conn, row["id"], new_event_id):
+                superseded += 1
         else:
             # Peer wins — mark new event as superseded by peer
-            conn.execute(
-                "UPDATE events SET superseded_by = ? WHERE id = ?",
-                (row["id"], new_event_id),
-            )
+            set_superseded_by(conn, new_event_id, row["id"])
 
     return superseded
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 
@@ -9,6 +10,8 @@ import time
 # layering fix). Re-exported here for backward compatibility — existing
 # `from cognikernel.storage.events import Event` call sites are unaffected.
 from cognikernel.model import Event, VALID_EVENT_TYPES  # noqa: F401  (re-export)
+
+_log = logging.getLogger("cognikernel.storage")
 
 # Weight boost applied to an event that already exists (dedup hit).
 WEIGHT_INCREMENT_ON_DEDUP: float = 0.15
@@ -95,12 +98,99 @@ def insert_event(conn: sqlite3.Connection, event: Event) -> int:
         return row["id"]
 
 
+# Hard cap on the chain walk in set_superseded_by's cycle check. superseded_by
+# chains are expected to be short (a handful of restatements); this is a safety
+# bound against a pathological pre-existing chain, not a realistic depth.
+_MAX_CYCLE_WALK: int = 10_000
+
+
+def set_superseded_by(conn: sqlite3.Connection, event_id: int, by_id: int) -> bool:
+    """Point event_id at by_id as its replacement, guarding against cycles.
+
+    Refuses a self-link (event_id == by_id) and refuses if event_id is
+    reachable by following by_id's superseded_by chain — a cycle of ANY
+    length (a direct two-cycle A<->B, or a longer one A->B->C->A). Every live
+    query filters `superseded_by IS NULL`, so a cycle silently drops every
+    row in it out of memory even though none of them was ever actually
+    replaced by something outside the cycle.
+
+    ATOMICITY. The chain walk (reads) and the write must be one atomic unit,
+    or two concurrent callers can each read "no cycle" before either commits,
+    then both write — closing exactly the cycle the walk exists to prevent.
+    Python's sqlite3 module does not take SQLite's write lock until the
+    first DML statement, so a plain SELECT-then-UPDATE has a real gap: this
+    was measured to form a two-cycle in >80% of iterations under genuine
+    concurrent access (tests/reliability/test_supersession_race.py) before
+    this fix. When no transaction is already open on `conn`, this function
+    opens one with `BEGIN IMMEDIATE` before the walk, which takes SQLite's
+    RESERVED lock up front — a second connection attempting the same then
+    blocks (up to `busy_timeout`) rather than racing, so its own walk is
+    guaranteed to see this call's write once it proceeds. When `conn`
+    already has a transaction open (the mid-merge case: delta.merge has
+    already written earlier in this same transaction), that transaction
+    already holds the lock for its whole duration, so no extra BEGIN is
+    needed or possible.
+
+    Does not commit — callers inside a larger transaction (delta.merge,
+    delta.supersede) rely on that; `mark_superseded` below commits for
+    standalone callers. A `BEGIN IMMEDIATE` opened here is left open for
+    that same caller-commits contract; it is never committed inside this
+    function.
+
+    A guarded-off write is not silent: it logs at WARNING so a refused
+    supersession is diagnosable from the same log a hook failure would show
+    up in, rather than reading identically to a successful one (DoD #4 —
+    silence must not read as success).
+
+    Returns True if the link was written, False if guarded off.
+    """
+    if event_id == by_id:
+        _log.warning(
+            "set_superseded_by: refused self-link (event %s)", event_id
+        )
+        return False
+
+    opened_transaction = False
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+        opened_transaction = True
+
+    try:
+        cur = by_id
+        seen: set[int] = set()
+        for _ in range(_MAX_CYCLE_WALK):
+            if cur == event_id:
+                _log.warning(
+                    "set_superseded_by: refused — event %s -> %s would close "
+                    "a supersession cycle (event %s is reachable from %s)",
+                    event_id, by_id, event_id, by_id,
+                )
+                if opened_transaction:
+                    conn.rollback()  # nothing written; don't hold the lock
+                return False
+            if cur in seen:
+                break  # walked into a pre-existing cycle that doesn't include event_id
+            seen.add(cur)
+            row = conn.execute(
+                "SELECT superseded_by FROM events WHERE id = ?", (cur,)
+            ).fetchone()
+            cur = row["superseded_by"] if row is not None else None
+            if cur is None:
+                break
+        conn.execute(
+            "UPDATE events SET superseded_by = ? WHERE id = ?",
+            (by_id, event_id),
+        )
+        return True
+    except BaseException:
+        if opened_transaction:
+            conn.rollback()
+        raise
+
+
 def mark_superseded(conn: sqlite3.Connection, event_id: int, by_id: int) -> None:
     """Record that event_id has been replaced by by_id. Both rows are kept."""
-    conn.execute(
-        "UPDATE events SET superseded_by = ? WHERE id = ?",
-        (by_id, event_id),
-    )
+    set_superseded_by(conn, event_id, by_id)
     conn.commit()
 
 

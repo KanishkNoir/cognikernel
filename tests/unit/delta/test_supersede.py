@@ -654,3 +654,29 @@ class TestApplySupersession:
         for old_id in ids:
             row = conn.execute("SELECT superseded_by FROM events WHERE id = ?", (old_id,)).fetchone()
             assert row["superseded_by"] == new_id
+
+    def test_refuses_two_cycle(self, conn: sqlite3.Connection) -> None:
+        """A already superseded B; applying the reverse (B supersedes A) must
+        not overwrite A's link — that would form a cycle where BOTH events
+        drop out of every live query (superseded_by IS NULL filter)."""
+        a = seed_event(conn, content_hash="a")
+        b = seed_event(conn, content_hash="b")
+        apply_supersession(conn, a, [b])  # b.superseded_by = a
+        conn.commit()
+
+        count = apply_supersession(conn, b, [a])  # attempt a.superseded_by = b
+        conn.commit()
+
+        assert count == 0
+        row_a = conn.execute("SELECT superseded_by FROM events WHERE id = ?", (a,)).fetchone()
+        row_b = conn.execute("SELECT superseded_by FROM events WHERE id = ?", (b,)).fetchone()
+        assert row_a["superseded_by"] is None
+        assert row_b["superseded_by"] == a
+
+    def test_refuses_self_supersession(self, conn: sqlite3.Connection) -> None:
+        a = seed_event(conn, content_hash="a")
+        count = apply_supersession(conn, a, [a])
+        conn.commit()
+        assert count == 0
+        row = conn.execute("SELECT superseded_by FROM events WHERE id = ?", (a,)).fetchone()
+        assert row["superseded_by"] is None

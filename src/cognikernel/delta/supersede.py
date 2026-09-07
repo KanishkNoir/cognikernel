@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 # extraction<->delta layering cycle. Re-exported here for backward compatibility
 # (delta.__init__ exports derive_subject; storage.fts imports STOPWORDS).
 from cognikernel.utils.subject import STOPWORDS, derive_subject  # noqa: F401  (re-export)
+from cognikernel.storage.events import set_superseded_by
 
 if TYPE_CHECKING:
     from cognikernel.storage.events import Event
@@ -180,13 +181,16 @@ def apply_supersession(
     new_event_id: int,
     superseded_ids: list[int],
 ) -> int:
-    """Mark each superseded event as replaced by new_event_id. Returns count updated."""
-    for old_id in superseded_ids:
-        conn.execute(
-            "UPDATE events SET superseded_by = ? WHERE id = ?",
-            (new_event_id, old_id),
-        )
-    return len(superseded_ids)
+    """Mark each superseded event as replaced by new_event_id. Returns count updated.
+
+    Routes through set_superseded_by so a mutual match (new_event_id already
+    superseded by one of superseded_ids) is refused rather than forming a
+    cycle that would drop both events out of every live query.
+    """
+    return sum(
+        1 for old_id in superseded_ids
+        if set_superseded_by(conn, old_id, new_event_id)
+    )
 
 
 # ── gated supersession: temporal + authority + provenance, with optional semantic ─
