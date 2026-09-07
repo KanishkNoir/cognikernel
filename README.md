@@ -414,7 +414,8 @@ tests/
 
 ## Status
 
-Schema **v20** (includes the Codex cross-platform capture and per-session write
-tracking). Architecture contracts: 3 kept / 0 broken. CI gate: lint + full suite
-on Ubuntu (3.11/3.12) and Windows. See `CONTRIBUTING.md` for the Definition of
-Done that gates every change.
+Schema **v21** (adds supersession/archival timestamps and a commit anchor for
+belief-history replay, on top of the Codex cross-platform capture and
+per-session write tracking). Architecture contracts: 4 kept / 0 broken. CI
+gate: lint + full suite on Ubuntu (3.11/3.12) and Windows. See
+`CONTRIBUTING.md` for the Definition of Done that gates every change.
