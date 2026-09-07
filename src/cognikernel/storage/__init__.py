@@ -25,6 +25,7 @@ from cognikernel.storage.events import (
     insert_extraction_failure,
     mark_archived,
     mark_superseded,
+    set_superseded_by,
     update_weight,
 )
 from cognikernel.storage.evidence import (
@@ -102,6 +103,7 @@ __all__ = [
     "get_extraction_failures",
     "get_max_event_id",
     "mark_superseded",
+    "set_superseded_by",
     "mark_archived",
     "update_weight",
     "insert_extraction_failure",
