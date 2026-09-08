@@ -30,12 +30,15 @@ ARCHIVE_THRESHOLD: float = 0.05
 # cross_encoder; "decision_key" is reserved for the day the read-time
 # decision_key consolidation (migration 016) becomes a write-time
 # supersession instead of a projection-time reconciliation -- no call site
-# emits it today. Soft vocabulary: an unrecognized value logs a WARNING but
+# emits it today. "thread_recency" is the THREAD_OPEN path (#21): no topical
+# predicate runs there at all, so attributing those to "lexical" or
+# "subject_key" would be a lie the debugger then repeats. Soft vocabulary:
+# an unrecognized value logs a WARNING but
 # is still written, matching this module's fail-open posture (losing
 # attribution precision is acceptable; losing a session is not).
 SUPERSEDE_REASONS: frozenset[str] = frozenset({
     "lexical", "subject_key", "semantic", "cross_encoder",
-    "cross_type_priority", "decision_key",
+    "cross_type_priority", "decision_key", "thread_recency",
 })
 
 

@@ -405,6 +405,58 @@ class TestExecuteMergeThreadRecency:
         assert row_earlier["superseded_by"] is None
 
 
+    def test_thread_supersession_attributes_a_recognized_reason(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """The THREAD_OPEN path attributes "thread_recency", and that value is
+        part of the fixed vocabulary.
+
+        This exists because it shipped broken: the reason was emitted but never
+        added to SUPERSEDE_REASONS, so every real thread supersession logged
+        "not in the fixed vocabulary -- writing it anyway" and the debugger
+        could not attribute it. Nothing caught it, because the existing
+        vocabulary assertion only covers the DECISION path — a reason is only
+        as good as the call site that emits it, so each call site needs its
+        own check.
+        """
+        import logging
+
+        from cognikernel.storage.events import SUPERSEDE_REASONS
+
+        first = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_reason_a", created_at=1000,
+            payload={"description": "Now writing the parser.",
+                     "authority": "assistant_decided"},
+        )
+        first_id = insert_event(conn, first)
+        later = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_reason_b", created_at=2000,
+            payload={"description": "Now running the suite.",
+                     "authority": "assistant_decided"},
+        )
+
+        logger = logging.getLogger("cognikernel.storage")
+        records: list[logging.LogRecord] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record)
+
+        handler = _Capture()
+        logger.addHandler(handler)
+        try:
+            execute_merge(conn, "sess1", [later])
+        finally:
+            logger.removeHandler(handler)
+
+        row = conn.execute(
+            "SELECT supersede_reason FROM events WHERE id = ?", (first_id,)
+        ).fetchone()
+        assert row["supersede_reason"] == "thread_recency"
+        assert row["supersede_reason"] in SUPERSEDE_REASONS
+        assert not [r for r in records if "fixed vocabulary" in r.getMessage()]
+
+
 class TestExecuteMergeInstructionVsDeferral:
     """T-202a (#20 Defect A), end to end through the real merge path.
 
