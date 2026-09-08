@@ -121,6 +121,28 @@ def _apply_pending(conn: sqlite3.Connection, current: int) -> None:
         )
         try:
             conn.executescript(script)
+        except sqlite3.OperationalError:
+            # T-104 (#14): two connections can both read `current` before either
+            # has applied this file (the read above takes no lock), then race to
+            # apply it -- the LOSER's own DDL collides with the WINNER's
+            # already-committed columns/tables/indexes ("duplicate column name",
+            # "table already exists", ...). Roll back the loser's half-applied
+            # attempt, then check the ACTUAL, current schema_version: if it has
+            # already reached this file's version, someone else genuinely
+            # finished this migration while we were racing them, so this is a
+            # benign no-op, not a failure -- move on to the next pending file.
+            # A real syntax/logic error in the migration itself cannot produce
+            # this outcome, since schema_version only ever advances inside a
+            # migration's own successful, committed transaction.
+            conn.rollback()
+            fresh = int(
+                conn.execute(
+                    "SELECT value FROM meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+            )
+            if fresh >= version:
+                continue
+            raise
         except Exception:
             # On a mid-script failure the BEGIN transaction is left open; roll it
             # back so the partial schema change is discarded and the DB stays at

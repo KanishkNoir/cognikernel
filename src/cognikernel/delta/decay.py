@@ -14,6 +14,7 @@ or re-run does not compound the decay factor.
 from __future__ import annotations
 
 import sqlite3
+import time
 
 # Single source of truth for the archive floor is storage.events; re-exported
 # here for the existing `from cognikernel.delta.decay import ARCHIVE_THRESHOLD`
@@ -64,13 +65,13 @@ def apply_decay_pass(
     result = conn.execute(
         f"""
         UPDATE events
-        SET archived = 1
+        SET archived = 1, archived_at = ?
         WHERE project_id = ?
           AND archived   = 0
           AND weight     < ?
           AND event_type NOT IN ({protected_placeholders})
         """,
-        (project_id, ARCHIVE_THRESHOLD, *_PROTECTED_FROM_ARCHIVE),
+        (int(time.time() * 1000), project_id, ARCHIVE_THRESHOLD, *_PROTECTED_FROM_ARCHIVE),
     )
     archived_count = result.rowcount
 

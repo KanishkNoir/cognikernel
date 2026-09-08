@@ -814,3 +814,151 @@ class TestApplySupersession:
         assert count == 0
         row = conn.execute("SELECT superseded_by FROM events WHERE id = ?", (a,)).fetchone()
         assert row["superseded_by"] is None
+
+
+class TestApplySupersessionReason:
+    """T-103 (#13): supersede_reason + superseded_at, not just superseded_by."""
+
+    def test_reason_and_timestamp_are_written(self, conn: sqlite3.Connection) -> None:
+        old_id = seed_event(conn, content_hash="old-r")
+        new_id = seed_event(conn, content_hash="new-r")
+        before = _now_ms()
+        apply_supersession(conn, new_id, [old_id], reason="lexical")
+        conn.commit()
+        after = _now_ms()
+
+        row = conn.execute(
+            "SELECT supersede_reason, superseded_at FROM events WHERE id = ?", (old_id,)
+        ).fetchone()
+        assert row["supersede_reason"] == "lexical"
+        assert before <= row["superseded_at"] <= after
+
+    def test_default_reason_is_none_backward_compatible(self, conn: sqlite3.Connection) -> None:
+        """Every pre-T-103 call site (and every other test in this file) calls
+        apply_supersession with no reason -- must keep writing NULL, not some
+        new default that would silently change existing behaviour."""
+        old_id = seed_event(conn, content_hash="old-nr")
+        new_id = seed_event(conn, content_hash="new-nr")
+        apply_supersession(conn, new_id, [old_id])
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT supersede_reason FROM events WHERE id = ?", (old_id,)
+        ).fetchone()
+        assert row["supersede_reason"] is None
+
+    def test_unrecognized_reason_is_still_written_but_warns(
+        self, conn: sqlite3.Connection, caplog
+    ) -> None:
+        """Fail-open (#13): a typo'd reason must not block the supersession --
+        losing attribution precision is acceptable, losing the write is not."""
+        import logging
+        old_id = seed_event(conn, content_hash="old-typo")
+        new_id = seed_event(conn, content_hash="new-typo")
+        with caplog.at_level(logging.WARNING, logger="cognikernel.storage"):
+            count = apply_supersession(conn, new_id, [old_id], reason="lexcial")  # typo
+        conn.commit()
+
+        assert count == 1
+        row = conn.execute(
+            "SELECT supersede_reason FROM events WHERE id = ?", (old_id,)
+        ).fetchone()
+        assert row["supersede_reason"] == "lexcial"
+        assert any("not in the fixed vocabulary" in r.message for r in caplog.records)
+
+
+def _now_ms() -> int:
+    import time
+    return int(time.time() * 1000)
+
+
+class TestFindSupersededWithReasons:
+    """T-103 (#13): with_reasons=True attributes each match to the mechanism
+    that actually fired, without changing which ids match (the default
+    list[int] mode's own test suite in TestFindSuperseded above proves that
+    independently and must keep passing unmodified)."""
+
+    def test_default_mode_unchanged_shape(self, conn: sqlite3.Connection) -> None:
+        old_id = seed_event(
+            conn, content_hash="h_old", created_at=1000,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_new", created_at=2000,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        result = find_superseded(conn, new)
+        assert result == [old_id]
+        assert isinstance(result[0], int)  # not a tuple — default shape is untouched
+
+    def test_lexical_match_attributed_as_lexical(self, conn: sqlite3.Connection) -> None:
+        old_id = seed_event(
+            conn, content_hash="h_old2", created_at=1000,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_new2", created_at=2000,
+            payload={"description": "Use SQLite for local storage", "authority": "assistant_decided"},
+        )
+        result = find_superseded(conn, new, use_embeddings=False, with_reasons=True)
+        assert result == [(old_id, "lexical")]
+
+    def test_subject_key_match_attributed_as_subject_key(self, conn: sqlite3.Connection) -> None:
+        """Deterministic rather than relying on natural-language fixture text
+        happening to clear descriptions_overlap's Jaccard/Levenshtein floor
+        but not subject_supersedes' — mock the two predicates directly so the
+        attribution logic itself is under test, not the calibration of the
+        similarity thresholds it depends on."""
+        old_id = seed_event(
+            conn, content_hash="h_old3", created_at=1000,
+            payload={"description": "old text", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_new3", created_at=2000,
+            payload={"description": "new text", "authority": "assistant_decided"},
+        )
+        with patch("cognikernel.delta.supersede.descriptions_overlap", return_value=False), \
+             patch("cognikernel.delta.supersede.subject_supersedes", return_value=True):
+            result = find_superseded(conn, new, use_embeddings=False, with_reasons=True)
+        assert result == [(old_id, "subject_key")]
+
+    def test_lexical_takes_precedence_over_subject_key_when_both_fire(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """lexical is checked before subject_key in the same-type branch —
+        when a pair would satisfy both predicates, the more specific/cheaper
+        one wins the attribution, matching the order the code evaluates."""
+        old_id = seed_event(
+            conn, content_hash="h_old3b", created_at=1000,
+            payload={"description": "old text", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_new3b", created_at=2000,
+            payload={"description": "new text", "authority": "assistant_decided"},
+        )
+        with patch("cognikernel.delta.supersede.descriptions_overlap", return_value=True), \
+             patch("cognikernel.delta.supersede.subject_supersedes", return_value=True):
+            result = find_superseded(conn, new, use_embeddings=False, with_reasons=True)
+        assert result == [(old_id, "lexical")]
+
+    def test_cross_type_f1_match_attributed_as_subject_key(self, conn: sqlite3.Connection) -> None:
+        """F1: a CONSTRAINT_SOFT restated as a DECISION on the same subject.
+        Always attributed subject_key — it's the identical predicate as the
+        same-type case, just applied across the choice family."""
+        old_id = seed_event(
+            conn, content_hash="h_old4", created_at=1000, event_type="CONSTRAINT_SOFT",
+            payload={"description": "passwords hashed with bcrypt", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_new4", created_at=2000, event_type="DECISION",
+            payload={"description": "switch to argon2id for password hashing", "authority": "assistant_decided"},
+        )
+        result = find_superseded(conn, new, use_embeddings=False, with_reasons=True)
+        if old_id in [r[0] for r in result]:
+            matched = next(r for r in result if r[0] == old_id)
+            assert matched[1] == "subject_key"
+
+    def test_no_match_returns_empty_list_either_shape(self, conn: sqlite3.Connection) -> None:
+        new = make_event(content_hash="h_nomatch", payload={"description": "totally unrelated"})
+        assert find_superseded(conn, new, use_embeddings=False) == []
+        assert find_superseded(conn, new, use_embeddings=False, with_reasons=True) == []

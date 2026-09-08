@@ -188,10 +188,22 @@ def execute_merge(
                 # Gated supersession is the baseline (temporal + authority +
                 # provenance). `embed_events` (config.embedding_enabled) still
                 # controls whether the semantic axis fires for auto-supersession.
-                sup_ids = find_superseded(
-                    conn, event, use_embeddings=embed_events, use_cross_encoder=use_cross_encoder
+                # with_reasons=True (T-103 / #13): a single find_superseded call
+                # can span more than one matching mechanism (a cross_encoder hit
+                # here, a lexical hit there), so group by reason and issue one
+                # apply_supersession per group — each old event gets the reason
+                # that ACTUALLY matched it, not one label for a mixed batch.
+                sup = find_superseded(
+                    conn, event, use_embeddings=embed_events,
+                    use_cross_encoder=use_cross_encoder, with_reasons=True,
                 )
-                stats["superseded"] += apply_supersession(conn, row_id, sup_ids)
+                by_reason: dict[str, list[int]] = {}
+                for sup_id, sup_reason in sup:
+                    by_reason.setdefault(sup_reason, []).append(sup_id)
+                for sup_reason, sup_ids in by_reason.items():
+                    stats["superseded"] += apply_supersession(
+                        conn, row_id, sup_ids, reason=sup_reason
+                    )
                 stats["superseded"] += _cross_type_dedup(conn, row_id, event)
 
                 if event.event_type == "COMPONENT_STATUS":
@@ -264,8 +276,8 @@ def _insert_or_update(
             INSERT INTO events
                 (project_id, session_id, created_at, event_type,
                  payload, content_hash, weight, mention_count, evidence_id,
-                 decision_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 decision_key, captured_at_sha)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.project_id,
@@ -278,6 +290,7 @@ def _insert_or_update(
                 event.mention_count,
                 event.evidence_id,
                 event.decision_key,
+                event.captured_at_sha,
             ),
         )
         row_id = cursor.lastrowid  # type: ignore[assignment]
@@ -482,11 +495,11 @@ def _cross_type_dedup(
         peer_priority = _DEDUP_PRIORITY[row["event_type"]]
         if new_priority < peer_priority:
             # New event wins — supersede the peer
-            if set_superseded_by(conn, row["id"], new_event_id):
+            if set_superseded_by(conn, row["id"], new_event_id, reason="cross_type_priority"):
                 superseded += 1
         else:
             # Peer wins — mark new event as superseded by peer
-            set_superseded_by(conn, new_event_id, row["id"])
+            set_superseded_by(conn, new_event_id, row["id"], reason="cross_type_priority")
 
     return superseded
 

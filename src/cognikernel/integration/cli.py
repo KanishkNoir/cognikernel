@@ -105,6 +105,14 @@ def main() -> None:
         metavar="FILE",
         help="Optional path to a git-diff file to augment extraction",
     )
+    p_extract.add_argument(
+        "--head-sha",
+        metavar="SHA",
+        default=None,
+        help="Commit this session's transcript was captured against (T-103 / #13) "
+             "-- stamped on every newly-inserted event as captured_at_sha. "
+             "Omit outside a git work tree; never guessed.",
+    )
 
     # ── capture ───────────────────────────────────────────────────────────────
     p_capture = sub.add_parser(
@@ -120,6 +128,11 @@ def main() -> None:
                            help="Transcript is a Claude Code JSONL file (default: yes for capture)")
     p_capture.add_argument("--git-diff", metavar="FILE",
                            help="Optional path to a git-diff file")
+    p_capture.add_argument("--head-sha", metavar="SHA", default=None,
+                           help="Commit this session's transcript was captured against "
+                                "(T-103 / #13) -- carried via raw_evidence metadata to "
+                                "captured_at_sha at merge time. Omit outside a git work "
+                                "tree; never guessed.")
     p_capture.add_argument("--no-spawn", action="store_true",
                            help="Store evidence + enqueue only; do not spawn the worker subprocess")
 
@@ -999,6 +1012,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         evidence_content=raw_input,
         evidence_source_type=evidence_source_type,
         evidence_source_path="" if args.transcript_file == "-" else str(Path(args.transcript_file).resolve()),
+        head_sha=getattr(args, "head_sha", None),
     )
     print(json.dumps(stats, indent=2))
 
@@ -1027,6 +1041,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
         git_diff=git_diff,
         evidence_source_type="jsonl_transcript",
         evidence_source_path=str(Path(args.transcript_file).resolve()),
+        head_sha=getattr(args, "head_sha", None),
     )
     print(json.dumps(result))
 

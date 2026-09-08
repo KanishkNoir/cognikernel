@@ -413,18 +413,26 @@ class TestMigration021BeliefHistory:
         )
         assert version_before == 20
 
-        event_id = insert_event(
-            conn,
-            Event(
-                project_id="proj1", session_id="sess1", event_type="CONSTRAINT_HARD",
-                payload={"description": "pre-existing constraint"}, content_hash="pre021",
-                weight=2.5, mention_count=3,
+        # Raw SQL insert deliberately, NOT insert_event() -- this simulates a
+        # row written by the application code AS IT EXISTED AT v20, before
+        # captured_at_sha existed as a column. insert_event() today always
+        # writes captured_at_sha (T-103), so calling it here would insert
+        # into a table that doesn't have that column yet and raise.
+        import json as _json
+        cursor = conn.execute(
+            """
+            INSERT INTO events
+                (project_id, session_id, created_at, event_type, payload,
+                 content_hash, weight, mention_count, superseded_by, archived)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
+            """,
+            (
+                "proj1", "sess1", 1700000000000, "CONSTRAINT_HARD",
+                _json.dumps({"description": "pre-existing constraint"}),
+                "pre021", 2.5, 3,
             ),
         )
-        conn.execute(
-            "UPDATE events SET superseded_by = NULL, archived = 0 WHERE id = ?",
-            (event_id,),
-        )
+        event_id = cursor.lastrowid
         conn.commit()
         before_row = dict(
             conn.execute(

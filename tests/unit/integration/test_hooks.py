@@ -289,3 +289,181 @@ def test_hook_posttool_multiedit_updates_symbol_graph_and_write_cache_e2e(
     assert entry is not None
     assert entry.last_write_action == "MultiEdit"
     assert symbol_row is not None  # symbol graph was refreshed for this file
+
+
+# ── T-103 (#13): captured_at_sha ──────────────────────────────────────────────
+
+def _git(args: list[str], cwd: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30,
+    )
+
+
+class TestCaptureHeadSha:
+    """`_capture_head_sha` is the whole of T-103's git-anchoring logic,
+    extracted from stop_main so it's testable without spawning the
+    capture/process-jobs subprocess chain stop_main itself spawns. Three
+    acceptance criteria from #13 map directly to the three tests here."""
+
+    def test_real_repo_with_a_commit_returns_the_sha(self, tmp_path) -> None:
+        from cognikernel.integration.hooks import _capture_head_sha
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(["init", "-q"], str(repo))
+        _git(["config", "user.email", "t@example.com"], str(repo))
+        _git(["config", "user.name", "T"], str(repo))
+        (repo / "f.txt").write_text("x", encoding="utf-8")
+        _git(["add", "."], str(repo))
+        commit = _git(["commit", "-q", "-m", "init"], str(repo))
+        assert commit.returncode == 0, commit.stderr
+        expected = _git(["rev-parse", "HEAD"], str(repo)).stdout.strip()
+
+        sha = _capture_head_sha(str(repo))
+        assert sha == expected
+        assert len(sha) == 40  # a full sha, not an abbreviation
+
+    def test_not_a_git_work_tree_returns_empty_and_does_not_raise(self, tmp_path) -> None:
+        """Acceptance: 'a capture outside a git work tree produces NULL and
+        nothing raises' — verified here, not by inspection."""
+        from cognikernel.integration.hooks import _capture_head_sha
+
+        plain_dir = tmp_path / "not_a_repo"
+        plain_dir.mkdir()
+        assert _capture_head_sha(str(plain_dir)) == ""
+
+    def test_repo_with_zero_commits_returns_empty_and_does_not_raise(self, tmp_path) -> None:
+        """Acceptance: 'a capture in a repo with zero commits produces NULL
+        and nothing raises' — `git rev-parse HEAD` fails with 'ambiguous
+        argument HEAD' on an empty repo; that must not propagate."""
+        from cognikernel.integration.hooks import _capture_head_sha
+
+        repo = tmp_path / "empty_repo"
+        repo.mkdir()
+        init = _git(["init", "-q"], str(repo))
+        assert init.returncode == 0, init.stderr
+
+        assert _capture_head_sha(str(repo)) == ""
+
+    def test_timeout_warns_and_returns_empty_without_raising(self, monkeypatch, tmp_path) -> None:
+        """Acceptance: 'git rev-parse failure/timeout does not delay or fail
+        the Stop hook' + 'the rev-parse failure branch logs at WARNING'."""
+        import cognikernel.integration.hooks as hooks_mod
+
+        def _raise_timeout(*a, **k):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=10)
+
+        monkeypatch.setattr(hooks_mod.subprocess, "run", _raise_timeout)
+        warnings: list[str] = []
+        monkeypatch.setattr(hooks_mod, "_warn", lambda msg: warnings.append(msg))
+
+        sha = hooks_mod._capture_head_sha(str(tmp_path))
+
+        assert sha == ""
+        assert len(warnings) == 1
+        assert "rev-parse" in warnings[0]
+
+    def test_nonzero_exit_is_silent_not_a_warning(self, monkeypatch, tmp_path) -> None:
+        """A non-zero exit (no repo / no commits) is the ORDINARY case and
+        must stay silent — only a genuine exception (git missing, timeout)
+        warns. Conflating the two would make every fresh non-git project
+        noisy on every session end."""
+        import cognikernel.integration.hooks as hooks_mod
+
+        class _FakeResult:
+            returncode = 128
+            stdout = ""
+
+        monkeypatch.setattr(hooks_mod.subprocess, "run", lambda *a, **k: _FakeResult())
+        warnings: list[str] = []
+        monkeypatch.setattr(hooks_mod, "_warn", lambda msg: warnings.append(msg))
+
+        assert hooks_mod._capture_head_sha(str(tmp_path)) == ""
+        assert warnings == []
+
+
+class TestStopMainPassesHeadSha:
+    def test_stop_main_includes_head_sha_flag_when_available(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """stop_main must thread a resolved sha into the capture subprocess
+        command as --head-sha, and must NOT pass the flag at all when no sha
+        is available (an empty --head-sha "" would be a worse signal than
+        omitting the flag — argparse's own default=None already means 'no
+        sha' cleanly)."""
+        import cognikernel.integration.hooks as hooks_mod
+
+        jsonl_dir = tmp_path / ".claude" / "projects" / "proj"
+        jsonl_dir.mkdir(parents=True)
+        session_id = "sess-headsha"
+        (jsonl_dir / f"{session_id}.jsonl").write_text("{}\n", encoding="utf-8")
+        monkeypatch.setattr(hooks_mod.Path, "home", lambda: tmp_path)
+
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+
+        monkeypatch.setattr(
+            hooks_mod, "_read_payload",
+            lambda: {"session_id": session_id, "cwd": str(project_dir)},
+        )
+        monkeypatch.setattr(hooks_mod, "_capture_head_sha", lambda project_dir: "deadbeef" * 5)
+
+        captured_cmds: list[list[str]] = []
+
+        class _FakeCompleted:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def _fake_run(cmd, **kwargs):
+            captured_cmds.append(cmd)
+            return _FakeCompleted()
+
+        monkeypatch.setattr(hooks_mod.subprocess, "run", _fake_run)
+
+        hooks_mod.stop_main()
+
+        capture_cmds = [c for c in captured_cmds if "capture" in c]
+        assert capture_cmds, f"no capture subprocess launched: {captured_cmds}"
+        assert "--head-sha" in capture_cmds[0]
+        idx = capture_cmds[0].index("--head-sha")
+        assert capture_cmds[0][idx + 1] == "deadbeef" * 5
+
+    def test_stop_main_omits_head_sha_flag_when_unavailable(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        import cognikernel.integration.hooks as hooks_mod
+
+        jsonl_dir = tmp_path / ".claude" / "projects" / "proj"
+        jsonl_dir.mkdir(parents=True)
+        session_id = "sess-nosha"
+        (jsonl_dir / f"{session_id}.jsonl").write_text("{}\n", encoding="utf-8")
+        monkeypatch.setattr(hooks_mod.Path, "home", lambda: tmp_path)
+
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+
+        monkeypatch.setattr(
+            hooks_mod, "_read_payload",
+            lambda: {"session_id": session_id, "cwd": str(project_dir)},
+        )
+        monkeypatch.setattr(hooks_mod, "_capture_head_sha", lambda project_dir: "")
+
+        captured_cmds: list[list[str]] = []
+
+        class _FakeCompleted:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def _fake_run(cmd, **kwargs):
+            captured_cmds.append(cmd)
+            return _FakeCompleted()
+
+        monkeypatch.setattr(hooks_mod.subprocess, "run", _fake_run)
+
+        hooks_mod.stop_main()
+
+        capture_cmds = [c for c in captured_cmds if "capture" in c]
+        assert capture_cmds, f"no capture subprocess launched: {captured_cmds}"
+        assert "--head-sha" not in capture_cmds[0]

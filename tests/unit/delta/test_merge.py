@@ -212,6 +212,90 @@ class TestExecuteMergeSupersession:
         row = conn.execute("SELECT superseded_by FROM events WHERE id = ?", (old_id,)).fetchone()
         assert row["superseded_by"] is not None
 
+    def test_supersession_carries_a_reason_from_the_fixed_vocabulary(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """T-103 (#13): execute_merge's find_superseded(with_reasons=True) ->
+        grouped apply_supersession path must actually reach the DB — not
+        just superseded_by, but supersede_reason and superseded_at too."""
+        from cognikernel.storage.events import SUPERSEDE_REASONS
+
+        old = make_event(
+            event_type="DECISION", content_hash="old_reason_hash",
+            payload={"description": "Use SQLite for persistent local storage"},
+        )
+        old_id = insert_event(conn, old)
+        new = make_event(
+            event_type="DECISION", content_hash="new_reason_hash",
+            payload={"description": "Use SQLite for persistent local data storage"},
+        )
+        execute_merge(conn, "sess1", [new])
+
+        row = conn.execute(
+            "SELECT supersede_reason, superseded_at FROM events WHERE id = ?", (old_id,)
+        ).fetchone()
+        assert row["supersede_reason"] in SUPERSEDE_REASONS
+        assert row["superseded_at"] is not None
+
+    def test_cross_type_dedup_carries_cross_type_priority_reason(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """_cross_type_dedup is a SEPARATE mechanism from find_superseded (F1
+        vs the graveyard/dedup priority group) and must attribute its own
+        fixed reason, not inherit whatever find_superseded last used."""
+        old = make_event(
+            event_type="CONSTRAINT_HARD", content_hash="peer_hash",
+            payload={"description": "never commit secrets to the repo"},
+        )
+        insert_event(conn, old)
+        new = make_event(
+            event_type="APPROACH_ABANDONED_DO_NOT_RETRY", content_hash="winner_hash",
+            payload={"description": "never commit secrets to the repo"},
+        )
+        execute_merge(conn, "sess1", [new])
+
+        row = conn.execute(
+            "SELECT supersede_reason FROM events WHERE content_hash = 'peer_hash'"
+        ).fetchone()
+        assert row["supersede_reason"] == "cross_type_priority"
+
+    def test_captured_at_sha_flows_from_event_to_stored_row(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """T-103 (#13): captured_at_sha is set once at insert from the Event
+        object session.py already populates from raw_evidence metadata —
+        execute_merge/_insert_or_update must not drop it on the floor."""
+        new = make_event(
+            content_hash="sha_hash", captured_at_sha="a" * 40,
+        )
+        execute_merge(conn, "sess1", [new])
+        row = get_row(conn, "sha_hash")
+        assert row["captured_at_sha"] == "a" * 40
+
+    def test_captured_at_sha_defaults_to_none_outside_a_git_work_tree(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        new = make_event(content_hash="no_sha_hash")  # captured_at_sha unset
+        execute_merge(conn, "sess1", [new])
+        row = get_row(conn, "no_sha_hash")
+        assert row["captured_at_sha"] is None
+
+    def test_captured_at_sha_not_overwritten_on_dedup_restatement(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """The dedup/restatement UPDATE branch in _insert_or_update
+        deliberately does not touch captured_at_sha -- it's first-observation
+        provenance, not a 'last seen at' stamp (mirrors the issue's own
+        'stamp on insert' framing, not on every re-mention)."""
+        first = make_event(content_hash="dup_hash", captured_at_sha="a" * 40)
+        execute_merge(conn, "sess1", [first])
+        second = make_event(
+            content_hash="dup_hash", captured_at_sha="b" * 40, session_id="sess2",
+        )
+        execute_merge(conn, "sess2", [second])
+        row = get_row(conn, "dup_hash")
+        assert row["captured_at_sha"] == "a" * 40
+
 
 class TestExecuteMergeThreadRecency:
     """T-202b (#20 Defect B), end to end through the real merge path.
