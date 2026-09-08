@@ -213,6 +213,114 @@ class TestExecuteMergeSupersession:
         assert row["superseded_by"] is not None
 
 
+class TestExecuteMergeThreadRecency:
+    """T-202b (#20 Defect B), end to end through the real merge path.
+
+    Reconstructs the shape of the actual failure (real session ab095e85, 25
+    THREAD_OPEN candidates, an early narration statement won the render slot
+    over the genuine 'next session' thread twice — tb_scores_CK.json S2-P1 /
+    S3-P1) at a scale a test can assert on precisely: three same-session
+    narration statements processed together, the way one session's real
+    extraction batch arrives in a single execute_merge call.
+    """
+
+    def test_only_the_last_of_a_narration_chain_survives(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        first = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_a", created_at=1000,
+            payload={"description": "Now let's write the core package source files.",
+                     "authority": "assistant_decided"},
+        )
+        middle = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_b", created_at=2000,
+            payload={"description": "Now mypy strict and ruff.",
+                     "authority": "assistant_decided"},
+        )
+        last = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_c", created_at=3000,
+            payload={"description": "Noted: next session's work is building a "
+                                     "research agent on top of toolbelt-core.",
+                     "authority": "assistant_decided"},
+        )
+        execute_merge(conn, "sess1", [first, middle, last])
+
+        row_first = get_row(conn, "thread_a")
+        row_middle = get_row(conn, "thread_b")
+        row_last = get_row(conn, "thread_c")
+
+        assert row_first["superseded_by"] == row_middle["id"]
+        assert row_middle["superseded_by"] == row_last["id"]
+        assert row_last["superseded_by"] is None
+
+    def test_selection_picks_the_genuine_final_thread_not_the_stale_one(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """The actual observable bug: before this fix, select_active_thread
+        (ranking purely by authority + composite weight, with no recency
+        signal at all) could and did pick the early narration statement over
+        the genuine final one. After the merge, only the final statement is
+        even a live candidate, so selection is correct by construction —
+        proven through the real downstream path, not asserted in isolation."""
+        from cognikernel.injection.ordering import select_active_thread
+        from cognikernel.storage.projections import load_or_rebuild, projection_to_events
+
+        first = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_a", created_at=1000,
+            payload={"description": "Now let's write the core package source files.",
+                     "authority": "assistant_decided"},
+            # A high weight, exactly the shape that let a stale statement win
+            # the old ranking-only selection despite being said first.
+            weight=5.0,
+        )
+        middle = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_b", created_at=2000,
+            payload={"description": "Now mypy strict and ruff.",
+                     "authority": "assistant_decided"},
+            weight=0.5,
+        )
+        last = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_c", created_at=3000,
+            payload={"description": "Noted: next session's work is building a "
+                                     "research agent on top of toolbelt-core.",
+                     "authority": "assistant_decided"},
+            weight=0.3,
+        )
+        execute_merge(conn, "sess1", [first, middle, last])
+
+        events = projection_to_events(load_or_rebuild(conn, "proj1"))
+        winner = select_active_thread(events)
+
+        assert winner is not None
+        assert "research agent" in winner.payload["description"]
+
+    def test_a_genuinely_separate_earlier_session_thread_is_unaffected(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """The safety boundary end to end: a thread from an EARLIER session
+        must survive a same-authority narration flood in a LATER session --
+        this is the exact territory Defect A (a separate, still-open issue)
+        lives in, and this fix must not encroach on it."""
+        earlier = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_early", created_at=1000,
+            session_id="sess1",
+            payload={"description": "We need JWT auth done — queued for next session.",
+                     "authority": "user_stated"},
+        )
+        execute_merge(conn, "sess1", [earlier])
+
+        later_narration = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_later", created_at=5000,
+            session_id="sess2",
+            payload={"description": "Now running the test suite.",
+                     "authority": "assistant_decided"},
+        )
+        execute_merge(conn, "sess2", [later_narration])
+
+        row_earlier = get_row(conn, "thread_early")
+        assert row_earlier["superseded_by"] is None
+
+
 # ── execute_merge — baseline gates (embeddings off) ───────────────────────────
 
 class TestExecuteMergeBaselineGates:

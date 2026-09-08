@@ -29,7 +29,32 @@ _SUPERSESSION_TYPES: frozenset[str] = frozenset({
     "DECISION",
     "APPROACH_ABANDONED",
     "APPROACH_ABANDONED_DO_NOT_RETRY",
+    "THREAD_OPEN",
 })
+
+# T-202b (#20 Defect B): THREAD_OPEN's matching rule is deliberately NOT the
+# topical predicate every other type uses. A session can produce many
+# THREAD_OPEN candidates that describe unrelated, momentary actions ("now
+# writing the tests", "now running mypy") -- descriptions_overlap/
+# subject_supersedes correctly find no relation between them, so under the
+# normal predicate nothing ever consolidates that volume. Confirmed against
+# a real store: one benchmark session produced 25 such candidates, and
+# because THREAD_OPEN is not in _SUPERSESSION_TYPES today, all 25 survive to
+# compete for the single render slot with no notion of "which one was said
+# last" -- an early, already-stale statement won twice over the genuinely
+# final one (research/fixes/thread_precision.md).
+#
+# So for THREAD_OPEN specifically, find_superseded below replaces the
+# topical check with two things: an unconditional match (any older
+# candidate that clears the gates IS treated as superseded -- there is
+# nothing to compare content on) and a NEW session-scope requirement (only
+# a candidate from the SAME session_id is eligible). Session-scoping is the
+# safety boundary: without it, this would also fire across sessions and
+# risk making Defect A (an ordinary later instruction outranking a
+# genuinely still-open cross-session thread) worse -- turning a lost
+# ranking tie-break into an outright, unrecoverable deletion. That failure
+# mode is a separate, still-open defect (T-202a) this change must not touch.
+_THREAD_SESSION_SCOPED_TYPES: frozenset[str] = frozenset({"THREAD_OPEN"})
 
 JACCARD_THRESHOLD: float = 0.6
 LEVENSHTEIN_THRESHOLD: float = 0.15
@@ -285,6 +310,15 @@ def find_superseded(
     False); when True (and the model is available), cosine retrieval contributes
     additional candidates on top. The new event is assumed to be the most recent
     assertion.
+
+    `THREAD_OPEN` (T-202b / #20 Defect B) is the one exception to all of that:
+    no topical predicate, the provenance gate is bypassed rather than applied,
+    and a session-scope requirement takes its place — see
+    `_THREAD_SESSION_SCOPED_TYPES`. Every earlier `THREAD_OPEN` from the SAME
+    session that clears temporal + authority is superseded outright, so a
+    session's narration collapses to whichever statement was made last,
+    instead of every "now doing X" surviving indefinitely to compete for the
+    single render slot.
     """
     if new_event.event_type not in _SUPERSESSION_TYPES:
         return []
@@ -300,7 +334,7 @@ def find_superseded(
 
     rows = conn.execute(
         f"""
-        SELECT id, payload, created_at, evidence_id, event_type FROM events
+        SELECT id, payload, created_at, evidence_id, event_type, session_id FROM events
         WHERE project_id    = ?
           AND event_type    IN ({type_placeholders})
           AND archived      = 0
@@ -379,12 +413,32 @@ def find_superseded(
         except Exception:
             xenc_matches = set()
 
+    thread_scoped = new_event.event_type in _THREAD_SESSION_SCOPED_TYPES
+
     superseded: list[int] = []
     for row in rows:
         # Provenance gate (E2): only supersede across a DIFFERENT transcript. A
         # match within the same evidence is a duplicate capture of one statement
         # (restatement), not a later evolution — so it must not be superseded.
-        if new_evidence is not None and row["evidence_id"] == new_evidence:
+        # THREAD_OPEN is the deliberate exception: every candidate in the volume
+        # this exists to fix (see _THREAD_SESSION_SCOPED_TYPES above) shares the
+        # new event's own evidence_id, since one session's transcript is one
+        # evidence row — excluding same-evidence here would exclude the entire
+        # problem this change targets. The session-scope check below takes over
+        # the gating job the provenance check would otherwise do.
+        if (not thread_scoped
+                and new_evidence is not None and row["evidence_id"] == new_evidence):
+            continue
+
+        # Session-scope gate (THREAD_OPEN only): a candidate from a DIFFERENT
+        # session is never eligible. This is what keeps this change from also
+        # firing across sessions, where an ordinary later instruction could
+        # outrank a genuinely still-open thread from an earlier session —
+        # turning a lost ranking tie-break (T-202a, a separate open defect)
+        # into an outright, unrecoverable deletion. Restricting to same-session
+        # candidates only affects the specific in-session pile-up this fix
+        # targets.
+        if thread_scoped and row["session_id"] != new_event.session_id:
             continue
 
         cand_payload = json.loads(row["payload"])
@@ -403,7 +457,14 @@ def find_superseded(
         if new_auth < cand_auth:
             continue
 
-        if row["event_type"] == new_event.event_type:
+        if thread_scoped:
+            # No topical predicate — see _THREAD_SESSION_SCOPED_TYPES. Every
+            # candidate that reached this point already passed session-scope +
+            # temporal + authority, which is the complete eligibility test for
+            # "this is an earlier statement from the same session's narration
+            # that the new one supersedes."
+            superseded.append(row["id"])
+        elif row["event_type"] == new_event.event_type:
             # Same type: full predicate — cross-encoder OR semantic OR lexical OR subject.
             if (row["id"] in sem_matches or row["id"] in xenc_matches
                     or supersedes(new_desc, cand_desc)):
