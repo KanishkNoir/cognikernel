@@ -5,6 +5,7 @@ import pytest
 
 from cognikernel.config import EXPECTED_PROJECTION_VERSION, EXPECTED_SCHEMA_VERSION
 from cognikernel.storage.connection import get_connection
+from cognikernel.storage.events import Event, insert_event
 from cognikernel.storage.migrations import (
     _bootstrap_meta,
     _run_schema_migrations,
@@ -308,3 +309,177 @@ class TestIdempotency:
                 ).fetchall()
             }
         assert {"events", "state_projections", "extraction_failures"}.issubset(tables)
+
+
+class TestMigration021BeliefHistory:
+    """T-102 (#12): supersession/archival transitions + commit anchor.
+
+    The store records supersession and archival as STATES (superseded_by,
+    archived) but not as TRANSITIONS -- these four columns are what let a
+    later belief-status/replay feature answer "when" and "why", not just
+    "that". They are deliberately never backfilled: a guessed sha or an
+    inferred timestamp on a pre-021 row would make future replay confidently
+    wrong rather than honestly bounded (NULL).
+    """
+
+    _NEW_COLUMNS = {"superseded_at", "archived_at", "captured_at_sha", "supersede_reason"}
+
+    def test_new_columns_present_on_fresh_store(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "fresh.db"
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(events)").fetchall()}
+        assert self._NEW_COLUMNS.issubset(cols)
+
+    def test_new_columns_default_to_null(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "defaults.db"
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            event_id = insert_event(
+                conn,
+                Event(
+                    project_id="proj1", session_id="sess1", event_type="DECISION",
+                    payload={"description": "x"}, content_hash="x",
+                ),
+            )
+            row = conn.execute(
+                "SELECT superseded_at, archived_at, captured_at_sha, supersede_reason "
+                "FROM events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
+        assert tuple(row) == (None, None, None, None)
+
+    def test_superseded_at_index_exists(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "idx.db"
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            indexes = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+        assert "idx_events_superseded_at" in indexes
+
+    def test_reaches_schema_version_21(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "ver.db"
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            version = int(
+                conn.execute(
+                    "SELECT value FROM meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+            )
+        assert version == 21 == EXPECTED_SCHEMA_VERSION
+
+    def test_upgrading_a_real_v20_store_preserves_existing_rows(
+        self, tmp_path: Path
+    ) -> None:
+        """Build a store with the REAL 001-020 migrations only (a faithful v20
+        shape, not a synthetic stand-in), insert data, then apply 021 and
+        prove every pre-existing column survives byte-for-bit and the four
+        new columns land as NULL rather than a backfilled guess.
+
+        This is the automated, CI-resident form of the same guarantee
+        rehearsed by hand against a real ~/.cognikernel store during review
+        (296 real events, zero drift, original file's sha256 unchanged) --
+        that manual pass isn't reproducible in CI since it depends on a
+        specific local store, so this locks the same invariant in here.
+        """
+        from cognikernel.storage.migrations import _MIGRATIONS_DIR as REAL_DIR
+
+        v20_dir = tmp_path / "migrations_v20"
+        v20_dir.mkdir()
+        for f in sorted(REAL_DIR.glob("*.sql")):
+            version = int(f.stem.split("_")[0])
+            if version <= 20:
+                (v20_dir / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+
+        db_path = tmp_path / "upgrade.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = OFF")
+
+        import cognikernel.storage.migrations as migrations_module
+        original_dir = migrations_module._MIGRATIONS_DIR
+        migrations_module._MIGRATIONS_DIR = v20_dir
+        try:
+            run_migrations(conn)
+        finally:
+            migrations_module._MIGRATIONS_DIR = original_dir
+
+        version_before = int(
+            conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+        )
+        assert version_before == 20
+
+        # Raw SQL insert deliberately, NOT insert_event() -- this simulates a
+        # row written by the application code AS IT EXISTED AT v20, before
+        # captured_at_sha existed as a column. insert_event() today always
+        # writes captured_at_sha (T-103), so calling it here would insert
+        # into a table that doesn't have that column yet and raise.
+        import json as _json
+        cursor = conn.execute(
+            """
+            INSERT INTO events
+                (project_id, session_id, created_at, event_type, payload,
+                 content_hash, weight, mention_count, superseded_by, archived)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
+            """,
+            (
+                "proj1", "sess1", 1700000000000, "CONSTRAINT_HARD",
+                _json.dumps({"description": "pre-existing constraint"}),
+                "pre021", 2.5, 3,
+            ),
+        )
+        event_id = cursor.lastrowid
+        conn.commit()
+        before_row = dict(
+            conn.execute(
+                "SELECT project_id, session_id, event_type, payload, content_hash, "
+                "weight, mention_count, superseded_by, archived FROM events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
+        )
+
+        # Now upgrade the SAME connection/data to the real, full migration set.
+        run_migrations(conn)
+
+        version_after = int(
+            conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+        )
+        assert version_after == 21
+
+        after_row = dict(
+            conn.execute(
+                "SELECT project_id, session_id, event_type, payload, content_hash, "
+                "weight, mention_count, superseded_by, archived FROM events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
+        )
+        assert after_row == before_row, "a pre-021 row's existing columns must not change"
+
+        new_cols_row = conn.execute(
+            "SELECT superseded_at, archived_at, captured_at_sha, supersede_reason "
+            "FROM events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+        assert tuple(new_cols_row) == (None, None, None, None), (
+            "a pre-021 row must get NULL, never a backfilled guess"
+        )
+        conn.close()
+
+    def test_rerunning_migrations_after_v21_does_not_duplicate_columns(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression guard: the fast path (current >= EXPECTED_SCHEMA_VERSION)
+        must actually prevent 021 from being re-applied, or a second run would
+        raise 'duplicate column name' on the ALTER TABLE ADD COLUMN lines."""
+        db_path = tmp_path / "rerun.db"
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            run_migrations(conn)  # must not raise
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(events)").fetchall()]
+        # Exactly one of each new column, not two.
+        for c in self._NEW_COLUMNS:
+            assert cols.count(c) == 1

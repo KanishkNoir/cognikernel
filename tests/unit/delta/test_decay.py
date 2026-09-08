@@ -157,3 +157,51 @@ class TestApplyDecayPass:
         ).fetchone()
         assert row is not None
         assert row["value"] == "sess_new"
+
+
+class TestArchivedAt:
+    """T-103 (#13): archived_at is set on exactly the rows this pass flips to
+    archived=1 -- not on survivors, not on rows already archived earlier."""
+
+    def test_set_on_exactly_the_rows_archived_this_pass(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        import time
+        make_event(conn, "archived-h", weight=0.01, session_id="sess_old")
+        make_event(conn, "survivor-h", weight=1.0, session_id="sess_old")
+        before = int(time.time() * 1000)
+
+        apply_decay_pass(conn, "proj1", "sess_new")
+
+        after = int(time.time() * 1000)
+        archived_row = conn.execute(
+            "SELECT archived, archived_at FROM events WHERE content_hash = 'archived-h'"
+        ).fetchone()
+        survivor_row = conn.execute(
+            "SELECT archived, archived_at FROM events WHERE content_hash = 'survivor-h'"
+        ).fetchone()
+
+        assert archived_row["archived"] == 1
+        assert before <= archived_row["archived_at"] <= after
+        assert survivor_row["archived"] == 0
+        assert survivor_row["archived_at"] is None
+
+    def test_already_archived_row_keeps_its_original_timestamp(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """The bulk UPDATE filters archived = 0, so a row archived in an
+        earlier pass must not have its archived_at overwritten by a later
+        one -- that would make 'when was this archived' answer the wrong
+        question for anything archived more than once-worth of history ago."""
+        make_event(conn, "already-h", weight=0.01, session_id="sess_old")
+        apply_decay_pass(conn, "proj1", "sess_new_1")
+        first_stamp = conn.execute(
+            "SELECT archived_at FROM events WHERE content_hash = 'already-h'"
+        ).fetchone()["archived_at"]
+        assert first_stamp is not None
+
+        apply_decay_pass(conn, "proj1", "sess_new_2")
+        second_stamp = conn.execute(
+            "SELECT archived_at FROM events WHERE content_hash = 'already-h'"
+        ).fetchone()["archived_at"]
+        assert second_stamp == first_stamp
