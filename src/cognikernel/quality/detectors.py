@@ -213,6 +213,54 @@ def describes_deferred_work(text: str) -> bool:
     return bool(_DEFERRAL_RE.search(text or ""))
 
 
+# ── explicit handoff to a future session ─────────────────────────────────────
+#
+# A SECOND, deliberately narrower vocabulary, and the reason it is separate
+# from _DEFERRAL_MARKERS above is that the two predicates have OPPOSITE failure
+# costs.
+#
+# describes_deferred_work is a recall-first question — "is this user-stated
+# thread a queued item rather than an instruction for right now?" A false
+# negative there demotes a real thread, so obligation phrasing ("need to",
+# "have to") belongs in it: that is how a user states outstanding work.
+#
+# This one is a precision-first question — "may narration delete this?" It
+# shields a thread from recency supersession, so a false positive resurrects
+# exactly the narration pile-up that supersession exists to collapse. On the
+# real corpus the broad predicate flags 21 of 131 THREAD_OPEN events, but 13 of
+# those are narration it matched on incidental wording ("Continuing with tests
+# now." hits "continuing with"); shielding all 21 would have restored most of
+# the pile-up. This list flags 8, and all 8 are genuine handoffs.
+#
+# So the signal here is explicit reference to a LATER SESSION or a parked item,
+# never mere obligation or in-progress phrasing. Validated against all 131 real
+# THREAD_OPEN events: 8 flagged, 0 false positives.
+_HANDOFF_MARKERS = (
+    # explicit future session / time reference
+    "next session", "next time", "tomorrow", "next week", "future session",
+    "starting next",
+    # explicit next-step handoff
+    "next step", "next up", "picking back up", "pick back up", "pick this up",
+    "picks this up", "picks up", "come back to", "coming back to", "resume",
+    # parked / queued state
+    "queued", "backlog", "on hold", "parked", "left to do", "still to do",
+    # explicit handoff to the reader's timing
+    "whenever you are", "when you're ready",
+)
+_HANDOFF_RE = re.compile(
+    "|".join(re.escape(m) for m in _HANDOFF_MARKERS), re.IGNORECASE
+)
+
+
+def describes_future_session_handoff(text: str) -> bool:
+    """True when the text explicitly hands work to a later session.
+
+    Strictly narrower than describes_deferred_work, and intentionally so —
+    see the note above _HANDOFF_MARKERS for why the two must not be merged.
+    """
+    return bool(_HANDOFF_RE.search(text or ""))
+
+
 def detect_bare_instruction_thread(
     text: str, event_type: str, authority: str
 ) -> DetectorHit | None:

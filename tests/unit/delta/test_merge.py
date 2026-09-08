@@ -456,6 +456,44 @@ class TestExecuteMergeThreadRecency:
         assert row["supersede_reason"] in SUPERSEDE_REASONS
         assert not [r for r in records if "fixed vocabulary" in r.getMessage()]
 
+    def test_narration_does_not_delete_an_earlier_handoff(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """#25, end to end: the real shape of the data loss — a genuine handoff
+        stated early in a session, then ordinary narration for the rest of it.
+
+        Verbatim from the Relay store, where exactly this deleted the only
+        statement in the session that said what the next session was for.
+        """
+        handoff = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_handoff", created_at=1000,
+            session_id="sess1",
+            payload={"description": "Next session's focus: implementing the "
+                                    "fallback+retry router.",
+                     "authority": "assistant_decided"},
+        )
+        n1 = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_n1", created_at=2000,
+            session_id="sess1",
+            payload={"description": "Now writing the tests.",
+                     "authority": "assistant_decided"},
+        )
+        n2 = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_n2", created_at=3000,
+            session_id="sess1",
+            payload={"description": "Now running mypy and ruff.",
+                     "authority": "assistant_decided"},
+        )
+        execute_merge(conn, "sess1", [handoff, n1, n2])
+
+        # The handoff is untouched...
+        row = get_row(conn, "thread_handoff")
+        assert row["superseded_by"] is None
+        assert row["archived"] == 0
+        # ...while the narration between them still collapses to the last one.
+        assert get_row(conn, "thread_n1")["superseded_by"] is not None
+        assert get_row(conn, "thread_n2")["superseded_by"] is None
+
 
 class TestExecuteMergeInstructionVsDeferral:
     """T-202a (#20 Defect A), end to end through the real merge path.

@@ -382,6 +382,116 @@ class TestFindSupersededThreadOpen:
         assert old_id not in find_superseded(conn, new, use_embeddings=False)
 
 
+class TestThreadHandoffIsShieldedFromNarration:
+    """#25: recency supersession must be asymmetric.
+
+    The gap that let this ship: TestFindSupersededThreadOpen asserts that
+    narration collapses and that a DIFFERENT session is untouched, but never
+    that a genuine handoff EARLIER IN THE SAME SESSION survives narration that
+    follows it. Replaying the four real benchmark stores destroyed 15 genuine
+    handoffs that way -- the deletion is unrecoverable, where the mis-ranking
+    this rule was fixing is not.
+
+    Fixtures are real descriptions from those stores.
+    """
+
+    _HANDOFF = ("Next session's focus: implementing the fallback+retry router "
+                "— the component that actually executes everything above.")
+    _NARRATION = "Now running mypy and ruff."
+
+    def test_narration_does_not_supersede_a_handoff(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        old_id = seed_event(
+            conn, content_hash="h_handoff", created_at=1000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": self._HANDOFF, "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_narration", created_at=2000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": self._NARRATION, "authority": "assistant_decided"},
+        )
+        assert old_id not in find_superseded(conn, new, use_embeddings=False)
+
+    def test_narration_still_supersedes_narration(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """The shield must not cost the consolidation it sits inside — this is
+        the whole point of using the narrow handoff vocabulary rather than the
+        broad deferred-work one."""
+        old_id = seed_event(
+            conn, content_hash="h_a", created_at=1000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "Now writing the tests.",
+                     "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": self._NARRATION, "authority": "assistant_decided"},
+        )
+        assert old_id in find_superseded(conn, new, use_embeddings=False)
+
+    def test_a_later_handoff_still_supersedes_an_earlier_handoff(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """Handoff-vs-handoff is a genuine update to which thread is current,
+        not narration overwriting one, so recency still applies. This is why
+        the real Taskflow JWT thread is superseded by 'This is the active work
+        item for the next session.' — that loss is a separate question (#25),
+        deliberately NOT changed here."""
+        old_id = seed_event(
+            conn, content_hash="h_1", created_at=1000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": self._HANDOFF, "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_2", created_at=2000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "This is the active work item for the next session.",
+                     "authority": "assistant_decided"},
+        )
+        assert old_id in find_superseded(conn, new, use_embeddings=False)
+
+    def test_shield_does_not_reach_across_sessions(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """A handoff in a different session was already ineligible; the shield
+        must not accidentally make cross-session behaviour depend on wording."""
+        old_id = seed_event(
+            conn, content_hash="h_a", created_at=1000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": self._HANDOFF, "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, session_id="sess2",
+            event_type="THREAD_OPEN",
+            payload={"description": self._NARRATION, "authority": "assistant_decided"},
+        )
+        assert find_superseded(conn, new, use_embeddings=False) == []
+        assert old_id not in find_superseded(conn, new, use_embeddings=False)
+
+    def test_shield_is_scoped_to_threads(self, conn: sqlite3.Connection) -> None:
+        """A DECISION carrying a handoff word is not shielded — the shield
+        lives inside the thread-scoped branch and must not alter any other
+        type's topical behaviour. The pair below overlaps topically and so
+        still supersedes, marker notwithstanding."""
+        old_id = seed_event(
+            conn, content_hash="h_a", created_at=1000, session_id="sess1",
+            event_type="DECISION",
+            payload={"description": "Queued: use SQLite for persistent local storage.",
+                     "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, session_id="sess1",
+            event_type="DECISION",
+            payload={"description": "Use SQLite for persistent local storage.",
+                     "authority": "assistant_decided"},
+        )
+        assert old_id in find_superseded(conn, new, use_embeddings=False)
+
+
 class TestDeriveSubject:
     """derive_subject extracts the *topic* a decision is about (not the choice)."""
 

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 # extraction<->delta layering cycle. Re-exported here for backward compatibility
 # (delta.__init__ exports derive_subject; storage.fts imports STOPWORDS).
 from cognikernel.utils.subject import STOPWORDS, derive_subject  # noqa: F401  (re-export)
+from cognikernel.quality.detectors import describes_future_session_handoff
 from cognikernel.storage.events import set_superseded_by
 
 if TYPE_CHECKING:
@@ -329,7 +330,9 @@ def find_superseded(
     session that clears temporal + authority is superseded outright, so a
     session's narration collapses to whichever statement was made last,
     instead of every "now doing X" surviving indefinitely to compete for the
-    single render slot.
+    single render slot. That collapse is ASYMMETRIC (#25): a candidate that
+    explicitly hands work to a later session is never superseded by one that
+    does not, so narration cannot delete a real queued item.
 
     `with_reasons` (T-103 / #13) is opt-in and additive: default False keeps
     the original `list[int]` shape every existing caller and test depends on
@@ -483,6 +486,27 @@ def find_superseded(
             continue
 
         if thread_scoped:
+            # Recency is ASYMMETRIC (#25): narration may collapse narration,
+            # but it must not delete an explicit handoff to a later session.
+            #
+            # Without this, the rule is blind to what it supersedes, and a real
+            # queued item stated early in a session is deleted by whatever
+            # "now doing X" line happened to come last. Measured on the four
+            # benchmark stores: 15 genuine handoffs destroyed in one replay,
+            # including ones no later statement replaced. That is strictly
+            # worse than the pile-up this rule exists to fix — a mis-ranked
+            # thread is recoverable, a deleted one is not.
+            #
+            # The shield uses the NARROW handoff predicate, not the broad
+            # deferred-work one D9 uses: shielding everything the broad
+            # predicate flags would re-admit most of the narration pile-up
+            # (see the note above _HANDOFF_MARKERS). A handoff superseding
+            # another handoff is left alone — that is a genuine update to
+            # which thread is current, not narration overwriting it.
+            if (describes_future_session_handoff(cand_desc)
+                    and not describes_future_session_handoff(new_desc)):
+                continue
+
             # No topical predicate — see _THREAD_SESSION_SCOPED_TYPES. Every
             # candidate that reached this point already passed session-scope +
             # temporal + authority, which is the complete eligibility test for
