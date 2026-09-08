@@ -146,6 +146,64 @@ class TestApplyVerdict:
         assert "quality" not in e.payload
 
 
+class TestBareInstructionThread:
+    """D9 (T-202a / #20 Defect A): an ordinary instruction must not hold the
+    top authority tier a genuinely-queued thread needs to win selection.
+
+    Both decisive fixtures below are verbatim from the real Taskflow store —
+    the instruction that actually won the graded probe, and the gold thread
+    it beat (research/fixes/thread_precision.md)."""
+
+    def test_bare_instruction_is_downgraded(self) -> None:
+        e = _event("THREAD_OPEN", "Add the Pydantic response schema for a task.",
+                   authority="user_stated")
+        v = admit(e)
+        assert v.action == "downgrade"
+        assert v.rule_id == "D9"
+
+    def test_genuine_deferral_is_admitted(self) -> None:
+        e = _event("THREAD_OPEN", "This is the active work item for the next session.",
+                   authority="user_stated")
+        assert admit(e).action == "admit"
+
+    def test_obligation_phrasing_is_admitted(self) -> None:
+        """The gold Taskflow thread. An earlier draft of the marker list
+        missed plain 'need to' and would have demoted exactly this — the
+        false negative the real-data validation caught."""
+        e = _event(
+            "THREAD_OPEN",
+            "We need to implement JWT authentication end-to-end — login endpoint, "
+            "token issuance, and the FastAPI dependency guard.",
+            authority="user_stated",
+        )
+        assert admit(e).action == "admit"
+
+    def test_demotion_changes_authority_not_provenance(self) -> None:
+        from cognikernel.quality.gate import apply_verdict
+
+        e = _event("THREAD_OPEN", "Write the cache lookup.",
+                   authority="user_stated", source_role="user")
+        apply_verdict(e, admit(e))
+        assert e.payload["authority"] == "assistant_decided"
+        assert e.payload["quality"] == "instruction_not_thread"
+        # Who actually said it is untouched — this changes precedence only.
+        assert e.payload["source_role"] == "user"
+
+    def test_only_applies_to_thread_open(self) -> None:
+        """A DECISION phrased as a bare instruction is not this defect — the
+        rule is scoped to the one type whose selection this distorts."""
+        e = _event("DECISION", "Add the Pydantic response schema for a task.",
+                   authority="user_stated")
+        assert admit(e).action == "admit"
+
+    def test_only_applies_to_user_stated(self) -> None:
+        """A thread already below the top tier has nothing to demote, so the
+        rule must not fire on it (and must not double-halve its weight)."""
+        e = _event("THREAD_OPEN", "Now writing the tests.",
+                   authority="assistant_decided")
+        assert admit(e).action == "admit"
+
+
 class TestUnverifiableLanguagesAreNotPenalised:
     """Grounding must not punish a file merely because we cannot parse its
     language. The inventory is built from the discovery walk, which globs only

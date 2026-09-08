@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 
 from cognikernel.model import Event
 from cognikernel.quality.detectors import (
+    detect_bare_instruction_thread,
     detect_boilerplate,
     detect_junk_constraint,
     detect_subject_less,
@@ -56,6 +57,13 @@ _STATEMENT_TYPES = frozenset({
 })
 
 _DOWNGRADE_FACTOR = 0.5
+
+# Where a D9-demoted thread lands. `assistant_decided` is the next tier down
+# from `user_stated` in extraction.authority's precedence table, and is a
+# legitimate, non-junk tier — the event stays a real, retrievable thread, it
+# just no longer competes with what the user actually said is outstanding.
+# A literal, not an import: quality is a leaf package (see detectors.py).
+_DEMOTED_THREAD_AUTHORITY = "assistant_decided"
 
 # Maximum number of leading characters that may be missing for a path to count
 # as a truncation of a known path rather than an unrelated new file.
@@ -154,6 +162,17 @@ def _admit_inner(event: Event, ground: GroundingContext | None) -> Verdict:
             if hit is not None:
                 return Verdict("downgrade", hit.rule_id, hit.note)
 
+    # D9 (T-202a / #20 Defect A): an ordinary user instruction typed THREAD_OPEN
+    # arrives at the TOP authority tier purely because a user said it, and then
+    # outranks a genuinely-queued thread. Downgrade, never reject: the marker
+    # vocabulary this rests on is a heuristic, and a demoted event stays fully
+    # reachable through recall while a dropped one is gone for good.
+    hit = detect_bare_instruction_thread(
+        description, event.event_type, payload.get("authority", "") or ""
+    )
+    if hit is not None:
+        return Verdict("downgrade", hit.rule_id, hit.note)
+
     # An EMPTY inventory means "cannot verify", not "nothing is real". A brand-new
     # project has no symbol graph yet, and grounding against an empty set would
     # downgrade every component event it ever captured.
@@ -172,16 +191,29 @@ def apply_verdict(event: Event, verdict: Verdict) -> Event:
     """Mutate `event` per a downgrade verdict and return it.
 
     Only 'downgrade' changes the event; 'admit' and 'reject' leave it alone
-    (the caller drops rejects). The marker key differs by rule so the two
+    (the caller drops rejects). The marker key differs by rule so the
     downgrade reasons stay distinguishable in the store:
       D1 -> payload['grounding'] = 'unverified'   (path not in the codebase)
       D7 -> payload['quality']   = 'context_dependent'
+      D9 -> payload['authority'] demoted          (instruction, not a thread)
+
+    D9 is the one rule whose point is the AUTHORITY, not the weight. Thread
+    selection ranks by (authority_priority, -weight), so an ordinary
+    instruction sharing the top `user_stated` tier beats a genuine queued
+    thread on weight alone — halving its weight would only have made that a
+    closer race, not stopped it. Demoting the tier stops it outright: a
+    genuine `user_stated` thread now wins regardless of weight. `source_role`
+    is left untouched, so the record of who actually said it survives — this
+    changes precedence, not provenance.
     """
     if verdict.action != "downgrade":
         return event
     event.weight = (event.weight or 1.0) * _DOWNGRADE_FACTOR
     if verdict.rule_id == "D1":
         event.payload["grounding"] = "unverified"
+    elif verdict.rule_id == "D9":
+        event.payload["authority"] = _DEMOTED_THREAD_AUTHORITY
+        event.payload["quality"] = "instruction_not_thread"
     else:
         event.payload["quality"] = "context_dependent"
     return event

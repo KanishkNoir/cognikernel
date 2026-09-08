@@ -321,6 +321,95 @@ class TestExecuteMergeThreadRecency:
         assert row_earlier["superseded_by"] is None
 
 
+class TestExecuteMergeInstructionVsDeferral:
+    """T-202a (#20 Defect A), end to end through the real merge path.
+
+    Reconstructs the real Taskflow failure exactly: a genuinely-queued thread
+    established in one session, then an ordinary instruction in a LATER
+    session carrying the same `user_stated` tier and a HIGHER weight. Both
+    descriptions and both weights are verbatim from the real store; the
+    graded probe recorded the instruction as the answer
+    (tf_scores_v2_CK.json S3-P1, research/fixes/thread_precision.md).
+
+    These are different sessions on purpose — the sibling Defect B fix
+    (T-202b, #21) supersedes only within a session, so it deliberately does
+    not reach here. That isolates Defect A's authority-tier mechanism rather
+    than re-testing the other fix.
+    """
+
+    _GENUINE = "This is the active work item for the next session."
+    _INSTRUCTION = "Add the Pydantic response schema for a task."
+
+    def test_genuine_deferral_wins_over_a_heavier_later_instruction(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        from cognikernel.injection.ordering import select_active_thread
+        from cognikernel.storage.projections import load_or_rebuild, projection_to_events
+
+        genuine = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_jwt", created_at=1000,
+            session_id="sess1", weight=0.81,
+            payload={"description": self._GENUINE, "authority": "user_stated"},
+        )
+        execute_merge(conn, "sess1", [genuine])
+
+        instruction = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_schema", created_at=5000,
+            session_id="sess2", weight=0.88,
+            payload={"description": self._INSTRUCTION, "authority": "user_stated"},
+        )
+        execute_merge(conn, "sess2", [instruction])
+
+        events = projection_to_events(load_or_rebuild(conn, "proj1"))
+        winner = select_active_thread(events)
+
+        assert winner is not None
+        assert winner.payload["description"] == self._GENUINE
+
+    def test_the_instruction_is_still_stored_and_reachable(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """Downgraded, not dropped. The marker vocabulary behind D9 is a
+        heuristic, so a demoted event has to stay recoverable — losing a real
+        user instruction outright would be a worse failure than the one this
+        fixes."""
+        instruction = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_schema", created_at=5000,
+            session_id="sess2", weight=0.88,
+            payload={"description": self._INSTRUCTION, "authority": "user_stated"},
+        )
+        execute_merge(conn, "sess2", [instruction])
+
+        row = get_row(conn, "thread_schema")
+        assert row is not None
+        assert row["superseded_by"] is None
+        assert row["archived"] == 0
+        payload = json.loads(row["payload"])
+        assert payload["authority"] == "assistant_decided"
+
+    def test_instruction_alone_still_renders_when_nothing_better_exists(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """A demoted thread is still a thread. With no genuine deferral in the
+        store it must still fill the slot — the fix changes which candidate
+        wins, never whether the section can be populated at all."""
+        from cognikernel.injection.ordering import select_active_thread
+        from cognikernel.storage.projections import load_or_rebuild, projection_to_events
+
+        instruction = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_schema", created_at=5000,
+            session_id="sess2", weight=0.88,
+            payload={"description": self._INSTRUCTION, "authority": "user_stated"},
+        )
+        execute_merge(conn, "sess2", [instruction])
+
+        events = projection_to_events(load_or_rebuild(conn, "proj1"))
+        winner = select_active_thread(events)
+
+        assert winner is not None
+        assert winner.payload["description"] == self._INSTRUCTION
+
+
 # ── execute_merge — baseline gates (embeddings off) ───────────────────────────
 
 class TestExecuteMergeBaselineGates:
