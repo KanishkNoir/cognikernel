@@ -148,3 +148,87 @@ def normalized_key(text: str) -> str:
     lowered = (text or "").lower()
     stripped = _NON_KEY_CHARS.sub(" ", lowered)
     return _WHITESPACE.sub(" ", stripped).strip()
+
+
+# ── D9: an ordinary instruction typed as a user-stated thread ────────────────
+#
+# T-202a (#20 Defect A). A THREAD_OPEN answers "what is queued / what were we
+# in the middle of". An ordinary imperative from the user — "add the Pydantic
+# response schema for a task", "write the cache lookup" — is not that: it is
+# work for the current turn, done by the end of it. But it arrives carrying
+# `user_stated`, the TOP authority tier, because authority is assigned from
+# the speaker's role alone and never looks at what kind of statement it is.
+#
+# Measured consequence (research/fixes/thread_precision.md): in the real
+# Taskflow store, "Add the Pydantic response schema for a task." (user_stated,
+# w=0.88) outranked the genuinely-queued JWT thread (user_stated, w=0.81) —
+# same tier, so weight alone decided — and the graded probe recorded the wrong
+# thread as the answer.
+#
+# The discriminator is NOT "is this imperative mood": genuine deferrals are
+# routinely imperative too ("come back to the retry logic next session"). It is
+# whether the statement refers to future, queued, outstanding or in-progress
+# work at all. These markers were validated against all 131 real THREAD_OPEN
+# events from the four benchmark stores: both genuine Taskflow threads keep
+# their tier, and all nine non-threads (bare imperatives, spec/label lines,
+# condition statements) are caught. The first draft of this list missed plain
+# "need to" and would have demoted the real gold thread — hence the deliberate
+# inclusion of obligation phrasing below.
+_DEFERRAL_MARKERS = (
+    # explicit future time / session reference
+    "next session", "next time", "later", "tomorrow", "next week",
+    # queued, pending or outstanding state
+    "queued", "queue", "pending", "on hold", "parked", "park ",
+    "backlog", "not yet", "unfinished", "incomplete", "remaining",
+    "left to do", "still need", "still needs", "still to",
+    # obligation phrasing — the commonest way a real deferred thread is stated
+    # ("we need to implement JWT auth end-to-end"), and the shape the gold
+    # Taskflow thread used.
+    "need to", "needs to", "have to", "has to", "must still",
+    # explicit resumption
+    "come back to", "pick up", "picks up", "picking up", "resume",
+    "continue with", "continuing with", "next step", "next up",
+    "follow up", "follow-up",
+    # in-progress state
+    "in progress", "working on", "work item", "work thread", "open thread",
+    "active thread",
+    # stated intent to do
+    "will implement", "will add", "will need", "will write", "going to",
+    "todo", "to do", "flagging", "flagged as",
+)
+_DEFERRAL_RE = re.compile(
+    "|".join(re.escape(m) for m in _DEFERRAL_MARKERS), re.IGNORECASE
+)
+
+# String literals rather than imports: `cognikernel.quality` is a leaf package
+# (see the "Quality is a leaf" contract in pyproject.toml), so it cannot import
+# the event-type or authority constants from extraction/storage. gate.py
+# already hardcodes type names the same way.
+_THREAD_OPEN = "THREAD_OPEN"
+_USER_STATED = "user_stated"
+
+
+def describes_deferred_work(text: str) -> bool:
+    """True when the text refers to future, queued or in-progress work."""
+    return bool(_DEFERRAL_RE.search(text or ""))
+
+
+def detect_bare_instruction_thread(
+    text: str, event_type: str, authority: str
+) -> DetectorHit | None:
+    """D9 — a top-authority thread that is really just an instruction.
+
+    Scoped narrowly on purpose: only THREAD_OPEN, only `user_stated`. Any
+    other type is unaffected, and a thread already below the top tier has
+    nothing to demote — the defect is specifically about an ordinary
+    instruction competing at the tier reserved for what the user actually
+    said is outstanding.
+    """
+    if event_type != _THREAD_OPEN or authority != _USER_STATED:
+        return None
+    if describes_deferred_work(text):
+        return None
+    return DetectorHit(
+        "D9", "user-stated thread with no deferred-work reference — reads as an "
+              "instruction for the current turn, not a queued item",
+    )
