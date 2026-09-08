@@ -248,6 +248,140 @@ class TestFindSuperseded:
         assert survivor not in find_superseded(conn, new, use_embeddings=False)
 
 
+class TestFindSupersededThreadOpen:
+    """T-202b (#20 Defect B): THREAD_OPEN gets a recency-only rule, not the
+    topical predicate every other type uses -- see the _THREAD_SESSION_SCOPED_TYPES
+    comment in supersede.py for the full rationale. These tests establish the
+    mechanism directly; TestExecuteMergeThreadRecency in test_merge.py proves
+    it end to end through the real merge path, including a reconstruction of
+    the actual 3-candidate shape observed in the real failing store."""
+
+    def test_later_same_session_thread_supersedes_unrelated_earlier_one(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """The core mechanism: zero topical overlap, same session -> still
+        superseded. This is the exact shape of the real failure -- 'now
+        writing tests' and 'now running mypy' share no topic at all."""
+        old_id = seed_event(
+            conn, content_hash="h_a", created_at=1000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "Now writing the tests.", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "Now running mypy and ruff.", "authority": "assistant_decided"},
+        )
+        assert old_id in find_superseded(conn, new, use_embeddings=False)
+
+    def test_different_session_is_never_superseded(self, conn: sqlite3.Connection) -> None:
+        """The safety boundary: a candidate from a DIFFERENT session is never
+        eligible, regardless of how much later it is or how similar the
+        authority tier -- this is what keeps the fix from also touching the
+        cross-session Defect A territory (a separate, still-open issue)."""
+        old_id = seed_event(
+            conn, content_hash="h_a", created_at=1000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "Now writing the tests.", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, session_id="sess2",
+            event_type="THREAD_OPEN",
+            payload={"description": "Now running mypy and ruff.", "authority": "assistant_decided"},
+        )
+        assert find_superseded(conn, new, use_embeddings=False) == []
+        assert old_id not in find_superseded(conn, new, use_embeddings=False)
+
+    def test_same_session_same_evidence_still_matches(self, conn: sqlite3.Connection) -> None:
+        """The provenance-gate bypass, proven directly: every candidate in the
+        real failure shares the new event's evidence_id (one session's
+        transcript = one evidence row), so a THREAD_OPEN pair sharing
+        evidence_id must still match -- the opposite of every other type
+        (see test_same_evidence_not_superseded above, which asserts the
+        normal-type behaviour this deliberately differs from)."""
+        seed_evidence(conn, 1)
+        old_id = seed_event(
+            conn, content_hash="h_a", created_at=1000, session_id="sess1", evidence_id=1,
+            event_type="THREAD_OPEN",
+            payload={"description": "Now writing the tests.", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, session_id="sess1", evidence_id=1,
+            event_type="THREAD_OPEN",
+            payload={"description": "Now running mypy and ruff.", "authority": "assistant_decided"},
+        )
+        assert old_id in find_superseded(conn, new, use_embeddings=False)
+
+    def test_authority_gate_still_protects_a_user_stated_thread(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """A genuinely important, explicitly-stated thread must not be
+        casually overwritten by later routine narration -- the pre-existing
+        authority gate is inherited unchanged, not bypassed."""
+        old_id = seed_event(
+            conn, content_hash="h_a", created_at=1000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "Park this — we still need the retry logic done.",
+                     "authority": "user_stated"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "Now running mypy and ruff.", "authority": "assistant_decided"},
+        )
+        assert find_superseded(conn, new, use_embeddings=False) == []
+        assert old_id not in find_superseded(conn, new, use_embeddings=False)
+
+    def test_equal_authority_same_session_still_supersedes(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        """Two user_stated threads in the SAME session: the later one still
+        wins (equal authority tier passes the gate) -- this is the mechanism
+        that would ALSO apply within a single session for Taskflow-shaped
+        content, distinct from the cross-session case the scope boundary
+        protects."""
+        old_id = seed_event(
+            conn, content_hash="h_a", created_at=1000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "We need JWT auth done next.", "authority": "user_stated"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "Add the Pydantic schema.", "authority": "user_stated"},
+        )
+        assert old_id in find_superseded(conn, new, use_embeddings=False)
+
+    def test_temporal_gate_still_applies(self, conn: sqlite3.Connection) -> None:
+        seed_event(
+            conn, content_hash="h_future", created_at=5000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "Now writing the tests.", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_now", created_at=2000, session_id="sess1",
+            event_type="THREAD_OPEN",
+            payload={"description": "Now running mypy.", "authority": "assistant_decided"},
+        )
+        assert find_superseded(conn, new, use_embeddings=False) == []
+
+    def test_non_thread_types_are_unaffected(self, conn: sqlite3.Connection) -> None:
+        """Sanity: adding THREAD_OPEN to _SUPERSESSION_TYPES must not change
+        DECISION's own topical-predicate behaviour -- an unrelated same-
+        session DECISION must NOT supersede another unrelated one."""
+        old_id = seed_event(
+            conn, content_hash="h_a", created_at=1000, session_id="sess1",
+            event_type="DECISION",
+            payload={"description": "Use SQLite for local storage.", "authority": "assistant_decided"},
+        )
+        new = make_event(
+            content_hash="h_b", created_at=2000, session_id="sess1",
+            event_type="DECISION",
+            payload={"description": "Use Redis for the rate limiter.", "authority": "assistant_decided"},
+        )
+        assert old_id not in find_superseded(conn, new, use_embeddings=False)
+
+
 class TestDeriveSubject:
     """derive_subject extracts the *topic* a decision is about (not the choice)."""
 
