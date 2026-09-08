@@ -212,6 +212,69 @@ class TestMakeInjectionContext:
         assert ctx.token_budget == 400
 
 
+class TestHandoffOutranksNarration:
+    """#25 item 2: at equal authority, an explicit handoff to a later session
+    outranks narration, whatever the weight.
+
+    Without this term the sort is (authority, -weight), so every assistant
+    statement typed THREAD_OPEN sits at one priority and the heaviest wins —
+    and weight has no view on whether something is queued. Measured on the
+    four benchmark stores at the session boundaries the probes actually ask
+    at, a genuine handoff existed but narration was rendered at 4 boundaries.
+
+    The fixtures below are the real Relay pair from that measurement.
+    """
+
+    _HANDOFF = ("That's the shape of the router; next session picks up here "
+                "rather than re-deriving any of it.")
+    _NARRATION = "Running the new integration test now."
+
+    def test_handoff_beats_heavier_narration_at_equal_authority(self) -> None:
+        narration = _event("THREAD_OPEN", self._NARRATION,
+                           weight=0.63, authority=ASSISTANT_DECIDED)
+        handoff = _event("THREAD_OPEN", self._HANDOFF,
+                         weight=0.41, authority=ASSISTANT_DECIDED)
+        result = partition_events([narration, handoff])
+        assert result["active_threads"][0] is handoff
+        assert select_active_thread([narration, handoff]) is handoff
+
+    def test_authority_still_outranks_handoff(self) -> None:
+        """The term sits BELOW authority on purpose. Promoting handoffs above
+        it would let an assistant's note outrank what the user said is
+        outstanding — D9's defect, inverted."""
+        user_thread = _event("THREAD_OPEN", "Finish the token refresh path.",
+                             weight=0.1, authority=USER_STATED)
+        assistant_handoff = _event("THREAD_OPEN", self._HANDOFF,
+                                   weight=5.0, authority=ASSISTANT_DECIDED)
+        result = partition_events([assistant_handoff, user_thread])
+        assert result["active_threads"][0] is user_thread
+
+    def test_weight_still_decides_between_two_handoffs(self) -> None:
+        light = _event("THREAD_OPEN", "Next session: finish the parser.",
+                       weight=0.4, authority=ASSISTANT_DECIDED)
+        heavy = _event("THREAD_OPEN", "Next session: finish the scheduler.",
+                       weight=0.9, authority=ASSISTANT_DECIDED)
+        result = partition_events([light, heavy])
+        assert result["active_threads"][0] is heavy
+
+    def test_weight_still_decides_between_two_narrations(self) -> None:
+        """Unchanged behaviour where no handoff is present — which is every
+        Conductor boundary in the corpus (that project states no handoff at
+        all, and selecting narration there is not a defect)."""
+        light = _event("THREAD_OPEN", "Now writing the tests.",
+                       weight=0.4, authority=ASSISTANT_DECIDED)
+        heavy = _event("THREAD_OPEN", "Now running mypy and ruff.",
+                       weight=0.9, authority=ASSISTANT_DECIDED)
+        result = partition_events([light, heavy])
+        assert result["active_threads"][0] is heavy
+
+    def test_narration_only_slate_still_fills_the_slot(self) -> None:
+        """The term reorders candidates; it must never empty the section."""
+        narration = _event("THREAD_OPEN", self._NARRATION,
+                           weight=0.63, authority=ASSISTANT_DECIDED)
+        assert select_active_thread([narration]) is narration
+
+
 class TestSelectActiveThread:
     """The selector must agree with partition_events by construction, because
     render_state reserves budget for whatever it returns. If it picks an event

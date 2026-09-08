@@ -12,6 +12,7 @@ from cognikernel.extraction.authority import (
     USER_STATED,
     normalize_subject,
 )
+from cognikernel.quality.detectors import describes_future_session_handoff
 from cognikernel.storage.sections import (
     COMPONENT_TYPES as _COMPONENT_TYPES,
     DECISION_TYPES as _DECISION_TYPES,
@@ -39,11 +40,36 @@ _THREAD_AUTHORITY_PRIORITY = {
 _THREAD_AUTHORITY_FALLBACK = 5  # missing or unknown authority
 
 
-def _thread_sort_key(event) -> tuple[int, float]:
-    """Sort key for the active_threads bucket: (authority_priority, -weight)."""
+def _thread_sort_key(event) -> tuple[int, int, float]:
+    """Sort key for the active_threads bucket.
+
+    (authority_priority, not_a_handoff, -weight). Lower wins.
+
+    The middle term (#25 item 2) is what stops narration holding the slot. With
+    only authority and weight, every assistant statement typed THREAD_OPEN sits
+    at one priority and the heaviest wins — and weight has no view on whether
+    something is queued, so "Running the new integration test now." (w=0.63)
+    outranks "next session picks up here rather than re-deriving any of it."
+    (w=0.41). Measured across the four benchmark stores at the session
+    boundaries the probes actually ask at, that was 4 boundaries where a
+    genuine handoff existed and narration was rendered instead.
+
+    Authority still comes FIRST. Promoting handoffs above it would let an
+    assistant's note outrank what the user themselves said is outstanding,
+    which is the defect D9 was written to prevent, inverted. D9 already
+    demotes a user-stated thread with no deferred-work reference, so the top
+    tier holds the user's real threads and this term orders what is left.
+
+    The narrow handoff predicate is deliberate: the broad deferred-work one
+    flags 21 of 131 real threads, 13 of them narration matched on incidental
+    wording, and promoting those would reproduce the very failure this term
+    fixes rather than fix it.
+    """
     authority = (event.payload.get("authority") or "")
+    description = (event.payload.get("description") or "")
     return (
         _THREAD_AUTHORITY_PRIORITY.get(authority, _THREAD_AUTHORITY_FALLBACK),
+        0 if describes_future_session_handoff(description) else 1,
         -float(event.weight or 0.0),
     )
 
