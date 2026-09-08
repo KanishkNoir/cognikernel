@@ -204,6 +204,62 @@ class TestBareInstructionThread:
         assert admit(e).action == "admit"
 
 
+class TestFutureSessionHandoffPredicate:
+    """#25: the narrow predicate that shields a thread from recency
+    supersession. It is deliberately NOT the same vocabulary as D9's — the
+    two have opposite failure costs, so a merge would break one of them.
+    """
+
+    def test_flags_explicit_next_session_handoff(self) -> None:
+        from cognikernel.quality.detectors import describes_future_session_handoff
+
+        assert describes_future_session_handoff(
+            "Next session's focus: implementing the fallback+retry router.")
+        assert describes_future_session_handoff(
+            "So the next step is picking back up on toolbelt/retry.py.")
+        assert describes_future_session_handoff(
+            "This is the active work item for the next session.")
+
+    def test_does_not_flag_narration_the_broad_predicate_matches(self) -> None:
+        """The whole reason this predicate exists. All four are real store
+        descriptions that describes_deferred_work flags on incidental wording;
+        shielding them would restore the narration pile-up."""
+        from cognikernel.quality.detectors import (
+            describes_deferred_work,
+            describes_future_session_handoff,
+        )
+
+        narration = [
+            "Continuing with tests now.",
+            "Continuing with the package scaffolding.",
+            "Let me fix the remaining long line manually.",
+            "Now let's fix the one remaining long line.",
+        ]
+        for text in narration:
+            assert describes_deferred_work(text), text     # broad matches
+            assert not describes_future_session_handoff(text), text   # narrow does not
+
+    def test_narrow_is_a_subset_of_broad_on_real_handoffs(self) -> None:
+        """Anything explicit enough to be a handoff is also deferred work, so
+        the shield can never protect something D9 would have demoted."""
+        from cognikernel.quality.detectors import (
+            describes_deferred_work,
+            describes_future_session_handoff,
+        )
+
+        for text in ["Next session's focus: the router.",
+                     "Queued for next time.",
+                     "Ready to continue with the migration whenever you are."]:
+            assert describes_future_session_handoff(text)
+            assert describes_deferred_work(text)
+
+    def test_empty_and_none_are_not_handoffs(self) -> None:
+        from cognikernel.quality.detectors import describes_future_session_handoff
+
+        assert not describes_future_session_handoff("")
+        assert not describes_future_session_handoff(None)  # type: ignore[arg-type]
+
+
 class TestUnverifiableLanguagesAreNotPenalised:
     """Grounding must not punish a file merely because we cannot parse its
     language. The inventory is built from the discovery walk, which globs only
