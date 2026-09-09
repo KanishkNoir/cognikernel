@@ -123,9 +123,11 @@ def resolve_project_id(project_path: str | Path, config: Config) -> str:
     if config.project_identity:
         return hash_project_identity(config.project_identity)
 
-    # Anchor to the repo root FIRST (#33). Checking the raw path first would
-    # perpetuate the split: once a subdirectory store exists, every later
-    # capture from that directory would keep finding it and keep writing there.
+    # Anchor to the repo root FIRST (#33), but only ever to a root store that
+    # ALREADY EXISTS — see the note on the return below for why this never
+    # creates one. Checking the raw path first would perpetuate the split:
+    # once a subdirectory store exists, every later capture from that
+    # directory would keep finding it and keep writing there.
     root_id = hash_project_path(project_root(project_path))
     if (config.projects_dir / f"{root_id}.db").exists():
         return root_id
@@ -140,8 +142,19 @@ def resolve_project_id(project_path: str | Path, config: Config) -> str:
         return legacy_id
 
     equivalent = _find_equivalent_project_id(project_path, config)
-    # A brand-new store is created at the root, never at the cwd.
-    return equivalent or root_id
+    # A brand-new store is created at the PATH, not at the git root.
+    #
+    # Anchoring only ever REDIRECTS into a root store that already exists; it
+    # never creates one. `--show-toplevel` walks up as far as it takes, so a
+    # user whose ~/code or dotfiles directory is itself a repo would otherwise
+    # have every unrelated project beneath it collapse into a single store —
+    # the mirror image of #33, and worse: #33 split one project's memory,
+    # this would MERGE two projects' decisions into one. An existing store at
+    # the root is the evidence that the root is a real project someone
+    # actually works in; without it, this cannot tell a monorepo subpackage
+    # from an unrelated project that happens to sit inside a repo, and the
+    # safe reading is that they are separate.
+    return equivalent or legacy_id
 
 
 def get_db_path(config: Config, project_id: str) -> Path:
