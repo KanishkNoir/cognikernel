@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 
 from cognikernel.model import Event
 from cognikernel.quality.detectors import (
+    detect_anaphoric_thread,
     detect_bare_instruction_thread,
     detect_boilerplate,
     detect_junk_constraint,
@@ -173,6 +174,19 @@ def _admit_inner(event: Event, ground: GroundingContext | None) -> Verdict:
     if hit is not None:
         return Verdict("downgrade", hit.rule_id, hit.note)
 
+    # D10 (#30): a user-stated thread that is only a POINTER at another thread
+    # ("This is the active work item for the next session."). The extractor
+    # splits a turn into sentences, so the pointer and its own antecedent
+    # compete as two threads at the same tier — and the pointer, being later,
+    # superseded the statement it refers to and rendered in its place. Demoted
+    # for the same reason D9 is: it remains a true statement, and if extraction
+    # missed the antecedent it may be all that was recorded.
+    hit = detect_anaphoric_thread(
+        description, event.event_type, payload.get("authority", "") or ""
+    )
+    if hit is not None:
+        return Verdict("downgrade", hit.rule_id, hit.note)
+
     # An EMPTY inventory means "cannot verify", not "nothing is real". A brand-new
     # project has no symbol graph yet, and grounding against an empty set would
     # downgrade every component event it ever captured.
@@ -214,6 +228,12 @@ def apply_verdict(event: Event, verdict: Verdict) -> Event:
     elif verdict.rule_id == "D9":
         event.payload["authority"] = _DEMOTED_THREAD_AUTHORITY
         event.payload["quality"] = "instruction_not_thread"
+    elif verdict.rule_id == "D10":
+        # Same demotion as D9, different marker: the two say different things
+        # about why the thread lost its tier, and the debugger should be able
+        # to tell "this was an instruction" from "this was a reference".
+        event.payload["authority"] = _DEMOTED_THREAD_AUTHORITY
+        event.payload["quality"] = "thread_reference"
     else:
         event.payload["quality"] = "context_dependent"
     return event

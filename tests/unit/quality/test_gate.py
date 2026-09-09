@@ -162,7 +162,18 @@ class TestBareInstructionThread:
         assert v.rule_id == "D9"
 
     def test_genuine_deferral_is_admitted(self) -> None:
-        e = _event("THREAD_OPEN", "This is the active work item for the next session.",
+        """A SELF-CONTAINED deferral keeps its tier.
+
+        The fixture here was originally "This is the active work item for the
+        next session." — which D9 does admit, since it plainly refers to
+        deferred work. D10 now demotes it on a different axis (it is a pointer
+        at a thread, not a statement of one: #30), so it is no longer a valid
+        fixture for "D9 leaves real threads alone". Replaced with a deferral
+        that names its own subject; the old sentence is covered by
+        TestAnaphoricThreadReference below.
+        """
+        e = _event("THREAD_OPEN",
+                   "Next session's focus: implementing the fallback+retry router.",
                    authority="user_stated")
         assert admit(e).action == "admit"
 
@@ -258,6 +269,73 @@ class TestFutureSessionHandoffPredicate:
 
         assert not describes_future_session_handoff("")
         assert not describes_future_session_handoff(None)  # type: ignore[arg-type]
+
+
+class TestAnaphoricThreadReference:
+    """D10 (#30): a user-stated thread that only points at another thread.
+
+    The extractor splits a turn into sentences, so a pointer and its own
+    antecedent arrive as two competing THREAD_OPEN events. In the real Taskflow
+    store they were 44ms apart, and the pointer superseded the statement it
+    refers to — leaving the store holding the pronoun and not the referent.
+    """
+
+    _POINTER = "This is the active work item for the next session."
+    _ANTECEDENT = ("We need to implement JWT authentication end-to-end — login "
+                   "endpoint, token issuance, and the FastAPI dependency guard.")
+
+    def test_pointer_is_demoted(self) -> None:
+        v = admit(_event("THREAD_OPEN", self._POINTER, authority="user_stated"))
+        assert v.action == "downgrade"
+        assert v.rule_id == "D10"
+
+    def test_its_antecedent_is_untouched(self) -> None:
+        assert admit(
+            _event("THREAD_OPEN", self._ANTECEDENT, authority="user_stated")
+        ).action == "admit"
+
+    def test_demotion_marks_it_as_a_reference_not_an_instruction(self) -> None:
+        """D9 and D10 both demote, but they say different things about why —
+        the debugger should be able to tell them apart."""
+        from cognikernel.quality.gate import apply_verdict
+
+        e = _event("THREAD_OPEN", self._POINTER,
+                   authority="user_stated", source_role="user")
+        apply_verdict(e, admit(e))
+        assert e.payload["authority"] == "assistant_decided"
+        assert e.payload["quality"] == "thread_reference"
+        assert e.payload["source_role"] == "user"
+
+    def test_conjunction_openers_are_not_demoted(self) -> None:
+        """D10 reuses only the bare-pronoun half of D7's shape. D7 also flags
+        discourse-connective openers, and on the real corpus that half catches
+        'So the next step is picking back up on toolbelt/retry.py' — a genuine
+        handoff and the correct answer to a graded probe. Demoting it would
+        break a passing probe to fix a failing one."""
+        e = _event("THREAD_OPEN",
+                   "So the next step is picking back up on toolbelt/retry.py — "
+                   "implementing/finishing RetryPolicy and the retry helper.",
+                   authority="user_stated")
+        assert admit(e).action == "admit"
+
+    def test_a_demonstrative_with_a_noun_head_is_not_a_reference(self) -> None:
+        """'This migration is ...' names its subject and is self-contained —
+        the same distinction D7's regex already draws."""
+        e = _event("THREAD_OPEN", "This migration is still outstanding for next session.",
+                   authority="user_stated")
+        assert admit(e).action == "admit"
+
+    def test_only_applies_to_user_stated_threads(self) -> None:
+        """A thread already below the top tier can neither outrank nor
+        supersede its antecedent, so there is nothing to correct."""
+        e = _event("THREAD_OPEN", self._POINTER, authority="assistant_decided")
+        assert admit(e).action == "admit"
+
+    def test_only_applies_to_threads(self) -> None:
+        e = _event("DECISION", self._POINTER, authority="user_stated")
+        # DECISION is a statement type, so D7 handles it on its own terms —
+        # what must not happen is D10 claiming it.
+        assert admit(e).rule_id != "D10"
 
 
 class TestUnverifiableLanguagesAreNotPenalised:

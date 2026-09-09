@@ -213,6 +213,59 @@ def describes_deferred_work(text: str) -> bool:
     return bool(_DEFERRAL_RE.search(text or ""))
 
 
+# ── D10: a thread that is a REFERENCE to a thread ────────────────────────────
+#
+# "This is the active work item for the next session." is not a statement of a
+# thread. It is a pointer at one, and it carries nothing without the sentence
+# it points at. The extractor splits a turn into sentences, so the pointer and
+# its own antecedent arrive as two competing THREAD_OPEN events -- and in the
+# real Taskflow store the pointer then superseded the antecedent, 44ms apart,
+# leaving the store holding the pronoun and not the referent (#30):
+#
+#   We need to implement JWT authentication end-to-end -- login endpoint,
+#   token issuance, and the FastAPI dependency guard.      <- deleted
+#   This is the active work item for the next session.     <- kept, rendered
+#
+# The signal is the D7 shape: a bare demonstrative subject with no noun head.
+# It reuses D7's own regex rather than a second copy, but ONLY the bare-pronoun
+# half -- D7 also flags discourse-connective openers ("So ...", "And ..."), and
+# on the real corpus that half flags "So the next step is picking back up on
+# toolbelt/retry.py", a genuine handoff and the correct answer for a graded
+# probe. Demoting it would break a passing probe to fix a failing one.
+#
+# Validated against all 131 real THREAD_OPEN events: the bare-demonstrative
+# rule flags 2, both genuine references, and neither is any project's gold
+# thread.
+#
+# It DEMOTES rather than rejects, for the same reason D9 does: the pointer is
+# still a true statement and may be the only thing recorded if extraction
+# missed its antecedent. Losing it outright would be worse than mis-ranking it.
+
+
+def has_bare_demonstrative_subject(text: str) -> bool:
+    """True when the text opens with a pronoun subject and no noun head."""
+    return bool(_BARE_PRONOUN_SUBJECT.match((text or "").strip()))
+
+
+def detect_anaphoric_thread(
+    text: str, event_type: str, authority: str
+) -> DetectorHit | None:
+    """D10 -- a top-authority thread that only points at another thread.
+
+    Scoped like D9: only THREAD_OPEN, only `user_stated`. A thread already
+    below the top tier cannot outrank or supersede its own antecedent, so
+    there is nothing to correct.
+    """
+    if event_type != _THREAD_OPEN or authority != _USER_STATED:
+        return None
+    if not has_bare_demonstrative_subject(text):
+        return None
+    return DetectorHit(
+        "D10", "thread is a bare-demonstrative reference to another thread — "
+               "it must not outrank or supersede the statement it points at",
+    )
+
+
 # ── explicit handoff to a future session ─────────────────────────────────────
 #
 # A SECOND, deliberately narrower vocabulary, and the reason it is separate
