@@ -101,8 +101,8 @@ def project_root(project_path: str | Path) -> Path:
         )
         if result.returncode == 0 and result.stdout.strip():
             resolved = Path(result.stdout.strip())
-    except Exception:                       # git missing, timeout, permissions
-        pass
+    except Exception as exc:  # git missing, timeout, permissions
+        _log.debug("project_root.git_rev_parse_failed: %s", exc, exc_info=True)
     try:
         resolved = resolved.resolve()
     except Exception:
