@@ -40,6 +40,7 @@ hand to make a test pass.
 """
 from __future__ import annotations
 
+import copy
 import json
 import tempfile
 from functools import lru_cache
@@ -64,6 +65,51 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _replay(rows: list[dict], sessions: list[str], k: int) -> dict:
+    """Replay sessions[:k] into a fresh store and report the resulting slate.
+
+    Takes `rows` rather than reading the fixture itself so a test can hand in
+    its own object and check afterwards that replaying did not rewrite it.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        with get_connection(Path(td) / "replay.db") as conn:
+            run_migrations(conn)
+            for sid in sessions[:k]:
+                events = [
+                    Event(
+                        project_id="p",
+                        session_id=sid,
+                        event_type=r["event_type"],
+                        # Deep copy per replay, NOT the caller's dict.
+                        # execute_merge runs the quality gate and apply_verdict
+                        # mutates event.payload in place (D9 rewrites
+                        # `authority` and adds `quality`), so sharing the dict
+                        # lets one boundary's demotion leak into every later
+                        # boundary. That is not cosmetic: on a second pass D9
+                        # sees an already-demoted event, does not fire, and so
+                        # does not halve the weight either — identical input
+                        # would rank differently depending on replay order.
+                        # Measured: 9 of the 133 payloads were affected.
+                        payload=copy.deepcopy(r["payload"]),
+                        content_hash=r["content_hash"],
+                        weight=r["weight"],
+                        mention_count=r["mention_count"],
+                        created_at=r["created_at"],
+                    )
+                    for r in rows
+                    if r["session"] == sid
+                ]
+                if events:
+                    execute_merge(conn, sid, events)
+            live = projection_to_events(load_or_rebuild(conn, "p"))
+    winner = select_active_thread(live)
+    threads = [e for e in live if e.event_type == "THREAD_OPEN"]
+    return {
+        "selected": "" if winner is None else winner.payload.get("description", ""),
+        "threads": [e.payload.get("description", "") for e in threads],
+    }
+
+
 @lru_cache(maxsize=1)
 def _slates() -> dict[tuple[str, int], dict]:
     """Replay every boundary once; keyed by (project, probe_at_session).
@@ -74,36 +120,9 @@ def _slates() -> dict[tuple[str, int], dict]:
     fixture = _load(_EVENTS)
     out: dict[tuple[str, int], dict] = {}
     for project, data in fixture.items():
-        sessions: list[str] = data["sessions"]
-        rows: list[dict] = data["events"]
+        sessions, rows = data["sessions"], data["events"]
         for k in range(1, len(sessions)):
-            with tempfile.TemporaryDirectory() as td:
-                with get_connection(Path(td) / "replay.db") as conn:
-                    run_migrations(conn)
-                    for sid in sessions[:k]:
-                        events = [
-                            Event(
-                                project_id="p",
-                                session_id=sid,
-                                event_type=r["event_type"],
-                                payload=r["payload"],
-                                content_hash=r["content_hash"],
-                                weight=r["weight"],
-                                mention_count=r["mention_count"],
-                                created_at=r["created_at"],
-                            )
-                            for r in rows
-                            if r["session"] == sid
-                        ]
-                        if events:
-                            execute_merge(conn, sid, events)
-                    live = projection_to_events(load_or_rebuild(conn, "p"))
-            winner = select_active_thread(live)
-            threads = [e for e in live if e.event_type == "THREAD_OPEN"]
-            out[(project, k + 1)] = {
-                "selected": "" if winner is None else winner.payload.get("description", ""),
-                "threads": [e.payload.get("description", "") for e in threads],
-            }
+            out[(project, k + 1)] = _replay(rows, sessions, k)
     return out
 
 
@@ -170,6 +189,31 @@ class TestThreadBoundarySlate:
             "edit the gold to make this pass."
         )
 
+    def test_replay_does_not_mutate_its_input(self) -> None:
+        """Replaying must not rewrite the events handed to it.
+
+        `execute_merge` runs the quality gate, and `apply_verdict` mutates
+        `event.payload` in place. Building Events straight from the loaded
+        fixture therefore let one boundary's D9 demotion leak into every later
+        boundary — and since a demoted event no longer trips D9, it also
+        stopped having its weight halved, so identical input could rank
+        differently depending on replay order. Caught in review on #29; 9 of
+        the 133 payloads were affected.
+
+        The slate did not move, but that was luck rather than design, so the
+        property is asserted directly: replay the busiest project twice from
+        one object and require it to come back untouched, and identical.
+        """
+        fixture = _load(_EVENTS)
+        data = fixture["Relay"]
+        pristine = copy.deepcopy(data["events"])
+
+        first = _replay(data["events"], data["sessions"], 1)
+        assert data["events"] == pristine, "replay rewrote its own input"
+
+        second = _replay(data["events"], data["sessions"], 1)
+        assert first == second, "replaying the same boundary twice diverged"
+
     def test_fixture_is_the_full_133_event_set(self) -> None:
         """The set is held out; silently shrinking it would quietly weaken
         every assertion above."""
@@ -212,4 +256,7 @@ class TestGradedProbeAnswers:
                "handoff supersession is deliberately untouched by #26.",
     )
     def test_taskflow_s3_selects_the_jwt_thread(self) -> None:
-        assert "JWT" in _slates()[("Taskflow", 3)]["selected"]
+        # Case-insensitive: this xfail is meant to flip when the selector
+        # starts returning the JWT thread, and it should flip whatever casing
+        # the winning description happens to use.
+        assert "jwt" in _slates()[("Taskflow", 3)]["selected"].lower()
