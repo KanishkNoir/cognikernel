@@ -142,20 +142,55 @@ class TestRepoRootAnchoring:
             pytest.skip("git is required for repo-root anchoring tests")
         return root
 
-    def test_subdirectory_resolves_to_the_root_id(self, tmp_path: Path) -> None:
+    def test_subdirectory_resolves_to_the_root_store_when_one_exists(
+        self, tmp_path: Path
+    ) -> None:
+        """The #33 case exactly: the project has a store, the agent cd's into
+        a subpackage, and the capture must go to the project's store."""
         root = self._repo(tmp_path)
         cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
-        assert (resolve_project_id(root / "packages" / "core", cfg)
-                == resolve_project_id(root, cfg))
+        cfg.projects_dir.mkdir(parents=True)
+        root_id = hash_project_path(root.resolve())
+        (cfg.projects_dir / f"{root_id}.db").touch()
 
-    def test_a_new_store_is_created_at_the_root(self, tmp_path: Path) -> None:
-        """The id for a subdirectory of a fresh repo is the ROOT's hash — not
-        the subdirectory's, and not merely 'some shared value'."""
-        root = self._repo(tmp_path)
+        assert resolve_project_id(root / "packages" / "core", cfg) == root_id
+
+    def test_unrelated_projects_under_an_umbrella_repo_stay_separate(
+        self, tmp_path: Path
+    ) -> None:
+        """The mirror-image bug this must NOT introduce.
+
+        `git rev-parse --show-toplevel` walks up as far as it takes, so a user
+        whose ~/code or dotfiles directory is itself a repo would have every
+        unrelated project beneath it collapse into one store. That is worse
+        than #33: #33 split one project's memory, this would MERGE two
+        projects' decisions.
+
+        Anchoring therefore only ever redirects into a root store that already
+        exists — it never creates one. Nobody has worked at the umbrella root
+        here, so there is no store there, and the two projects stay apart.
+        """
+        umbrella = tmp_path / "code"
+        (umbrella / "projA").mkdir(parents=True)
+        (umbrella / "projB").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(umbrella)], check=True,
+                       capture_output=True)
         cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
-        resolved = resolve_project_id(root / "packages" / "core", cfg)
-        assert resolved == hash_project_path(root.resolve())
-        assert resolved != hash_project_path(root / "packages" / "core")
+
+        a = resolve_project_id(umbrella / "projA", cfg)
+        b = resolve_project_id(umbrella / "projB", cfg)
+        assert a != b
+        assert a == hash_project_path(umbrella / "projA")
+
+    def test_a_new_store_is_created_at_the_path_not_the_root(
+        self, tmp_path: Path
+    ) -> None:
+        """With no store at the root, resolution is unchanged from before —
+        the cwd's own hash. Anchoring redirects; it does not relocate."""
+        root = self._repo(tmp_path)
+        sub = root / "packages" / "core"
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
+        assert resolve_project_id(sub, cfg) == hash_project_path(sub)
 
     def test_an_existing_subdirectory_store_still_wins(self, tmp_path: Path) -> None:
         """Back-compat, and the reason root anchoring is not unconditional.
