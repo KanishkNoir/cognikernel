@@ -1,0 +1,108 @@
+{
+ "Relay": [
+  {
+   "probe_at_session": 2,
+   "live_threads": 1,
+   "handoff_candidates": 1,
+   "selected": "That's the shape of the router; next session picks up here rather than re-deriving any of it.",
+   "selected_is_handoff": true
+  },
+  {
+   "probe_at_session": 3,
+   "live_threads": 2,
+   "handoff_candidates": 1,
+   "selected": "That's the shape of the router; next session picks up here rather than re-deriving any of it.",
+   "selected_is_handoff": true
+  },
+  {
+   "probe_at_session": 4,
+   "live_threads": 2,
+   "handoff_candidates": 1,
+   "selected": "That's the shape of the router; next session picks up here rather than re-deriving any of it.",
+   "selected_is_handoff": true
+  },
+  {
+   "probe_at_session": 5,
+   "live_threads": 3,
+   "handoff_candidates": 1,
+   "selected": "That's the shape of the router; next session picks up here rather than re-deriving any of it.",
+   "selected_is_handoff": true
+  },
+  {
+   "probe_at_session": 6,
+   "live_threads": 4,
+   "handoff_candidates": 1,
+   "selected": "That's the shape of the router; next session picks up here rather than re-deriving any of it.",
+   "selected_is_handoff": true
+  }
+ ],
+ "Conductor": [
+  {
+   "probe_at_session": 2,
+   "live_threads": 1,
+   "handoff_candidates": 0,
+   "selected": "Everything's in place and untracked (nothing committed yet — I'll leave that for you to trigger explicitly).",
+   "selected_is_handoff": false
+  },
+  {
+   "probe_at_session": 3,
+   "live_threads": 2,
+   "handoff_candidates": 0,
+   "selected": "Collection succeeds, so api.py and the new test file are syntactically sound.",
+   "selected_is_handoff": false
+  },
+  {
+   "probe_at_session": 4,
+   "live_threads": 3,
+   "handoff_candidates": 0,
+   "selected": "22 passed / 27 skipped (was 18/27) — the four new tests are the only addition, everything else is untouched.",
+   "selected_is_handoff": false
+  },
+  {
+   "probe_at_session": 5,
+   "live_threads": 4,
+   "handoff_candidates": 0,
+   "selected": "The LLM provider is slow/down.",
+   "selected_is_handoff": false
+  }
+ ],
+ "Toolbelt": [
+  {
+   "probe_at_session": 2,
+   "live_threads": 1,
+   "handoff_candidates": 1,
+   "selected": "Noted: next session's work is building a research agent on top of toolbelt-core (and toolbelt-mcp where relevant for exposing it) — first order of business, not exploratory.",
+   "selected_is_handoff": true
+  },
+  {
+   "probe_at_session": 3,
+   "live_threads": 1,
+   "handoff_candidates": 1,
+   "selected": "Noted: next session's work is building a research agent on top of toolbelt-core (and toolbelt-mcp where relevant for exposing it) — first order of business, not exploratory.",
+   "selected_is_handoff": true
+  },
+  {
+   "probe_at_session": 4,
+   "live_threads": 3,
+   "handoff_candidates": 2,
+   "selected": "So the next step is picking back up on toolbelt/retry.py — implementing/finishing RetryPolicy and the retry helper — then wiring it into mcp/server/runner.py.",
+   "selected_is_handoff": true
+  }
+ ],
+ "Taskflow": [
+  {
+   "probe_at_session": 2,
+   "live_threads": 2,
+   "handoff_candidates": 2,
+   "selected": "This is the active work item for the next session.",
+   "selected_is_handoff": true
+  },
+  {
+   "probe_at_session": 3,
+   "live_threads": 4,
+   "handoff_candidates": 3,
+   "selected": "This is the active work item for the next session.",
+   "selected_is_handoff": true
+  }
+ ]
+}

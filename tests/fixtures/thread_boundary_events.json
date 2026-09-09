@@ -1,0 +1,2438 @@
+{
+ "Relay": {
+  "sessions": [
+   "s1",
+   "s2",
+   "s3",
+   "s4",
+   "s5",
+   "s6"
+  ],
+  "events": [
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786905034861,
+    "weight": 0.5331747666847474,
+    "mention_count": 1,
+    "content_hash": "6ba1c42a7dc6dea9a8a5a22c4860835321c5b3b3c0e2ec891d8e43606ebd1fd1",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.808966338634491,
+     "description": "Define the fallback chain.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786905143594,
+    "weight": 0.4333097823644105,
+    "mention_count": 1,
+    "content_hash": "5c202ea7d4ef7269024aef139475db7a773175b965fd3072f227993e7985124d",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.6574448943138123,
+     "description": "Rate limiting: rpm and tpm per virtual key.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786905801206,
+    "weight": 0.3816020710646729,
+    "mention_count": 1,
+    "content_hash": "e8e0a240d7d5228577c4b709e5fac5b7f12d199d0e719e65753595e773693110",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.5789906978607178,
+     "description": "Safety: per-request timeout, and what must never appear in logs.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786906244550,
+    "weight": 0.60871132514563,
+    "mention_count": 1,
+    "content_hash": "0e80d57b333fdc9b006b010f53a87434b77cbe1616e691527b125796150fca44",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9235751628875732,
+     "description": "Next session's focus: implementing the fallback+retry router — the component that actually executes everything designed piecemeal across this conversation.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786906244661,
+    "weight": 0.6160823992573364,
+    "mention_count": 1,
+    "content_hash": "1426dd770b4072902c4a464206a19484c29595da6db848dbc70efe44cc4e3367",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9347590208053589,
+     "description": "Resolve model param → group/tier list from the routing table (frontier → cheap → local structure, default alias pinned to a concrete model).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786906245348,
+    "weight": 0.632764328637085,
+    "mention_count": 1,
+    "content_hash": "5a9b464733064aa4e6e6d4313f08a6e5087f4221c1b2f47db5d8ac77fe704fd5",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9600698947906494,
+     "description": "That's the shape of the router; next session picks up here rather than re-deriving any of it.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786907066279,
+    "weight": 0.6742798272839357,
+    "mention_count": 1,
+    "content_hash": "dd01ba1ba1f97115d6941fa5ddc3ac5ea5f43debfca3b79d05a76b2ab15b0a9e",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9412150382995605,
+     "description": "The repo has no code yet, so I'll scaffold just what the fallback router needs: deployment/circuit-breaker/selection primitives plus the router itself, with tests covering each policy edge case.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786907066349,
+    "weight": 0.5949496264424134,
+    "mention_count": 1,
+    "content_hash": "ad892580a4ee3cacf2ac2f522061c67347fb9259cbd7d16c8a3d27ff6188915e",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8304794430732727,
+     "description": "Good catch — the routing table's config objects (deployments/groups/tiers) were already decided to be Pydantic-validated, not plain dataclasses.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786907066449,
+    "weight": 0.6808709248847962,
+    "mention_count": 1,
+    "content_hash": "4eae0af01ca2ddf6a82beb8575728d0a1982bb3cba8ec50b4ce1cba6a2af7dcd",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9504154324531555,
+     "description": "Continuing with the remaining modules.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786907066482,
+    "weight": 0.6477792654710389,
+    "mention_count": 1,
+    "content_hash": "395cd21d3a47556590131f2e18fdc4074bb6131a0e01524611ccf428fa6ccf1a",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9042233824729919,
+     "description": "Streaming transcode is a separate adapter-layer concern I'm intentionally not touching — ProviderAdapter stays a seam here.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786907066787,
+    "weight": 0.31965330987014773,
+    "mention_count": 1,
+    "content_hash": "df8c57f826b00842815e8cc9d6b8249f8cee4029b17380ac6e7432dd0bf4b6f1",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.4461982846260071,
+     "description": "Now re-running repeatedly to confirm the flakiness is gone, plus one more sabotage-and-revert cycle to confirm the tests still bite.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786907066837,
+    "weight": 0.408953700343628,
+    "mention_count": 1,
+    "content_hash": "3b540db59c0ab55260cca618863812d2e8000d70c9753a2ff44013476ede22b7",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5708510875701904,
+     "description": "Now confirming each policy is actually enforced by the tests, not just passing incidentally.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786907066864,
+    "weight": 0.3761591499505616,
+    "mention_count": 1,
+    "content_hash": "7bbc3fe642b43eeef53813cd753b62bf7f18786930bafa1f4ed7df9f57b1d62c",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.525073766708374,
+     "description": "Reverting and running the full suite once more clean.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786970274064,
+    "weight": 0.788614684677124,
+    "mention_count": 1,
+    "content_hash": "ca26b3a01b58932c2ad05dacdda18090a9d1850cb9299fa627cccb8ce6df69b6",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9317281246185303,
+     "description": "Confirmed intentional — I'm still using the same Redis client via plain get/set (no new vector-store dependency), and the docstring keeps the separate-eviction-domain guidance intact.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786970274100,
+    "weight": 0.7005729138374329,
+    "mention_count": 1,
+    "content_hash": "8684610ceb0384df340b0e8dc1763523190b80295278f5039dd72df4fbab107f",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8277090191841125,
+     "description": "Now updating relay/init.py to export Embedder, then rewriting the two test files.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786970274188,
+    "weight": 0.5145699158668519,
+    "mention_count": 1,
+    "content_hash": "a5c03ef2496e91be5884da44883caf2945f0f8c2fcad832ead85c8b4d415d826",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6079512238502502,
+     "description": "Let me confirm there's no other production wiring site that constructs RedisCompletionCache and would now be missing the required embedder argument.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786970274214,
+    "weight": 0.44406848335266114,
+    "mention_count": 1,
+    "content_hash": "4788d0f81ef6250fd901f34536dd1ace0e655ecdd55623481206c188f5946d67",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5246555805206299,
+     "description": "Only the two test files construct it — both updated, no other wiring site to fix.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786971149621,
+    "weight": 0.7158125590324403,
+    "mention_count": 1,
+    "content_hash": "9a47fbc0f5844cf484ffdee50ff478511f7448ca2957fc2e3e12c3bccee9ef15",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.845714271068573,
+     "description": "Now let's export the new pricing symbols from relay/init.py and write tests.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786971149741,
+    "weight": 0.7345282163619996,
+    "mention_count": 1,
+    "content_hash": "d7e412b0bb40df387eecb05356ec23b3c76aabf278e9222d4271a519d61f198e",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8678263425827026,
+     "description": "Now running the full test suite to confirm everything passes together.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786972067512,
+    "weight": 0.4110994660377503,
+    "mention_count": 1,
+    "content_hash": "330c984489924902a725541459f0b1fb0b498095e5260bdecd14650a775868ec",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.4857035279273987,
+     "description": "Write the cache lookup.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786972309891,
+    "weight": 0.452944747543335,
+    "mention_count": 1,
+    "content_hash": "d62454e584cf0a0ae46d2144ca0b805bdef1c417e67014e97a7ca5bd5fe3e10d",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5351426601409912,
+     "description": "Now export from relay/init.py and run the suite.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786973564791,
+    "weight": 0.4082377660274506,
+    "mention_count": 1,
+    "content_hash": "24ad972217ddcdc92dd770f3ee5e65714d1f6f9c77e463953e2b92982fa69fef",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.4437367022037506,
+     "description": "Session 1 opened with the repo empty — the thread was scaffolding the fallback+retry router: deployment, circuit-breaker, and selection primitives, plus the router loop itself (retries: 1 original + up to 2 failovers, 3 attempts max per client request by default).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786973865780,
+    "weight": 0.5536573934555054,
+    "mention_count": 1,
+    "content_hash": "99d0b483bdfef5dbc0161ae7f58a51f4ba52ba8fe6f2e53689d264db999a65e6",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6018015146255493,
+     "description": "Confirming that hook flag is expected — I'm documenting the previously-rejected flat-timeout approach in the docstring, not reintroducing it; the actual timeout logic still lives entirely in FallbackRouter.route().",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786973865826,
+    "weight": 0.8301417732238769,
+    "mention_count": 1,
+    "content_hash": "eff0adfd97f59520455224dc6cf1e9b76641ac5d55152a376895dca38742d59e",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9023280143737793,
+     "description": "Now adding the logging calls to handle().",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786974208409,
+    "weight": 0.7295336079597473,
+    "mention_count": 1,
+    "content_hash": "71e33600c4e7362c8c0539282696a73b90ece4efb90177565cd2e86034269918",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7929713129997253,
+     "description": "That flag is an unrelated match — I'm just instantiating the existing Deployment Pydantic model in the test, not touching YAML config parsing.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786974208430,
+    "weight": 0.8190216898918152,
+    "mention_count": 1,
+    "content_hash": "1d5479c578e18ce02a47a58a75a16054f545d053962d16d8cedf46740add3db4",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8902409672737122,
+     "description": "Now running the test suite to verify everything actually works.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786974208455,
+    "weight": 0.6767255640029908,
+    "mention_count": 1,
+    "content_hash": "6df083ec269dae3375fb7210ac7395f386b392b6e3abedaa6ba5bb3a399c264f",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7355712652206421,
+     "description": "All 11 tests pass (6 existing test_tracing.py tests still green after the shared-fixture refactor, plus 5 new test_provider_client.py tests).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786974208479,
+    "weight": 0.8358000540733338,
+    "mention_count": 1,
+    "content_hash": "1461ed0d05590e38144f4184f3ae91a1087f50d8c49da6afa52d4c64f6606458",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.908478319644928,
+     "description": "Let's run the full suite to make sure nothing else broke.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786974607598,
+    "weight": 0.8488026666641235,
+    "mention_count": 1,
+    "content_hash": "e262e6435625b63289fd99b67ef5ffa0af2661083ed38f2f05df1f647676720d",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9226115942001343,
+     "description": "Let's rerun the provider-client tests to make sure the fix didn't break anything.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786974607614,
+    "weight": 0.7441116666793823,
+    "mention_count": 1,
+    "content_hash": "51bb65ec625964ad0c820a9279cb83217bd4206f55e24b9a5db521db23be92d4",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8088170289993286,
+     "description": "Now writing the integration test.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786974607634,
+    "weight": 0.5657984733581544,
+    "mention_count": 1,
+    "content_hash": "967f864cb904c91d62db3dc90d2b3293e6409051549ecb0584590ee8d7c5f8ed",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6149983406066895,
+     "description": "Unrelated match — that's about entrypoint.py's log redaction from an earlier turn, which this test doesn't touch.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1786974607653,
+    "weight": 0.39709706425666813,
+    "mention_count": 1,
+    "content_hash": "b2b4957b9833421d86bdfb4819c0f9f3bc74b8c822975d85726031935fcb8522",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.4316272437572479,
+     "description": "Running the new integration test now.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   }
+  ]
+ },
+ "Conductor": {
+  "sessions": [
+   "s1",
+   "s2",
+   "s3",
+   "s4",
+   "s5"
+  ],
+  "events": [
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403035605,
+    "weight": 0.6946720189289858,
+    "mention_count": 1,
+    "content_hash": "6487c6d8ed610e75b93384e6ad1366043266c477d510382cc5ec38338043f712",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.96968013048172,
+     "description": "Docker's installed but not running, so I'll write the Postgres-backed integration tests to skip gracefully when the daemon is unavailable, rather than fail.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403035635,
+    "weight": 0.6397297374876406,
+    "mention_count": 1,
+    "content_hash": "5be0a65342aaad4c32b7818ccc3e03f3f3d36c7fff12a1e235ffe45b2d74fc53",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8929871916770935,
+     "description": "Proceeding with scaffolding in small pieces, starting with repo init and the package skeleton.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403035731,
+    "weight": 0.3818454271794129,
+    "mention_count": 1,
+    "content_hash": "e2d59074530cf9f5b22a2f12f77e9fdf4a18d0eefe80c73da9775011803ddd15",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5330111384391785,
+     "description": "That's the decision being implemented, not reversed — this file is what makes it code.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403035798,
+    "weight": 0.5819876369348145,
+    "mention_count": 1,
+    "content_hash": "68c197f8ec84a8c80e8feffb366316834d25110e4989048e9cd578f7475dda86",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8123860359191895,
+     "description": "Next: the handler protocol and the generic worker harness (claim/lease/commit, retry accounting, circuit breaker, fan-in lock).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403035817,
+    "weight": 0.6513897079870606,
+    "mention_count": 1,
+    "content_hash": "07966ab885933fc84ff068f6c3358e5042b5a85c098bdbe32d20dc4584f51b09",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9092631340026855,
+     "description": "Consistent — that's implemented in harness.reschedule_without_attempt, not touched here.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403035879,
+    "weight": 0.6991315578630067,
+    "mention_count": 1,
+    "content_hash": "40ce8b5e273484a4d32c8b5436856c7fa99520b24d1c0a637312524211871f73",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9759051203727722,
+     "description": "Writing the notification client next.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403035893,
+    "weight": 0.6781315694659426,
+    "mention_count": 1,
+    "content_hash": "7eea0aa9348c9165affc729b4e068238d5763a8134722deda28c300f319f6832",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9465916156768799,
+     "description": "Consistent — that constraint lives in events, unaffected here.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403035997,
+    "weight": 0.6467249511810305,
+    "mention_count": 1,
+    "content_hash": "43fe1281d2d10e622366849e549fc61df2af0b7cfb06049ee34f627982fd378f",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9027516841888428,
+     "description": "Continuing with the notification and reaper worker entrypoints, and the ingestion entrypoint.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403036010,
+    "weight": 0.66778177374115,
+    "mention_count": 1,
+    "content_hash": "e0fab5d50df36167a6e6b27af55dd1e1543d0a627bbcabeb1d156e8eb067a5e0",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9321445226669312,
+     "description": "Now the package init.py files.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403036061,
+    "weight": 0.7011225896849062,
+    "mention_count": 1,
+    "content_hash": "0ea3fa493d15dd4462c15c0360163d17b1ed4188a6b6e6f4bbe887c95eba172d",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9786843657493591,
+     "description": "Notification handler unit tests next.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403036169,
+    "weight": 0.544141165681305,
+    "mention_count": 1,
+    "content_hash": "eab6743b0d881b212f432a8cebaf9d56ebd87729f3b0119846875524acadb38e",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7595568299293518,
+     "description": "Now the fan-in race test and the circuit breaker test.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403036191,
+    "weight": 0.5948359581163025,
+    "mention_count": 1,
+    "content_hash": "cdad91d50050dd6a0a073de6256169efbdcc2b969009dc8d6138c8aa56be075b",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8303207755088806,
+     "description": "Consistent — credit ledger isn't wired into the scaffold's code paths yet (schema table exists, but no charging logic was written this session).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403036213,
+    "weight": 0.6869152445307923,
+    "mention_count": 1,
+    "content_hash": "316b1146c07134b2f81a8fda1427a43eab5d6b8df83f2aeb76fc48305bf50fd7",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9588525891304016,
+     "description": "Now the circuit breaker test.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403036237,
+    "weight": 0.3823993360923768,
+    "mention_count": 1,
+    "content_hash": "8dd58bb408a64814d8679746e2a6a01b6dfa2268b94b28026e0c4800c6cdf058",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5337843298912048,
+     "description": "Now let's set up a venv, install dependencies, and run what we can (unit + config tests; DB-backed tests will self-skip since Docker's not running).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403036262,
+    "weight": 0.46094884647323614,
+    "mention_count": 1,
+    "content_hash": "3ac44590923f098aa3dcdafbb76cc9b32a9291ef3dcd6cc7874a22bf7f632031",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6434301733970642,
+     "description": "Now let's run the test suite.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787403036617,
+    "weight": 0.5007401050718691,
+    "mention_count": 1,
+    "content_hash": "f2bc7161929da0d7bdef70d2ac3391045f0b2e7a6517674558ee6ea584ddf565",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.698974072933197,
+     "description": "Everything's in place and untracked (nothing committed yet — I'll leave that for you to trigger explicitly).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787414862616,
+    "weight": 0.6955532074432375,
+    "mention_count": 1,
+    "content_hash": "1c736ba4ca0ef3b24c88467e66b0dd990a7a83eeb4ce247f7404cb646b1b61a9",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8932373523712158,
+     "description": "This is already fully implemented — there's no inline notification call left to replace.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787415186125,
+    "weight": 0.6712453846130372,
+    "mention_count": 1,
+    "content_hash": "a507dac403dead9bf0ceb66c745c1222f8c507168ffe479a064906956ab3f1d1",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8620209693908691,
+     "description": "Full suite still green (18 passed, 21 skipped — the DB-backed ones self-skip since Docker's installed but not running, same as the rest of the suite).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787415186157,
+    "weight": 0.49317049929428103,
+    "mention_count": 1,
+    "content_hash": "1f583f30056183ae132ad050fcda538f2eb86ebfb5b10c3dafb7e6260b06df4b",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6333351731300354,
+     "description": "Collection succeeds, so api.py and the new test file are syntactically sound.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787416547798,
+    "weight": 0.5112675000190735,
+    "mention_count": 1,
+    "content_hash": "c66a54420a451f95a9c29b4e1556a8dd2aecd47578c78badbe0a7fec7ff2fff6",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6040495038032532,
+     "description": "Backoff_seconds is already implemented in conductor/harness.py:19-24 and wired into both handlers — but it has no dedicated unit test (only exercised indirectly through the Docker-backed integration tests in test_harness_claim.py/test_fanin.py, which just set the config knobs).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787416547857,
+    "weight": 0.6783274653434754,
+    "mention_count": 1,
+    "content_hash": "84a33bbbb221194cc138a11426b207a48d395fc924948db31f87fccf51c1b5bb",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8014265894889832,
+     "description": "I'll add a focused pure-function test file for it, since that's a real gap.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787416548276,
+    "weight": 0.4801777217864991,
+    "mention_count": 1,
+    "content_hash": "08f303910044298f49f5daaa899df121764e0eefb8b8e7c8acc2b81ca7727b0b",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5673177242279053,
+     "description": "One note on the hook warning: it flagged a prior ruled-out decision about idempotent charging/credit balances — that's an unrelated semantic match (the shared word \"idempotent\"), not a re-litigation.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787416623656,
+    "weight": 0.5896208726882934,
+    "mention_count": 1,
+    "content_hash": "a82c3951a4726bb11f4e41c5319fbbd2bca87418664718674200064aedaaf4f0",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6966220140457153,
+     "description": "22 passed / 27 skipped (was 18/27) — the four new tests are the only addition, everything else is untouched.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787417391474,
+    "weight": 0.09604001033306121,
+    "mention_count": 1,
+    "content_hash": "c465a1e095d452a9c77cacfaabc2973dde09efe27b1553dd4e59dd86e0e90a57",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6959421038627625,
+     "description": "The hook is flagging a prior constraint: exactly-once delivery across Postgres + a downstream HTTP system is impossible — the project's own recorded decision.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad+meta",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787417391671,
+    "weight": 0.6055796670913697,
+    "mention_count": 1,
+    "content_hash": "ee405c4ea3b19579a32d015bedb760e4f4646ee94df16fd3dfad86bf73065086",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6582387685775757,
+     "description": "Now let me run the suite to confirm it's consistent with existing tests (it'll skip without Docker).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787417647305,
+    "weight": 0.46020031690597535,
+    "mention_count": 1,
+    "content_hash": "c5846b7f2e948ad55c70c20dbb8a9ec6a8cfd1b7e0fb1fb3c8298eff82dcd4a7",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5002177357673645,
+     "description": "27 skipped previously + 3 new Docker-backed tests = 30 skipped now, no regressions.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787417860539,
+    "weight": 0.5835871958732606,
+    "mention_count": 1,
+    "content_hash": "10c9caee8364ffc26f8d1c47bf5c246d85114e893a1a4e473a64b716b7aa9df9",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6343339085578918,
+     "description": "Running the tests now.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787417947929,
+    "weight": 0.7542302751541138,
+    "mention_count": 1,
+    "content_hash": "62fc0989a11f55ae34ef6f5c8b77de04e44019989752888e29c5660b69bf4d2a",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.8198155164718628,
+     "description": "The LLM provider is slow/down.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422090233,
+    "weight": 0.08716542720794677,
+    "mention_count": 1,
+    "content_hash": "a34b81c320887745dcc1d1f72844ee234b840eb14da70107c12b79f37beb3d07",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5811028480529785,
+     "description": "I'll start by pulling the relevant prior decisions from project memory and the skeletons of the files I'll need to touch, since this codebase runs CogniKernel strict mode.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad+meta",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422090294,
+    "weight": 0.7450788021087646,
+    "mention_count": 1,
+    "content_hash": "3556080c75fb6ad7bc8a0f21494a41dfb5a6499c60d7fc761e690eb4f12ad283",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7450788021087646,
+     "description": "Denied on first attempt as expected — retrying immediately, which the gate allows.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422090745,
+    "weight": 0.7842726707458496,
+    "mention_count": 1,
+    "content_hash": "f7d792f86fedc1aa668c88e3d1b4c620fa0fccbc07ccdcdf2995830e50b5fbc0",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7842726707458496,
+     "description": "That's an unrelated match — I'm adding a table, not touching the outbox delivery-guarantee decision.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422090939,
+    "weight": 0.4488184154033661,
+    "mention_count": 1,
+    "content_hash": "84c06ae647fa0246f523ec6a17686eccdee7101df4d48d58460b300cd8a20a68",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.4488184154033661,
+     "description": "Unrelated — ingestion isn't touched by this file.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422091063,
+    "weight": 0.9187209010124207,
+    "mention_count": 1,
+    "content_hash": "9af89215c1b21906d8d9d0ca05ef737945150d5423885cf11e6ea617fbfca905",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9187209010124207,
+     "description": "Unrelated — still keeping the state-flip and outbox/credit insert atomic in the same transaction, same crash-safety property as before.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422091108,
+    "weight": 0.9266970157623291,
+    "mention_count": 1,
+    "content_hash": "9d37c803c47b27e7df29dc28928ac5a57c04cd8da152fd6eadb3d1be6468651a",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9266970157623291,
+     "description": "Now the degrade-path branch.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_CLOSE",
+    "created_at": 1787422091132,
+    "weight": 0.5812625288963318,
+    "mention_count": 1,
+    "content_hash": "6bbaf6e63f800292b82c94f06baaf7ef3ad9f1830b6074883aea13f8abcce1a4",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5812625288963318,
+     "description": "Good reminder — I will run the full suite and an import sanity check once the wiring is complete.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422091164,
+    "weight": 0.35215070843696594,
+    "mention_count": 1,
+    "content_hash": "30d99662cc27689b7dce91f0817ebc75aaf2303d1e9d02cb8a1f729c61350212",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.35215070843696594,
+     "description": "Now updating notification.py's _finalize_event guard to accept 'credited' as a valid predecessor state alongside 'enriched'.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422091217,
+    "weight": 0.774625301361084,
+    "mention_count": 1,
+    "content_hash": "49980cb2f08f07d788a07663d41b959212342ff4bc174d75229756bb06ebc936",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.774625301361084,
+     "description": "Now creating the credit worker entrypoint.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422091416,
+    "weight": 0.6892179250717163,
+    "mention_count": 1,
+    "content_hash": "7f84b135d5c80a3951ddcb0c7a7c26e8f3ef7adad4275d41bd0fb1a87347fdbe",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6892179250717163,
+     "description": "Now let's verify everything actually works — run the full test suite plus an import sanity check across all modules.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422092308,
+    "weight": 0.4985943138599396,
+    "mention_count": 1,
+    "content_hash": "8ebbbae0e6f199c0c54eaf58c4b1e44137a51670f161cd32ae3925ddb7efab65",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.4985943138599396,
+     "description": "Let me do one last full-suite run to confirm the final state is green.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422755938,
+    "weight": 0.7171702980995178,
+    "mention_count": 1,
+    "content_hash": "beb24a9248530324a6a5baff690f86ccd8bc9d26072d80fb1a381633fca29740",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7171702980995178,
+     "description": "Now adding the always-transient handler and the two new tests.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s5",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787422944474,
+    "weight": 0.47287890315055847,
+    "mention_count": 1,
+    "content_hash": "9367d7a6c00274735483992399a49834c572d7c995a1e27c4387721ce09e867a",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.47287890315055847,
+     "description": "Let's re-run the suite to confirm the fix didn't break anything.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   }
+  ]
+ },
+ "Toolbelt": {
+  "sessions": [
+   "s1",
+   "s2",
+   "s3",
+   "s4"
+  ],
+  "events": [
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787947755039,
+    "weight": 0.5749069482841492,
+    "mention_count": 1,
+    "content_hash": "fda37b4bcae3e9eef5974eed802c4b2a0f84d32495114f5a80002e0c1783203a",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7383020520210266,
+     "description": "Now let's write the core package source files.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787947755069,
+    "weight": 0.6968794709663392,
+    "mention_count": 1,
+    "content_hash": "7ecd1c4c90f71097c1bed1c7320eb88e87f80f9d0711f4832c682ea92ff426b0",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8949405550956726,
+     "description": "That last test was junk — let me fix it with a proper frozen-result check.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787947755403,
+    "weight": 0.48666886077880867,
+    "mention_count": 1,
+    "content_hash": "d6a6d8c06a13dff2bc8e734fa7b12bc0640e61120665e375060349ed29ba8464",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6249856948852539,
+     "description": "Now a brief root README tying it together.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787947755466,
+    "weight": 0.6410640825157167,
+    "mention_count": 1,
+    "content_hash": "374f293360f4fb043ba28a1e2db73d456d1e3a2fdfaedc2525df38be7538f826",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8232617974281311,
+     "description": "Everything is scaffolded, working, and verified.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787948036502,
+    "weight": 0.5538254152183533,
+    "mention_count": 1,
+    "content_hash": "d595a92598bfc6b8063132a84549437518e750ef922f79f2be225ac3f80aa35b",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7112289071083069,
+     "description": "Now mypy strict and ruff.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787948343123,
+    "weight": 0.7131677971534729,
+    "mention_count": 1,
+    "content_hash": "157478b787cc6929223c9da71f2f01c2c9e2e0f2cc84df3005827d126451d6ff",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9158582091331482,
+     "description": "That decision (registry.tool() instance method, not a global @tool) is unchanged — I'm still keeping it.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787948343158,
+    "weight": 0.6743217126121522,
+    "mention_count": 1,
+    "content_hash": "58618176e4bc830184dab5a7f03f3d4fb1983f18b5229f91e88bafc44d5a8f86",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8659716248512268,
+     "description": "Final verification pass to confirm nothing regressed after doc edits (docs don't affect code, but re-confirming the code state is clean):.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787948343537,
+    "weight": 0.3652260776844025,
+    "mention_count": 1,
+    "content_hash": "956c54f904a90f1871321c6693716624973c8583017cb04e43321ada7468e334",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.46902748942375183,
+     "description": "Updated all three test files (26 tests now, up from 22 — added context-propagation and signature-rejection cases) plus CONVENTIONS.md and the core README.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787948729377,
+    "weight": 0.46969120245361334,
+    "mention_count": 1,
+    "content_hash": "068abde659348f72f323c5f0be3303cb86ec2d21d3fa9609087e8df65da5f7af",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6031827926635742,
+     "description": "Now let's update the docs — core README and CONVENTIONS.md — to reflect the new result shape.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787949055037,
+    "weight": 0.34742655369567876,
+    "mention_count": 1,
+    "content_hash": "892cb742e2e4ed8e61662b3d11535e6384c7d2bf16c187b24e4fca75052efd06",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.4461691379547119,
+     "description": "Nothing about that pathway changed, only which exception types get converted vs. propagated.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787949055056,
+    "weight": 0.7163624793777467,
+    "mention_count": 1,
+    "content_hash": "d691aa32da129eee070a443d9fee48278b88df0c5ab9f7941e62fee07d039d3f",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9199608564376831,
+     "description": "Now update the tests.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787949055083,
+    "weight": 0.4216825051078797,
+    "mention_count": 1,
+    "content_hash": "dc40829b8f024fe4070f57ca77c438648c16c431da4e00934990ab2544ec3b81",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5415294766426086,
+     "description": "First test_tool.py — BoomTool needs to raise a typed error, plus new tests for retryable/fatal/bare-exception-propagates:.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787949055117,
+    "weight": 0.6232103708572388,
+    "mention_count": 1,
+    "content_hash": "a15ee8127a6ce1fe3d7c63f9b1260c9aba72446db3e337369bc03634678066c0",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8003338575363159,
+     "description": "Now run the full verification suite.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787949055157,
+    "weight": 0.3455157363338471,
+    "mention_count": 1,
+    "content_hash": "72836d4a76b0ae5b065c1b6900c63cc38f05ee5de91715ed2a9af5c12d78efe5",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.44371524453163147,
+     "description": "Now update the docs — README and CONVENTIONS.md — to reflect the new error hierarchy and drop stale mentions of execution_failure.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787950240436,
+    "weight": 0.7620925097885133,
+    "mention_count": 1,
+    "content_hash": "84f68abc931a8079b7c66fd854a9d0ff437979c819c14f616249e11a5469ed48",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9786878824234009,
+     "description": "Need the README before it builds — let's create a placeholder now (I'll flesh it out fully later) and re-sync.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787950240467,
+    "weight": 0.5398904815750122,
+    "mention_count": 1,
+    "content_hash": "0517a8c5a2e47ffa715dc8e7b8169bb34688befb0a88cb8ac89bc1fd4bc3912d",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6933335065841675,
+     "description": "Good, mcp.server.lowlevel and mcp.server.stdio exist as expected.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787950240495,
+    "weight": 0.378875800851822,
+    "mention_count": 1,
+    "content_hash": "146191408d23485f8a6fc19515323741e33e6cd975a013d68fa32c5456b2f9a9",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.48655661940574646,
+     "description": "Let's inspect the actual Server class and relevant decorators/types to ground the implementation.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787950240551,
+    "weight": 0.34664562467002874,
+    "mention_count": 1,
+    "content_hash": "99721d2422bd26997a753ba45bf96db995d733a56124d28a02aebf409aab2bc2",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.4451662600040436,
+     "description": "Everything checks out against the real installed SDK — including that the low-level Server's own dispatcher already catches unclassified exceptions from our call_tool function and reports them as isError=True, which is exactly the \"bug propagates, doesn't get silently laundered\" behavior established in the error-hierarchy convention.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787950240640,
+    "weight": 0.7327975648040773,
+    "mention_count": 1,
+    "content_hash": "d63e52f0064c1b6d55bd30843b8888625f94f20aafa072013e1f876293718e6c",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9410669803619385,
+     "description": "Continuing with the package scaffolding.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787950240664,
+    "weight": 0.5133386626358034,
+    "mention_count": 1,
+    "content_hash": "37519cc195d7ede1645bc34c61873640efd9ef415c341460c54d4bb6bef9b68c",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6592353582382202,
+     "description": "Now let's verify it type-checks against the real installed mcp package.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787950241043,
+    "weight": 0.43910164789962775,
+    "mention_count": 1,
+    "content_hash": "69ec2c6c91a484e249d6409b08dc174ba7276286ec6808b7509296287878e6f3",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5638993382453918,
+     "description": "Let me fix the remaining long line manually.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787950241134,
+    "weight": 0.5398964689064027,
+    "mention_count": 1,
+    "content_hash": "0167ff0694d7b976a47c0190cf0904dc3f8d1b4ff4c450e167c0c3718d812d99",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6933411955833435,
+     "description": "Let's also lint the test file and re-confirm the whole workspace still passes together.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787950241283,
+    "weight": 0.3669809923629761,
+    "mention_count": 1,
+    "content_hash": "818455e63f034f06407472f003b6e898b621b1296dd74609c8f7366ed6be5aa5",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.47128117084503174,
+     "description": "Final full verification across both packages, and a clean uv sync to confirm the workspace is coherent end to end.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787950241884,
+    "weight": 0.5815504262161255,
+    "mention_count": 1,
+    "content_hash": "b3f4c43373780086f125488685207e894e5aa5c82153fa644c3ca6fe75a116ea",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7468336820602417,
+     "description": "Serve_stdio(registry, *, name, version=\"0.1.0\") — builds + runs over stdio, the transport Claude Desktop/Code use to launch MCP servers as a subprocess.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787984392616,
+    "weight": 0.42242377386474617,
+    "mention_count": 1,
+    "content_hash": "90dd1840b37ead178fd38d64bfc760cd5ae0bb1b030bddd7eb9bf9e644af4b8f",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5424814224243164,
+     "description": "Noted: next session's work is building a research agent on top of toolbelt-core (and toolbelt-mcp where relevant for exposing it) — first order of business, not exploratory.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787985254351,
+    "weight": 0.8001801657676697,
+    "mention_count": 1,
+    "content_hash": "ba494709af5f6aba507c4ca0bac6644b161671eeeb294689743800ffdf36ad21",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.869761049747467,
+     "description": "So the next step is picking back up on toolbelt/retry.py — implementing/finishing RetryPolicy and the retry helper — then wiring it into mcp/server/runner.py.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787985254384,
+    "weight": 0.8831779909133911,
+    "mention_count": 1,
+    "content_hash": "5d17b618c425a4daba85e6eb69319ab69855b3315efebc1c76cfd7156fb39c54",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.959976077079773,
+     "description": "Want me to open those files and continue?",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787986964305,
+    "weight": 0.9629321098327637,
+    "mention_count": 1,
+    "content_hash": "eb3ba3a78af8fd21c8347bbd7222e1ad9ca84551e5b0a72ad2f19032703caba5",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9629321098327637,
+     "description": "Continuing with tests now.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787986964327,
+    "weight": 0.7675090432167053,
+    "mention_count": 1,
+    "content_hash": "c605fd5875557e7f30b5ebb3f2717b5a4a993bd41adc79a8e5e4fb5b8828b377",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7675090432167053,
+     "description": "Now a test for the example tool, mirroring test_worker_research_agent.py's load-by-path + mock-transport pattern.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787986964348,
+    "weight": 0.6716485023498535,
+    "mention_count": 1,
+    "content_hash": "749f7bb0482c2b8f683defe434ed311a3c26a290666d518399ee247114c0a8ed",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6716485023498535,
+     "description": "Let's install the new package into the workspace and run the test suites.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787986964385,
+    "weight": 0.9406883120536804,
+    "mention_count": 1,
+    "content_hash": "d4c5036c786dac38fa1d7ef0d990f937d06e621aba705a4445e4bcd3b21c2275",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9406883120536804,
+     "description": "Now let's run the tests, mypy, and ruff.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787986964402,
+    "weight": 0.588732898235321,
+    "mention_count": 1,
+    "content_hash": "028ff352c32c37e96af43a19d99265efe3ae08a8ca35af83326fb1ee43db5e12",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.588732898235321,
+     "description": "Now let's confirm the pre-existing packages aren't broken, and run mypy/ruff.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787986964544,
+    "weight": 0.6646369695663452,
+    "mention_count": 1,
+    "content_hash": "38e27bc1ff39203b8a3c20dd16dd8f595f7be41727ee7519089774f95a086295",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6646369695663452,
+     "description": "Now let's fix the one remaining long line.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787986964573,
+    "weight": 0.49101120233535767,
+    "mention_count": 1,
+    "content_hash": "c123dba4660b17e8e820b9d63a5a530654db9c2625b7a6223881bb16d465cdf7",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.49101120233535767,
+     "description": "Now let's also clean up the mypy issues in test_summarize_url.py since it's cheap, and re-verify everything.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787987437583,
+    "weight": 0.865925133228302,
+    "mention_count": 1,
+    "content_hash": "91419e68a1839228b9555dea8a3d754b145872b40f524121c71ee4d2b16f2947",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.865925133228302,
+     "description": "Now let's update the README to document the dual-transport story briefly, sync the workspace, and run the full verification.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s4",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787987893404,
+    "weight": 0.7314951419830322,
+    "mention_count": 1,
+    "content_hash": "a8eb0c922055fee56fb0a45a282459e3db2c291f78f5728d9332ce580ae58603",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7314951419830322,
+     "description": "Let's verify this new test file.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   }
+  ]
+ },
+ "Taskflow": {
+  "sessions": [
+   "s1",
+   "s2",
+   "s3"
+  ],
+  "events": [
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787317444274,
+    "weight": 0.3211274013519287,
+    "mention_count": 1,
+    "content_hash": "343bbda0b25c44d03c1f7e6328298be022e0fffb70d5462f561717f405f8f971",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.37940382957458496,
+     "description": "One fix needed — I used CITEXT for email but only commented the extension requirement instead of creating it.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787317444299,
+    "weight": 0.4810006014823914,
+    "mention_count": 1,
+    "content_hash": "030b9f3278648a7abcbc0f55796e81c14897178226da76fe46328a955c5b55af",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5682899355888367,
+     "description": "Wrote the schema to backend/migrations/0001_initial_schema.sql.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787317633298,
+    "weight": 0.524157970237732,
+    "mention_count": 1,
+    "content_hash": "794cc4105cf06efd9caff8890b7f7608194f8d72b1075f99a7146baaa3d4f452",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.6192792654037476,
+     "description": "Write the Alembic migration for that schema.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787317782126,
+    "weight": 0.48743496475219733,
+    "mention_count": 1,
+    "content_hash": "b06e13f43e58159fed03cd5043c32ae59ac082005edda4ada52e2e31a2b2522a",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.5758919715881348,
+     "description": "Written to backend/app/db/session.py.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787317854998,
+    "weight": 0.767285901260376,
+    "mention_count": 1,
+    "content_hash": "06f957dab1b9dfc88903fa8447fd49f8e5fc841a88d5d66788476694afed0425",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9065287113189697,
+     "description": "No app package yet, so I'll start backend/app/db/session.py — this becomes the base for the app layer.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787317855639,
+    "weight": 0.4827504883766175,
+    "mention_count": 1,
+    "content_hash": "594adf2632a639dc1c8e9347c867abf7dae3d02605427befab41ffb39f45d7c5",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.5703573822975159,
+     "description": "API conventions: URL prefix, casing rules for DB columns vs JSON response fields, pagination approach.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787317896373,
+    "weight": 0.5059768239974975,
+    "mention_count": 1,
+    "content_hash": "e0d799bfc42cb06d981d09d11b90905d993a10e19c5954189a77f6fa84205039",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.5977987051010132,
+     "description": "The component library — no Material UI, no Chakra, I want something headless with good primitives.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787318013284,
+    "weight": 0.6599889170646668,
+    "mention_count": 1,
+    "content_hash": "750cce09b6baa6b732f967ae5ed3cd3a1f8b277a466e0361ff7cd2ca4c01eefb",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7797600626945496,
+     "description": "No prior decision on these specifically — only the general \"version the API before the frontend depends on it\" constraint from the initial stack discussion.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787318206882,
+    "weight": 0.42093330974578863,
+    "mention_count": 1,
+    "content_hash": "0510bb90326937b0647420c8b91e9207c218c6c6414960af2b4961e2dacad2c5",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.4973219633102417,
+     "description": "We need to implement JWT authentication end-to-end — login endpoint, token issuance, and FastAPI dependency guard.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787318206926,
+    "weight": 0.81468782787323,
+    "mention_count": 1,
+    "content_hash": "48113fd57e68f2be9561d814e6bead66359721da9fed89a86642565b5b2f911b",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.9625328779220581,
+     "description": "This is the active work item for the next session.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787318206964,
+    "weight": 0.7953756067276002,
+    "mention_count": 1,
+    "content_hash": "e23673ab79dc6e9054a550e74383d1aac6433fc08c3070274e92556be8457ba3",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9397159814834595,
+     "description": "Scope: login endpoint → token issuance → FastAPI dependency guard.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787318206996,
+    "weight": 0.7432065676689149,
+    "mention_count": 1,
+    "content_hash": "1c820b47d31feb9f73c73d7198f974c49f6e2224d84ce8097ae12fe2efd63647",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.8780795931816101,
+     "description": "Active work item, starting next session.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s1",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787318207988,
+    "weight": 0.8269758316993714,
+    "mention_count": 1,
+    "content_hash": "6ddc1e1408ec341fdf5a2dbd7b374116bf4181931bfc26c77b388ca0d89a5d6b",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.9770508408546448,
+     "description": "Nothing implemented yet this session — flagging as queued so the next session picks this up as the active thread rather than re-deriving scope from scratch.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787318456942,
+    "weight": 0.3982160532474518,
+    "mention_count": 1,
+    "content_hash": "717f83670ca8e1fabec22f76be804742ed0943a72574eaf08684d493945cd2d8",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.43284353613853455,
+     "description": "Ready to continue with the Alembic migration whenever you are.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_CLOSE",
+    "created_at": 1787318769223,
+    "weight": 0.4492486906051636,
+    "mention_count": 1,
+    "content_hash": "76c6942088964b81ba074ca575d2d3ea703bfc21bdf2a021f63e0791c3c3607d",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.48831379413604736,
+     "description": "Not yet done: login/registration endpoints, and the GET /api/v1/users/me smoke test flagged earlier as the next step for get_current_user.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787318877743,
+    "weight": 0.8796286034584045,
+    "mention_count": 1,
+    "content_hash": "9b1d01cb00fc871be8fd71b865458be317e4eb813a7a1be28a90ffcf9a101866",
+    "payload": {
+     "affected_files": [],
+     "authority": "user_stated",
+     "confidence": 0.9561180472373962,
+     "description": "Add the Pydantic response schema for a task.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "user"
+    }
+   },
+   {
+    "session": "s2",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787319013824,
+    "weight": 0.4469638550281525,
+    "mention_count": 1,
+    "content_hash": "9b9d0f23605c872f030725bdda4d6fe201ab838fe0356bd0b98304c4aefa164c",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.48583027720451355,
+     "description": "NOT NULL DEFAULT 0 (backfills existing rows automatically), matching how version/status keep a permanent server_default in this codebase rather than the add-then-drop-default two-step pattern.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787319717845,
+    "weight": 0.7371549010276794,
+    "mention_count": 1,
+    "content_hash": "2916cf2f8278e6e7d31a5f26ea11de0f3a9b9b4c59d949a3f4b7f5ee01d9dd2e",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.7371549010276794,
+     "description": "Flag if you want that built out next.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787319957463,
+    "weight": 0.941280722618103,
+    "mention_count": 1,
+    "content_hash": "365ce381482277499e1188205cae0d29bb3311a5855bbf49cc0015b43a580d62",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.941280722618103,
+     "description": "Let me check the frontend project structure first.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787319957490,
+    "weight": 0.680256187915802,
+    "mention_count": 1,
+    "content_hash": "f8155dceff42d11bcb079f3296b6bb99805d010fbe73bdb5e15d86ae47c86608",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.680256187915802,
+     "description": "There's no frontend project scaffolded yet at all — no package.json, no frontend/ directory.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787319957520,
+    "weight": 0.6167677640914917,
+    "mention_count": 1,
+    "content_hash": "2d734c76a7ffb2f28b3333381e7bbd869688198926768110d0da21424e153ca3",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6167677640914917,
+     "description": "Only the backend/ app exists so far.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787320249808,
+    "weight": 0.6968283653259277,
+    "mention_count": 1,
+    "content_hash": "52ab1286f528ac06adb98e9c596c87b13ff023dbe41af914864d5b3fa49f8491",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6968283653259277,
+     "description": "Scaffold's in place under frontend/.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787320476650,
+    "weight": 0.3576337993144989,
+    "mention_count": 1,
+    "content_hash": "6fdcbe45cfc15ed31fe38dc5506e36f3bb7ce6085487ecc2f5351bdc77ca1be4",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.3576337993144989,
+     "description": "I have to flag a gap: the record says \"two tiers that add zero new infrastructure\" — implying there was a second tier for when durability matters more — but the memory entry is truncated/incomplete in the store (ends mid-sentence at the colon, even at the top-ranked match).",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   },
+   {
+    "session": "s3",
+    "event_type": "THREAD_OPEN",
+    "created_at": 1787320476691,
+    "weight": 0.6341060400009155,
+    "mention_count": 1,
+    "content_hash": "414552e2476a898df208e926e844ee02adb8ca6848b0f360123b67d62194d1eb",
+    "payload": {
+     "affected_files": [],
+     "authority": "assistant_decided",
+     "confidence": 0.6341060400009155,
+     "description": "I can't recover what tier 2 was supposed to be.",
+     "matched_phrase": "HEAD",
+     "provenance": "salience_v2_broad",
+     "rationale": "",
+     "source_role": "assistant"
+    }
+   }
+  ]
+ }
+}
