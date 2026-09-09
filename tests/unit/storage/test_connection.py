@@ -132,8 +132,14 @@ class TestRepoRootAnchoring:
     def _repo(tmp_path: Path) -> Path:
         root = tmp_path / "repo"
         (root / "packages" / "core").mkdir(parents=True)
-        subprocess.run(["git", "init", "-q", str(root)], check=True,
-                       capture_output=True)
+        try:
+            subprocess.run(
+                ["git", "init", "-q", str(root)],
+                check=True,
+                capture_output=True,
+            )
+        except FileNotFoundError:
+            pytest.skip("git is required for repo-root anchoring tests")
         return root
 
     def test_subdirectory_resolves_to_the_root_id(self, tmp_path: Path) -> None:
