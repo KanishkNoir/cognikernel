@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cognikernel.config import Config
-from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
+from cognikernel.storage.connection import (
+    get_connection,
+    get_db_path,
+    project_root,
+    resolve_project_id,
+)
 from cognikernel.storage.migrations import run_migrations
 from cognikernel.storage.projections import Projection, load_or_rebuild
 
@@ -29,9 +34,14 @@ def init_project(
         run_migrations(conn)
         # Persist the resolved path so resource discovery can reverse-map
         # project_id → path (cognikernel://projects MCP resource, CK-5).
+        #
+        # Records the REPO ROOT, matching what resolve_project_id just hashed
+        # (#33). Storing the raw path here would leave the equivalence index
+        # disagreeing with the id: a later call from the repo root would hash
+        # to this store while the recorded path pointed at a subdirectory.
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('project_path', ?)",
-            (str(Path(project_path).resolve()),),
+            (str(project_root(project_path)),),
         )
         conn.commit()
     _log.info("init_project.done", extra={"project_id": project_id, "db": str(db_path)})
