@@ -56,6 +56,18 @@ from cognikernel.storage.connection import get_connection
 from cognikernel.storage.migrations import run_migrations
 from cognikernel.storage.projections import load_or_rebuild, projection_to_events
 
+# Mirrors injection.ordering._THREAD_AUTHORITY_PRIORITY. Duplicated rather than
+# imported on purpose: this file is a reference for what the block should show,
+# so it must not silently follow a change to the very ranking it checks.
+_PRIORITY = {
+    "user_stated": 0,
+    "assistant_answer_to_user_question": 1,
+    "llm": 2,
+    "assistant_decided": 3,
+    "inferred_from_code": 4,
+}
+_PRIORITY_FALLBACK = 5
+
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 _EVENTS = _FIXTURES / "thread_boundary_events.json"
 _GOLD = _FIXTURES / "thread_boundary_gold.json"
@@ -106,7 +118,13 @@ def _replay(rows: list[dict], sessions: list[str], k: int) -> dict:
     threads = [e for e in live if e.event_type == "THREAD_OPEN"]
     return {
         "selected": "" if winner is None else winner.payload.get("description", ""),
-        "threads": [e.payload.get("description", "") for e in threads],
+        "threads": [
+            {
+                "description": e.payload.get("description", ""),
+                "authority": e.payload.get("authority", ""),
+            }
+            for e in threads
+        ],
     }
 
 
@@ -147,31 +165,60 @@ class TestThreadBoundaryInvariant:
     """
 
     @pytest.mark.parametrize("project,session", _ALL)
-    def test_a_handoff_wins_whenever_one_exists(self, project: str, session: int) -> None:
+    def test_a_handoff_wins_within_the_top_authority_tier(
+        self, project: str, session: int
+    ) -> None:
+        """Scoped to the top tier PRESENT, because authority outranks handoff
+        by design (#28): a user-stated thread must beat an assistant's note
+        about a later session, or D9's defect returns inverted. Taskflow is
+        exactly that case — its correct answer is a user-stated statement of
+        the work, ranked above assistant handoffs sitting a tier below.
+
+        An earlier version of this test demanded a handoff win outright and
+        failed on Taskflow the moment #30 was fixed, flagging correct
+        behaviour as a regression. Comparing within a tier is the property
+        that actually holds.
+        """
         slate = _slates()[(project, session)]
-        handoffs = [d for d in slate["threads"] if describes_future_session_handoff(d)]
+        threads = slate["threads"]
+        if not threads:
+            pytest.skip("no threads at this boundary")
+
+        best = min(_PRIORITY.get(t["authority"], _PRIORITY_FALLBACK) for t in threads)
+        top = [t for t in threads
+               if _PRIORITY.get(t["authority"], _PRIORITY_FALLBACK) == best]
+        handoffs = [t for t in top if describes_future_session_handoff(t["description"])]
         if not handoffs:
-            # Conductor states no handoff at any boundary. Rendering narration
-            # there is not a defect — there is nothing better to render — and
-            # asserting otherwise would demand the impossible.
-            pytest.skip("no handoff candidate exists at this boundary")
+            # Conductor states no handoff at any boundary, and Taskflow's top
+            # tier holds the statement itself rather than a handoff. Demanding
+            # one here would demand the impossible in one case and the wrong
+            # answer in the other.
+            pytest.skip("no handoff candidate in the top authority tier")
+
         assert describes_future_session_handoff(slate["selected"]), (
             f"{project} S{session}: narration won the slot while "
-            f"{len(handoffs)} handoff candidate(s) were available: {handoffs}"
+            f"{len(handoffs)} handoff candidate(s) shared the top tier: "
+            f"{[t['description'] for t in handoffs]}"
         )
 
-    def test_at_least_one_boundary_has_a_handoff(self) -> None:
-        """Guards the skip above from hollowing the whole class out. If a
-        change makes the predicate match nothing, every case would skip and
-        the suite would go green on a completely broken selector.
+    def test_enough_boundaries_actually_exercise_the_invariant(self) -> None:
+        """Guards the skips above from hollowing the class out. If a change
+        made the predicate match nothing, every case would skip and the suite
+        would go green on a completely broken selector.
         """
-        with_handoff = [
-            b for b in _ALL
-            if any(describes_future_session_handoff(d) for d in _slates()[b]["threads"])
-        ]
-        assert len(with_handoff) >= 10, (
-            f"only {len(with_handoff)} of {len(_ALL)} boundaries have a handoff "
-            "candidate — the predicate has probably stopped matching"
+        exercised = 0
+        for boundary in _ALL:
+            threads = _slates()[boundary]["threads"]
+            if not threads:
+                continue
+            best = min(_PRIORITY.get(t["authority"], _PRIORITY_FALLBACK) for t in threads)
+            top = [t for t in threads
+                   if _PRIORITY.get(t["authority"], _PRIORITY_FALLBACK) == best]
+            if any(describes_future_session_handoff(t["description"]) for t in top):
+                exercised += 1
+        assert exercised >= 8, (
+            f"only {exercised} of {len(_ALL)} boundaries reach the handoff "
+            "assertion — the predicate has probably stopped matching"
         )
 
 
@@ -247,16 +294,15 @@ class TestGradedProbeAnswers:
         selected = _slates()[("Toolbelt", 3)]["selected"].lower()
         assert "worker" in selected or "schedul" in selected
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="tf_scores_v2_CK.json S3-P1 gold is the JWT-authentication "
-               "thread. It is superseded by 'This is the active work item for "
-               "the next session.' — a contentless pointer that carries no "
-               "information without the statement it refers to. Handoff-vs-"
-               "handoff supersession is deliberately untouched by #26.",
-    )
     def test_taskflow_s3_selects_the_jwt_thread(self) -> None:
-        # Case-insensitive: this xfail is meant to flip when the selector
-        # starts returning the JWT thread, and it should flip whatever casing
-        # the winning description happens to use.
+        """tf_scores_v2_CK.json S3-P1. Gold: the JWT-authentication thread.
+
+        This was a strict xfail until #30. It failed because the extractor
+        splits a turn into sentences, so `This is the active work item for the
+        next session.` arrived as its own THREAD_OPEN 44ms after the statement
+        it refers to, superseded that statement on recency, and then rendered
+        in its place — the store kept the pronoun and dropped the referent.
+        D10 demotes such a pointer, which both stops it superseding its
+        antecedent and stops it outranking it.
+        """
         assert "jwt" in _slates()[("Taskflow", 3)]["selected"].lower()

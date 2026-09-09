@@ -586,6 +586,79 @@ class TestExecuteMergeInstructionVsDeferral:
 
 # ── execute_merge — baseline gates (embeddings off) ───────────────────────────
 
+class TestExecuteMergePointerVsAntecedent:
+    """#30, end to end: a thread pointer must not delete the thread it names.
+
+    The real Taskflow shape — one user turn split into sentences, so the
+    statement and the pronoun referring to it arrive together as two
+    THREAD_OPEN events at the same authority, the pointer 44ms later. Recency
+    then superseded the statement with its own pronoun.
+
+    Both descriptions are verbatim from that store.
+    """
+
+    _ANTECEDENT = ("We need to implement JWT authentication end-to-end — login "
+                   "endpoint, token issuance, and the FastAPI dependency guard.")
+    _POINTER = "This is the active work item for the next session."
+
+    def test_the_pointer_does_not_supersede_its_antecedent(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        antecedent = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_jwt", created_at=1000,
+            session_id="sess1", weight=0.42,
+            payload={"description": self._ANTECEDENT, "authority": "user_stated"},
+        )
+        pointer = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_pointer", created_at=1044,
+            session_id="sess1", weight=0.81,
+            payload={"description": self._POINTER, "authority": "user_stated"},
+        )
+        execute_merge(conn, "sess1", [antecedent, pointer])
+
+        row = get_row(conn, "thread_jwt")
+        assert row["superseded_by"] is None
+        assert row["archived"] == 0
+
+    def test_the_antecedent_wins_the_slot(self, conn: sqlite3.Connection) -> None:
+        """Surviving is not enough — the informative half has to be the one
+        that renders, or the fix trades a deletion for a mis-ranking."""
+        from cognikernel.injection.ordering import select_active_thread
+        from cognikernel.storage.projections import load_or_rebuild, projection_to_events
+
+        antecedent = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_jwt", created_at=1000,
+            session_id="sess1", weight=0.42,
+            payload={"description": self._ANTECEDENT, "authority": "user_stated"},
+        )
+        pointer = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_pointer", created_at=1044,
+            session_id="sess1", weight=0.81,
+            payload={"description": self._POINTER, "authority": "user_stated"},
+        )
+        execute_merge(conn, "sess1", [antecedent, pointer])
+
+        events = projection_to_events(load_or_rebuild(conn, "proj1"))
+        winner = select_active_thread(events)
+        assert winner is not None
+        assert winner.payload["description"] == self._ANTECEDENT
+
+    def test_the_pointer_is_still_stored(self, conn: sqlite3.Connection) -> None:
+        """Demoted, not dropped. If extraction ever misses the antecedent, the
+        pointer may be the only record that a thread was left open at all."""
+        pointer = make_event(
+            event_type="THREAD_OPEN", content_hash="thread_pointer", created_at=1044,
+            session_id="sess1", weight=0.81,
+            payload={"description": self._POINTER, "authority": "user_stated"},
+        )
+        execute_merge(conn, "sess1", [pointer])
+
+        row = get_row(conn, "thread_pointer")
+        assert row is not None
+        assert row["superseded_by"] is None
+        assert json.loads(row["payload"])["quality"] == "thread_reference"
+
+
 class TestExecuteMergeBaselineGates:
     """With embed_events=False (default), supersession runs through the gated
     finder — the temporal/authority/provenance gates are the baseline, not the
