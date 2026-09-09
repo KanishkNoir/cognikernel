@@ -6,7 +6,6 @@ import os
 import re
 import sqlite3
 import stat
-import subprocess
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -84,29 +83,40 @@ def project_root(project_path: str | Path) -> Path:
     store keyed to a subpackage, leaving the project's own store holding 22 of
     284 transcript lines while every capture reported success.
 
+    Finds the root by walking up for a `.git` entry rather than shelling out to
+    `git rev-parse --show-toplevel`. The first version did shell out, and that
+    was a mistake on two counts: this sits on the capture hot path AND is
+    reached from every test that resolves a project, so it turned one filesystem
+    walk into a process spawn per distinct path. On a Windows CI runner, where
+    spawning is expensive, that took the test suite from ~100s to over 15
+    minutes without failing — a hang in every practical sense. A `.git` entry is
+    also the same thing git itself looks for, and matching a FILE as well as a
+    directory keeps worktrees and submodules working, where `.git` is a file
+    pointing elsewhere.
+
     Falls back to the path itself, deliberately and quietly, whenever there is
-    no answer: no git, no work tree, a bare directory. Those are the ordinary
-    case for a project that simply is not a repo, and they behave exactly as
-    before this change.
+    no repo above it. That is the ordinary case for a project that simply is
+    not a repo, and it behaves exactly as before this change.
     """
     key = str(project_path)
     cached = _ROOT_CACHE.get(key)
     if cached is not None:
         return Path(cached)
-    resolved = Path(project_path)
+
     try:
-        result = subprocess.run(
-            ["git", "-C", str(project_path), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            resolved = Path(result.stdout.strip())
-    except Exception as exc:  # git missing, timeout, permissions
-        _log.debug("project_root.git_rev_parse_failed: %s", exc, exc_info=True)
+        start = Path(project_path).resolve()
+    except Exception:                       # unresolvable path — treat as-is
+        start = Path(project_path)
+
+    resolved = start
     try:
-        resolved = resolved.resolve()
-    except Exception:
-        pass
+        for candidate in (start, *start.parents):
+            if (candidate / ".git").exists():
+                resolved = candidate
+                break
+    except Exception as exc:                # permissions, races, odd mounts
+        _log.debug("project_root.walk_failed: %s", exc, exc_info=True)
+
     _ROOT_CACHE[key] = str(resolved)
     return resolved
 

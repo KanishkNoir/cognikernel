@@ -246,20 +246,61 @@ class TestRepoRootAnchoring:
         cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         assert resolve_project_id(a, cfg) != resolve_project_id(b, cfg)
 
-    def test_git_failure_falls_back_to_the_path(self, tmp_path: Path, monkeypatch) -> None:
-        """Fail-open: git missing or erroring must not break resolution."""
+    def test_an_unreadable_tree_falls_back_to_the_path(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Fail-open: a filesystem error while walking up must not break
+        resolution. Identity is on the capture path, so a permission error or
+        an odd mount has to degrade to the old behaviour, not raise."""
         import cognikernel.storage.connection as conn_mod
 
         def boom(*_a, **_k):
-            raise OSError("git not found")
+            raise PermissionError("no access")
 
-        monkeypatch.setattr(conn_mod.subprocess, "run", boom)
+        monkeypatch.setattr(conn_mod.Path, "exists", boom)
         conn_mod._ROOT_CACHE.clear()
-        plain = tmp_path / "somewhere"
-        plain.mkdir()
-        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
-        assert resolve_project_id(plain, cfg) == hash_project_path(plain)
+        try:
+            plain = tmp_path / "somewhere"
+            # project_root directly: patching Path.exists globally would also
+            # break the store-existence checks in resolve_project_id, which
+            # would prove nothing about the walk.
+            assert conn_mod.project_root(plain) == plain.resolve()
+        finally:
+            conn_mod._ROOT_CACHE.clear()
+
+    def test_a_dot_git_FILE_counts_as_a_root(self, tmp_path: Path) -> None:
+        """Worktrees and submodules record `.git` as a FILE pointing elsewhere,
+        not a directory. Matching only directories would silently treat every
+        worktree as rootless."""
+        import cognikernel.storage.connection as conn_mod
+
+        root = tmp_path / "wt"
+        (root / "pkg").mkdir(parents=True)
+        (root / ".git").write_text(
+            "gitdir: /elsewhere/.git/worktrees/wt", encoding="utf-8"
+        )
         conn_mod._ROOT_CACHE.clear()
+        try:
+            assert conn_mod.project_root(root / "pkg") == root.resolve()
+        finally:
+            conn_mod._ROOT_CACHE.clear()
+
+    def test_the_walk_stops_at_the_nearest_root(self, tmp_path: Path) -> None:
+        """A repo inside a repo (a submodule checkout) belongs to the INNER
+        one — the walk must stop at the first `.git` it meets, not run to the
+        outermost."""
+        import cognikernel.storage.connection as conn_mod
+
+        outer = tmp_path / "outer"
+        inner = outer / "vendor" / "inner"
+        (inner / "src").mkdir(parents=True)
+        (outer / ".git").mkdir()
+        (inner / ".git").mkdir()
+        conn_mod._ROOT_CACHE.clear()
+        try:
+            assert conn_mod.project_root(inner / "src") == inner.resolve()
+        finally:
+            conn_mod._ROOT_CACHE.clear()
 
 
 class TestGetDbPath:
