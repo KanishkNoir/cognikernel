@@ -6,7 +6,6 @@ import os
 import re
 import sqlite3
 import stat
-import subprocess
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -84,29 +83,40 @@ def project_root(project_path: str | Path) -> Path:
     store keyed to a subpackage, leaving the project's own store holding 22 of
     284 transcript lines while every capture reported success.
 
+    Finds the root by walking up for a `.git` entry rather than shelling out to
+    `git rev-parse --show-toplevel`. The first version did shell out, and that
+    was a mistake on two counts: this sits on the capture hot path AND is
+    reached from every test that resolves a project, so it turned one filesystem
+    walk into a process spawn per distinct path. On a Windows CI runner, where
+    spawning is expensive, that took the test suite from ~100s to over 15
+    minutes without failing — a hang in every practical sense. A `.git` entry is
+    also the same thing git itself looks for, and matching a FILE as well as a
+    directory keeps worktrees and submodules working, where `.git` is a file
+    pointing elsewhere.
+
     Falls back to the path itself, deliberately and quietly, whenever there is
-    no answer: no git, no work tree, a bare directory. Those are the ordinary
-    case for a project that simply is not a repo, and they behave exactly as
-    before this change.
+    no repo above it. That is the ordinary case for a project that simply is
+    not a repo, and it behaves exactly as before this change.
     """
     key = str(project_path)
     cached = _ROOT_CACHE.get(key)
     if cached is not None:
         return Path(cached)
-    resolved = Path(project_path)
+
     try:
-        result = subprocess.run(
-            ["git", "-C", str(project_path), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            resolved = Path(result.stdout.strip())
-    except Exception as exc:  # git missing, timeout, permissions
-        _log.debug("project_root.git_rev_parse_failed: %s", exc, exc_info=True)
+        start = Path(project_path).resolve()
+    except Exception:                       # unresolvable path — treat as-is
+        start = Path(project_path)
+
+    resolved = start
     try:
-        resolved = resolved.resolve()
-    except Exception:
-        pass
+        for candidate in (start, *start.parents):
+            if (candidate / ".git").exists():
+                resolved = candidate
+                break
+    except Exception as exc:                # permissions, races, odd mounts
+        _log.debug("project_root.walk_failed: %s", exc, exc_info=True)
+
     _ROOT_CACHE[key] = str(resolved)
     return resolved
 
@@ -123,9 +133,11 @@ def resolve_project_id(project_path: str | Path, config: Config) -> str:
     if config.project_identity:
         return hash_project_identity(config.project_identity)
 
-    # Anchor to the repo root FIRST (#33). Checking the raw path first would
-    # perpetuate the split: once a subdirectory store exists, every later
-    # capture from that directory would keep finding it and keep writing there.
+    # Anchor to the repo root FIRST (#33), but only ever to a root store that
+    # ALREADY EXISTS — see the note on the return below for why this never
+    # creates one. Checking the raw path first would perpetuate the split:
+    # once a subdirectory store exists, every later capture from that
+    # directory would keep finding it and keep writing there.
     root_id = hash_project_path(project_root(project_path))
     if (config.projects_dir / f"{root_id}.db").exists():
         return root_id
@@ -140,8 +152,19 @@ def resolve_project_id(project_path: str | Path, config: Config) -> str:
         return legacy_id
 
     equivalent = _find_equivalent_project_id(project_path, config)
-    # A brand-new store is created at the root, never at the cwd.
-    return equivalent or root_id
+    # A brand-new store is created at the PATH, not at the git root.
+    #
+    # Anchoring only ever REDIRECTS into a root store that already exists; it
+    # never creates one. `--show-toplevel` walks up as far as it takes, so a
+    # user whose ~/code or dotfiles directory is itself a repo would otherwise
+    # have every unrelated project beneath it collapse into a single store —
+    # the mirror image of #33, and worse: #33 split one project's memory,
+    # this would MERGE two projects' decisions into one. An existing store at
+    # the root is the evidence that the root is a real project someone
+    # actually works in; without it, this cannot tell a monorepo subpackage
+    # from an unrelated project that happens to sit inside a repo, and the
+    # safe reading is that they are separate.
+    return equivalent or legacy_id
 
 
 def get_db_path(config: Config, project_id: str) -> Path:

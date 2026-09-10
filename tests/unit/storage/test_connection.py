@@ -142,20 +142,55 @@ class TestRepoRootAnchoring:
             pytest.skip("git is required for repo-root anchoring tests")
         return root
 
-    def test_subdirectory_resolves_to_the_root_id(self, tmp_path: Path) -> None:
+    def test_subdirectory_resolves_to_the_root_store_when_one_exists(
+        self, tmp_path: Path
+    ) -> None:
+        """The #33 case exactly: the project has a store, the agent cd's into
+        a subpackage, and the capture must go to the project's store."""
         root = self._repo(tmp_path)
         cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
-        assert (resolve_project_id(root / "packages" / "core", cfg)
-                == resolve_project_id(root, cfg))
+        cfg.projects_dir.mkdir(parents=True)
+        root_id = hash_project_path(root.resolve())
+        (cfg.projects_dir / f"{root_id}.db").touch()
 
-    def test_a_new_store_is_created_at_the_root(self, tmp_path: Path) -> None:
-        """The id for a subdirectory of a fresh repo is the ROOT's hash — not
-        the subdirectory's, and not merely 'some shared value'."""
-        root = self._repo(tmp_path)
+        assert resolve_project_id(root / "packages" / "core", cfg) == root_id
+
+    def test_unrelated_projects_under_an_umbrella_repo_stay_separate(
+        self, tmp_path: Path
+    ) -> None:
+        """The mirror-image bug this must NOT introduce.
+
+        `git rev-parse --show-toplevel` walks up as far as it takes, so a user
+        whose ~/code or dotfiles directory is itself a repo would have every
+        unrelated project beneath it collapse into one store. That is worse
+        than #33: #33 split one project's memory, this would MERGE two
+        projects' decisions.
+
+        Anchoring therefore only ever redirects into a root store that already
+        exists — it never creates one. Nobody has worked at the umbrella root
+        here, so there is no store there, and the two projects stay apart.
+        """
+        umbrella = tmp_path / "code"
+        (umbrella / "projA").mkdir(parents=True)
+        (umbrella / "projB").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(umbrella)], check=True,
+                       capture_output=True)
         cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
-        resolved = resolve_project_id(root / "packages" / "core", cfg)
-        assert resolved == hash_project_path(root.resolve())
-        assert resolved != hash_project_path(root / "packages" / "core")
+
+        a = resolve_project_id(umbrella / "projA", cfg)
+        b = resolve_project_id(umbrella / "projB", cfg)
+        assert a != b
+        assert a == hash_project_path(umbrella / "projA")
+
+    def test_a_new_store_is_created_at_the_path_not_the_root(
+        self, tmp_path: Path
+    ) -> None:
+        """With no store at the root, resolution is unchanged from before —
+        the cwd's own hash. Anchoring redirects; it does not relocate."""
+        root = self._repo(tmp_path)
+        sub = root / "packages" / "core"
+        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
+        assert resolve_project_id(sub, cfg) == hash_project_path(sub)
 
     def test_an_existing_subdirectory_store_still_wins(self, tmp_path: Path) -> None:
         """Back-compat, and the reason root anchoring is not unconditional.
@@ -211,20 +246,61 @@ class TestRepoRootAnchoring:
         cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
         assert resolve_project_id(a, cfg) != resolve_project_id(b, cfg)
 
-    def test_git_failure_falls_back_to_the_path(self, tmp_path: Path, monkeypatch) -> None:
-        """Fail-open: git missing or erroring must not break resolution."""
+    def test_an_unreadable_tree_falls_back_to_the_path(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Fail-open: a filesystem error while walking up must not break
+        resolution. Identity is on the capture path, so a permission error or
+        an odd mount has to degrade to the old behaviour, not raise."""
         import cognikernel.storage.connection as conn_mod
 
         def boom(*_a, **_k):
-            raise OSError("git not found")
+            raise PermissionError("no access")
 
-        monkeypatch.setattr(conn_mod.subprocess, "run", boom)
+        monkeypatch.setattr(conn_mod.Path, "exists", boom)
         conn_mod._ROOT_CACHE.clear()
-        plain = tmp_path / "somewhere"
-        plain.mkdir()
-        cfg = Config(cognikernel_dir=tmp_path / "cognikernel")
-        assert resolve_project_id(plain, cfg) == hash_project_path(plain)
+        try:
+            plain = tmp_path / "somewhere"
+            # project_root directly: patching Path.exists globally would also
+            # break the store-existence checks in resolve_project_id, which
+            # would prove nothing about the walk.
+            assert conn_mod.project_root(plain) == plain.resolve()
+        finally:
+            conn_mod._ROOT_CACHE.clear()
+
+    def test_a_dot_git_FILE_counts_as_a_root(self, tmp_path: Path) -> None:
+        """Worktrees and submodules record `.git` as a FILE pointing elsewhere,
+        not a directory. Matching only directories would silently treat every
+        worktree as rootless."""
+        import cognikernel.storage.connection as conn_mod
+
+        root = tmp_path / "wt"
+        (root / "pkg").mkdir(parents=True)
+        (root / ".git").write_text(
+            "gitdir: /elsewhere/.git/worktrees/wt", encoding="utf-8"
+        )
         conn_mod._ROOT_CACHE.clear()
+        try:
+            assert conn_mod.project_root(root / "pkg") == root.resolve()
+        finally:
+            conn_mod._ROOT_CACHE.clear()
+
+    def test_the_walk_stops_at_the_nearest_root(self, tmp_path: Path) -> None:
+        """A repo inside a repo (a submodule checkout) belongs to the INNER
+        one — the walk must stop at the first `.git` it meets, not run to the
+        outermost."""
+        import cognikernel.storage.connection as conn_mod
+
+        outer = tmp_path / "outer"
+        inner = outer / "vendor" / "inner"
+        (inner / "src").mkdir(parents=True)
+        (outer / ".git").mkdir()
+        (inner / ".git").mkdir()
+        conn_mod._ROOT_CACHE.clear()
+        try:
+            assert conn_mod.project_root(inner / "src") == inner.resolve()
+        finally:
+            conn_mod._ROOT_CACHE.clear()
 
 
 class TestGetDbPath:
