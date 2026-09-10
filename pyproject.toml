@@ -22,7 +22,12 @@ classifiers = [
 requires-python = ">=3.11"
 dependencies = [
     "pyahocorasick>=2.0",
-    "mcp>=1.0",
+    # Capped below 2. mcp 2.0.0 removed `mcp.server.fastmcp` (renamed MCPServer,
+    # other APIs changed), so an unbounded range gave every fresh install an MCP
+    # server that exits at import: Claude Code reports it as failed and the
+    # recall/find_related/skeleton tools vanish. Lift the cap when the server is
+    # ported to the 2.x API; the fresh-install CI job starts the real server.
+    "mcp>=1.0,<2",
     "tree-sitter>=0.22",
     # Deliberately unpinned. tree-sitter-language-pack switched its binding at
     # 1.13.0 (native `parse_bytes()`/`kind()` methods -> py-tree-sitter
