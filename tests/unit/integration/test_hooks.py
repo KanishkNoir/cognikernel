@@ -76,8 +76,18 @@ def test_hook_pretool_denies_fresh_skeleton_read_e2e(tmp_path, monkeypatch) -> N
     monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
     proj = tmp_path / "proj"
     proj.mkdir()
-    # init writes .claude/settings.json (the project-root marker), strict config, DB.
+    # init writes .claude/settings.json (the project-root marker), config, DB.
     cli._cmd_init(argparse.Namespace(project_path=str(proj)))
+    # init defaults to advisory; this test covers strict mode's deny contract, so
+    # it opts in explicitly rather than depending on init's default.
+    cfg = proj / ".cognikernel" / "config.toml"
+    cfg.write_text(
+        cfg.read_text(encoding="utf-8").replace(
+            'hook_policy = "advisory"', 'hook_policy = "strict"'
+        ),
+        encoding="utf-8",
+    )
+    assert 'hook_policy = "strict"' in cfg.read_text(encoding="utf-8")
 
     (proj / "app").mkdir()
     target = proj / "app" / "main.py"

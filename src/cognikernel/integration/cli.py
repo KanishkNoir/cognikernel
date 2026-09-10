@@ -812,16 +812,29 @@ def _cmd_init(args: argparse.Namespace) -> None:
     )
 
     # ── .cognikernel/config.toml — per-project overrides ──────────────────────────
-    # New projects ship with hook_policy='strict' so the C1 strict gate is active
-    # immediately. Users can edit this file to fall back to advisory mode without
-    # touching the global ~/.cognikernel/config.toml.
+    # New projects ship with hook_policy='advisory'. Strict's first-read skeleton
+    # denial was measured on the four-project benchmark: 133 of 148 PreToolUse
+    # denials came from it and 89% were retried within a few responses, so each
+    # cost a round-trip instead of saving a read. The same-session re-read denial
+    # (never retried) runs under advisory too, so the default keeps the denial
+    # that works. Users opt into strict by editing this file, without touching
+    # the global ~/.cognikernel/config.toml.
     cognikernel_dir = project_path / ".cognikernel"
     cognikernel_dir.mkdir(exist_ok=True)
     project_cfg_path = cognikernel_dir / "config.toml"
     if not project_cfg_path.exists():
         project_cfg_path.write_text(
             '# CogniKernel per-project config. Overrides ~/.cognikernel/config.toml.\n'
-            'hook_policy = "strict"\n'
+            '\n'
+            '# hook_policy: "advisory" (default) | "strict".\n'
+            '#   Both refuse re-reading a file already read in this session - that\n'
+            '#   refusal is almost never retried, so it saves a real round trip.\n'
+            '#   "strict" also refuses the FIRST read of any file in the codebase\n'
+            '#   skeleton and allows a retry. On the four-project benchmark 89% of\n'
+            '#   those refusals were retried straight away, costing a round trip\n'
+            '#   instead of saving a read. Opt in only if your agents mostly need\n'
+            '#   signatures rather than function bodies.\n'
+            'hook_policy = "advisory"\n'
             '\n'
             '# Stage-2 extraction backend: legacy | v1 | v1-broad | v2 | v2-broad.\n'
             '#   legacy   = deterministic keyword/Aho-Corasick pipeline (default).\n'
@@ -953,7 +966,7 @@ or any file.
     print(f"  wrote: .codex/config.toml     (Codex MCP server — cross-platform)")
     print(f"  wrote: AGENTS.md              (Codex memory instruction)")
     print(f"  wrote: CLAUDE.md              (CogniKernel trust section)")
-    print(f"  wrote: .cognikernel/config.toml   (hook_policy=strict)")
+    print(f"  wrote: .cognikernel/config.toml   (hook_policy=advisory)")
     print(f"  wrote: .claude/commands/ck-*.md       ({n_cmds} Claude Code slash commands)")
     print(f"  wrote: .agents/skills/ck-*/SKILL.md   ({n_cmds} Codex skills)")
 

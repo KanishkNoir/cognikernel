@@ -43,7 +43,8 @@ def _make_project(tmp_path: Path) -> tuple[Path, Path]:
     claude.mkdir()
     (claude / "settings.json").write_text("{}", encoding="utf-8")
 
-    # Force strict mode at the project layer (mirrors what `cognikernel init` writes).
+    # Opt into strict mode at the project layer. `cognikernel init` now defaults to
+    # advisory, so this suite sets strict explicitly to cover the strict contract.
     cognikernel_cfg_dir = project_path / ".cognikernel"
     cognikernel_cfg_dir.mkdir()
     (cognikernel_cfg_dir / "config.toml").write_text(
