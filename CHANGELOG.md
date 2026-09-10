@@ -7,7 +7,62 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [0.1.2] — unreleased
+## [Unreleased]
+
+### Changed
+
+- **New projects no longer refuse the first read of every file in the
+  skeleton.** `cognikernel init` used to switch on "strict" mode, which turns
+  away Claude's first attempt to read any file listed in the project skeleton
+  and lets a second attempt through, on the idea that the skeleton's
+  signatures would often be enough. They rarely were: across the four-project
+  benchmark, 89% of those refusals were followed straight away by the same
+  read, so each one cost an extra round trip — more time and more tokens — and
+  saved nothing. New projects now start in "advisory" mode. The rule that did
+  work stays on for everyone: re-reading a file already read in the same
+  session is still refused, and that refusal was almost never retried.
+  Existing projects keep whatever their `.cognikernel/config.toml` says; set
+  `hook_policy = "strict"` there to opt back in.
+
+### Fixed
+
+- **`cognikernel telemetry` counted most API responses two or three times.**
+  Claude Code writes one transcript line per piece of a response (text,
+  thinking, each tool call) and repeats the response's token usage on every
+  one of those lines. Telemetry added them all up, so the cache and token
+  figures `cognikernel doctor` showed were inflated — by 1.9× to 3.0× on the
+  benchmark projects, and by different amounts on different projects, so they
+  could not even be compared with each other. Usage is now counted once per
+  response. Rows recorded the old way are labelled and kept out of the
+  figures; running `cognikernel telemetry <project_path>` again re-counts any
+  session whose transcript still exists.
+
+### Added
+
+- **`cognikernel doctor` shows how many extra round trips CogniKernel's own
+  tools caused.** It now reports how many API responses a project's sessions
+  took, and what share of them CogniKernel added: responses that only called
+  a memory tool, reads it refused, and retries of those refused reads. This is
+  the cost that matters for "does memory cost more than not having it" — the
+  injected block itself is only 1–2% of a session's cost.
+
+- **A `tool_guidance` setting in `.cognikernel/config.toml`.** `"eager"` (the
+  default, unchanged) tells Claude to check the skeleton or call `recall`
+  before reading files. `"lean"` keeps the tools and the skeleton but stops
+  asking for a check before every read: on the benchmark, a `skeleton` call
+  was followed by a read of the same file 41–67% of the time anyway. It exists
+  to measure whether that advice pays for itself; the default changes only if
+  it does.
+
+### Notes
+
+- Schema migrates automatically on first open (v20 → v22): belief-history
+  columns (021) and round-trip telemetry columns (022). Existing rows are not
+  rewritten.
+
+---
+
+## [0.1.2] — 2026-08-15
 
 Four fixes to how CogniKernel decides which files belong in your project
 skeleton (the summary Claude sees instead of reading every file), one fix
@@ -71,21 +126,6 @@ promise the `skeleton` tool made that it wasn't actually keeping.
   complete. Listings now say so explicitly, e.g. `(+3 more public symbols
   not shown)`, so you know to look closer instead of assuming you've seen
   everything.
-
-### Changed
-
-- **New projects no longer refuse the first read of every file in the
-  skeleton.** `cognikernel init` used to switch on "strict" mode, which turns
-  away Claude's first attempt to read any file listed in the project skeleton
-  and lets a second attempt through, on the idea that the skeleton's
-  signatures would often be enough. They rarely were: across the four-project
-  benchmark, 89% of those refusals were followed straight away by the same
-  read, so each one cost an extra round trip — more time and more tokens — and
-  saved nothing. New projects now start in "advisory" mode. The rule that did
-  work stays on for everyone: re-reading a file already read in the same
-  session is still refused, and that refusal was almost never retried.
-  Existing projects keep whatever their `.cognikernel/config.toml` says; set
-  `hook_policy = "strict"` there to opt back in.
 
 ### Added
 
