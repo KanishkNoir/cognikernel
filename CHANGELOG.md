@@ -26,6 +26,17 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A fresh install had no memory tools at all.** CogniKernel asked for any
+  version of the `mcp` library from 1.0 up. `mcp` 2.0, released 2026-07-28,
+  removed a module CogniKernel's server is built on, so a new
+  `pip install cognikernel` pulled in 2.x and the server stopped at startup.
+  Claude Code showed it as "failed": the session-context block still arrived,
+  but `recall`, `find_related`, `skeleton` and `get_session_state` were
+  missing. This hit 0.1.2 for anyone who didn't already have `mcp` 1.x
+  installed. The requirement is now capped below 2, and the fresh-install
+  check in CI now starts the real server and requires it to list its tools.
+  On 0.1.2, run `pip install "mcp<2"` to get the tools back.
+
 - **`cognikernel telemetry` counted most API responses two or three times.**
   Claude Code writes one transcript line per piece of a response (text,
   thinking, each tool call) and repeats the response's token usage on every
