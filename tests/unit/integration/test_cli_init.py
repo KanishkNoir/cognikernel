@@ -3,7 +3,7 @@
 The CLI `init` is responsible for setting up a project so the hook chain works
 end-to-end. C1 adds two new responsibilities:
   - Register PostToolUse:Read in .claude/settings.json
-  - Write .cognikernel/config.toml with hook_policy=strict
+  - Write .cognikernel/config.toml with hook_policy=advisory (strict is opt-in)
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def test_init_pretool_matcher_routes_read_and_write_edit(
     assert all("-m cognikernel hook-pretool" in e["hooks"][0]["command"] for e in entries)
 
 
-def test_init_writes_per_project_config_with_strict_policy(
+def test_init_writes_per_project_config_with_advisory_policy(
     init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "cognikernel_data"))
@@ -73,19 +73,43 @@ def test_init_writes_per_project_config_with_strict_policy(
     cfg_path = Path(init_args.project_path) / ".cognikernel" / "config.toml"
     assert cfg_path.exists()
     content = cfg_path.read_text(encoding="utf-8")
-    assert 'hook_policy = "strict"' in content
+    assert 'hook_policy = "advisory"' in content
+
+
+def test_init_leaves_strict_first_read_denial_opt_in(
+    init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
+) -> None:
+    """Strict mode's first-read skeleton denial is opt-in, not the default.
+
+    Measured on the four-project benchmark: 133 of 148 PreToolUse denials came
+    from that gate, and 89% were retried within a few responses — each one bought
+    an extra round-trip rather than a saved read. The same-session re-read denial
+    (15 denials, never retried) also runs under advisory, so the default keeps the
+    denial that works and drops the one that does not.
+    """
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "cognikernel_data"))
+
+    _cmd_init(init_args)
+
+    content = (Path(init_args.project_path) / ".cognikernel" / "config.toml").read_text(
+        encoding="utf-8"
+    )
+    active = [ln.strip() for ln in content.splitlines() if ln.strip().startswith("hook_policy")]
+    assert active == ['hook_policy = "advisory"']
+    # The opt-in is documented in the file a user will actually open.
+    assert '"strict"' in content
 
 
 def test_config_load_picks_up_init_artifacts(
     init_args: argparse.Namespace, monkeypatch, tmp_path: Path,
 ) -> None:
-    """End-to-end: after init, Config.load(project_path=...) reads strict policy."""
+    """End-to-end: after init, Config.load(project_path=...) reads advisory policy."""
     monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "cognikernel_data"))
 
     _cmd_init(init_args)
 
     cfg = Config.load(project_path=Path(init_args.project_path))
-    assert cfg.hook_policy == "strict"
+    assert cfg.hook_policy == "advisory"
 
 
 def test_init_preserves_existing_settings_keys(

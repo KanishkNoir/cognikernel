@@ -72,6 +72,21 @@ promise the `skeleton` tool made that it wasn't actually keeping.
   not shown)`, so you know to look closer instead of assuming you've seen
   everything.
 
+### Changed
+
+- **New projects no longer refuse the first read of every file in the
+  skeleton.** `cognikernel init` used to switch on "strict" mode, which turns
+  away Claude's first attempt to read any file listed in the project skeleton
+  and lets a second attempt through, on the idea that the skeleton's
+  signatures would often be enough. They rarely were: across the four-project
+  benchmark, 89% of those refusals were followed straight away by the same
+  read, so each one cost an extra round trip — more time and more tokens — and
+  saved nothing. New projects now start in "advisory" mode. The rule that did
+  work stays on for everyone: re-reading a file already read in the same
+  session is still refused, and that refusal was almost never retried.
+  Existing projects keep whatever their `.cognikernel/config.toml` says; set
+  `hook_policy = "strict"` there to opt back in.
+
 ### Added
 
 - **The groundwork for smarter "recently active" tracking.** CogniKernel now
