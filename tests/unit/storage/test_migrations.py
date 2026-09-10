@@ -361,7 +361,7 @@ class TestMigration021BeliefHistory:
             }
         assert "idx_events_superseded_at" in indexes
 
-    def test_reaches_schema_version_21(self, tmp_path: Path) -> None:
+    def test_reaches_the_latest_schema_version(self, tmp_path: Path) -> None:
         db_path = tmp_path / "ver.db"
         with get_connection(db_path) as conn:
             run_migrations(conn)
@@ -370,7 +370,7 @@ class TestMigration021BeliefHistory:
                     "SELECT value FROM meta WHERE key = 'schema_version'"
                 ).fetchone()[0]
             )
-        assert version == 21 == EXPECTED_SCHEMA_VERSION
+        assert version == 22 == EXPECTED_SCHEMA_VERSION
 
     def test_upgrading_a_real_v20_store_preserves_existing_rows(
         self, tmp_path: Path
@@ -448,7 +448,7 @@ class TestMigration021BeliefHistory:
         version_after = int(
             conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
         )
-        assert version_after == 21
+        assert version_after == EXPECTED_SCHEMA_VERSION
 
         after_row = dict(
             conn.execute(
@@ -483,3 +483,62 @@ class TestMigration021BeliefHistory:
         # Exactly one of each new column, not two.
         for c in self._NEW_COLUMNS:
             assert cols.count(c) == 1
+
+
+class TestMigration022TelemetryRoundTrips:
+    """022 adds the round-trip counters to api_telemetry and labels every row that
+    already exists as 'per_line_legacy' — those rows were ingested while usage was
+    summed once per transcript line, which inflated them 2-3x (S4 T-401/T-403)."""
+
+    _NEW_COLUMNS = {
+        "responses", "memory_tool_responses", "denied_responses",
+        "retried_denials", "usage_basis",
+    }
+
+    def test_new_columns_exist(self, tmp_path: Path) -> None:
+        with get_connection(tmp_path / "cols.db") as conn:
+            run_migrations(conn)
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(api_telemetry)").fetchall()}
+        assert self._NEW_COLUMNS.issubset(cols)
+
+    def test_upgrading_a_real_v21_store_labels_existing_rows_legacy(self, tmp_path: Path) -> None:
+        import sqlite3 as _sqlite3
+        import cognikernel.storage.migrations as migrations_module
+        from cognikernel.storage.migrations import _MIGRATIONS_DIR as REAL_DIR
+
+        v21_dir = tmp_path / "migrations_v21"
+        v21_dir.mkdir()
+        for f in sorted(REAL_DIR.glob("*.sql")):
+            if int(f.stem.split("_")[0]) <= 21:
+                (v21_dir / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+
+        db_path = tmp_path / "upgrade022.db"
+        conn = _sqlite3.connect(str(db_path))
+        conn.row_factory = _sqlite3.Row
+        original_dir = migrations_module._MIGRATIONS_DIR
+        migrations_module._MIGRATIONS_DIR = v21_dir
+        try:
+            run_migrations(conn)
+        finally:
+            migrations_module._MIGRATIONS_DIR = original_dir
+        assert conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()[0] == "21"
+
+        # Raw insert in the v21 shape — the columns 022 adds do not exist yet.
+        conn.execute(
+            "INSERT INTO api_telemetry (project_id, session_id, input_tokens, "
+            "cache_creation_tokens, cache_read_tokens, output_tokens, ingested_at) "
+            "VALUES ('p', 's-old', 600, 300, 90000, 30, 1)"
+        )
+        conn.commit()
+
+        run_migrations(conn)
+
+        row = conn.execute(
+            "SELECT input_tokens, cache_creation_tokens, cache_read_tokens, output_tokens, "
+            "responses, memory_tool_responses, denied_responses, retried_denials, usage_basis "
+            "FROM api_telemetry WHERE session_id = 's-old'"
+        ).fetchone()
+        conn.close()
+        assert tuple(row) == (600, 300, 90000, 30, 0, 0, 0, 0, "per_line_legacy")

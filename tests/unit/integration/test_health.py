@@ -198,3 +198,92 @@ class TestDoctorStrict:
         with pytest.raises(SystemExit) as exc_info:
             _cmd_doctor(argparse.Namespace(project_path=str(proj), strict=True))
         assert exc_info.value.code == 1
+
+
+class TestDoctorRoundTripTelemetry:
+    """S4 T-403: doctor surfaces the round-trips CogniKernel's own tools add, and
+    names telemetry rows that were counted per transcript line instead of mixing
+    them silently into corrected figures."""
+
+    def _init(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("COGNIKERNEL_DISABLE_AUTO_WARM", "1")
+        from cognikernel.integration.session import init_project
+
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        init_project(str(proj))
+        pid = hash_project_path(str(proj))
+        return proj, get_db_path(Config.load(), pid), pid
+
+    @staticmethod
+    def _row(pid: str, sid: str, **extra) -> dict:
+        return {
+            "project_id": pid, "session_id": sid, "input_tokens": 10,
+            "cache_creation_tokens": 0, "cache_read_tokens": 100, "output_tokens": 5,
+            **extra,
+        }
+
+    @staticmethod
+    def _insert_legacy(conn, pid: str, sid: str) -> None:
+        conn.execute(
+            "INSERT INTO api_telemetry (project_id, session_id, input_tokens, "
+            "cache_creation_tokens, cache_read_tokens, output_tokens, ingested_at, usage_basis) "
+            "VALUES (?, ?, 30, 0, 9000, 15, 1, ?)",
+            (pid, sid, "per_line_legacy"),
+        )
+        conn.commit()
+
+    def test_prints_the_round_trip_share_and_its_breakdown(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        from cognikernel.integration.cli import _cmd_doctor
+        from cognikernel.telemetry.ingest import store_telemetry
+
+        proj, db, pid = self._init(tmp_path, monkeypatch)
+        with get_connection(db) as conn:
+            store_telemetry(conn, self._row(pid, "a", responses=10, memory_tool_responses=2,
+                                            denied_responses=1, retried_denials=1))
+            store_telemetry(conn, self._row(pid, "b", responses=30, memory_tool_responses=3,
+                                            denied_responses=2, retried_denials=1))
+
+        _cmd_doctor(argparse.Namespace(project_path=str(proj), strict=False))
+        out = capsys.readouterr().out
+        assert "API responses      : 40" in out
+        assert "added by CK tools  : 25.0%" in out
+        assert "memory-tool-only 5, denied 3, retried 2" in out
+        assert "legacy rows" not in out
+
+    def test_legacy_rows_are_named_and_kept_out_of_the_figures(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        from cognikernel.integration.cli import _cmd_doctor
+        from cognikernel.telemetry.ingest import store_telemetry
+
+        proj, db, pid = self._init(tmp_path, monkeypatch)
+        with get_connection(db) as conn:
+            store_telemetry(conn, self._row(pid, "fresh", responses=4))
+            self._insert_legacy(conn, pid, "old")
+
+        _cmd_doctor(argparse.Namespace(project_path=str(proj), strict=False))
+        out = capsys.readouterr().out
+        assert "sessions with data : 1" in out
+        assert "cache reads served : 100 tok" in out
+        assert "legacy rows        : 1 session(s)" in out
+
+    def test_a_store_holding_only_legacy_rows_still_names_them(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        """Otherwise doctor would report 'no telemetry' for a store that has rows,
+        which reads like the ingest never ran."""
+        from cognikernel.integration.cli import _cmd_doctor
+
+        proj, db, pid = self._init(tmp_path, monkeypatch)
+        with get_connection(db) as conn:
+            self._insert_legacy(conn, pid, "old-1")
+            self._insert_legacy(conn, pid, "old-2")
+
+        _cmd_doctor(argparse.Namespace(project_path=str(proj), strict=False))
+        out = capsys.readouterr().out
+        assert "legacy rows        : 2 session(s)" in out
+        assert "re-run 'cognikernel telemetry <project_path>'" in out

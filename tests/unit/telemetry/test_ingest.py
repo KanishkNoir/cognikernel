@@ -70,6 +70,35 @@ def _block_line(
     })
 
 
+def _tool_use_line(message_id: str, name: str, tool_id: str, tool_input: dict) -> str:
+    """One response line carrying a single tool_use block."""
+    return json.dumps({
+        "type": "assistant",
+        "message": {
+            "id": message_id,
+            "content": [{"type": "tool_use", "id": tool_id, "name": name, "input": tool_input}],
+            "usage": {"input_tokens": 1, "cache_creation_input_tokens": 0,
+                      "cache_read_input_tokens": 100, "output_tokens": 10},
+        },
+    })
+
+
+def _tool_result_line(tool_id: str, content, is_error: bool = False) -> str:
+    """The user line Claude Code writes with a tool's result."""
+    return json.dumps({
+        "type": "user",
+        "message": {"content": [{
+            "type": "tool_result", "tool_use_id": tool_id,
+            "content": content, "is_error": is_error,
+        }]},
+    })
+
+
+_DENIAL = ("[CogniKernel] app/main.py signatures are listed in the Codebase skeleton "
+           "section of your session context. Use them.")
+_RECALL = "mcp__cognikernel__recall"
+
+
 def _make_jsonl(tmp_path: Path, name: str, lines: list[str]) -> Path:
     p = tmp_path / f"{name}.jsonl"
     p.write_text("\n".join(lines), encoding="utf-8")
@@ -223,6 +252,97 @@ class TestIngestCountsEachResponseOnce:
         result = ingest_session_jsonl(_make_jsonl(tmp_path, "s1", lines), "s1", "p")
         assert result["output_tokens"] == 40
         assert result["responses"] == 1
+
+
+class TestIngestClassifiesRoundTrips:
+    """Round-trips CogniKernel's own tool surface adds (S4 T-403).
+
+    Measured on the four-project benchmark, these explained more than all of
+    Relay's +23% cost over an agent with no memory: memory-tool-only responses,
+    reads denied by the PreToolUse gate, and retries of those denied reads. An
+    agent with no memory makes none of them, so they are the G1 instrument.
+    Each response lands in at most one class.
+    """
+
+    def _ingest(self, tmp_path: Path, lines: list[str]) -> dict:
+        return ingest_session_jsonl(_make_jsonl(tmp_path, "s1", lines), "s1", "p")
+
+    def test_usage_basis_is_per_response(self, tmp_path: Path) -> None:
+        assert self._ingest(tmp_path, [_block_line("m1")])["usage_basis"] == "per_response"
+
+    def test_memory_tool_only_response_is_counted(self, tmp_path: Path) -> None:
+        r = self._ingest(tmp_path, [_tool_use_line("m1", _RECALL, "t1", {"query": "auth"})])
+        assert r["memory_tool_responses"] == 1
+
+    def test_a_response_mixing_memory_and_other_tools_is_not_memory_only(
+        self, tmp_path: Path
+    ) -> None:
+        lines = [
+            _tool_use_line("m1", _RECALL, "t1", {"query": "auth"}),
+            _tool_use_line("m1", "Read", "t2", {"file_path": "a.py"}),
+        ]
+        assert self._ingest(tmp_path, lines)["memory_tool_responses"] == 0
+
+    def test_a_response_with_no_tools_is_not_memory_only(self, tmp_path: Path) -> None:
+        assert self._ingest(tmp_path, [_block_line("m1", "text")])["memory_tool_responses"] == 0
+
+    def test_a_multi_line_memory_response_is_counted_once(self, tmp_path: Path) -> None:
+        lines = [_block_line("m1", "text"), _tool_use_line("m1", _RECALL, "t1", {"query": "x"})]
+        assert self._ingest(tmp_path, lines)["memory_tool_responses"] == 1
+
+    def test_a_cognikernel_denial_is_counted(self, tmp_path: Path) -> None:
+        lines = [
+            _tool_use_line("m1", "Read", "t1", {"file_path": "app/main.py"}),
+            _tool_result_line("t1", _DENIAL, is_error=True),
+        ]
+        r = self._ingest(tmp_path, lines)
+        assert r["denied_responses"] == 1
+        assert r["retried_denials"] == 0
+
+    def test_a_denial_with_list_shaped_content_is_counted(self, tmp_path: Path) -> None:
+        lines = [
+            _tool_use_line("m1", "Read", "t1", {"file_path": "app/main.py"}),
+            _tool_result_line("t1", [{"type": "text", "text": _DENIAL}], is_error=True),
+        ]
+        assert self._ingest(tmp_path, lines)["denied_responses"] == 1
+
+    def test_an_ordinary_tool_error_is_not_a_denial(self, tmp_path: Path) -> None:
+        lines = [
+            _tool_use_line("m1", "Read", "t1", {"file_path": "missing.py"}),
+            _tool_result_line("t1", "File does not exist.", is_error=True),
+        ]
+        assert self._ingest(tmp_path, lines)["denied_responses"] == 0
+
+    def test_a_failed_memory_tool_call_is_not_a_denial(self, tmp_path: Path) -> None:
+        """Only the PreToolUse gate's marked message is a denial. A cognikernel MCP
+        tool that errors is still a memory-tool round-trip, not a denied read."""
+        lines = [
+            _tool_use_line("m1", _RECALL, "t1", {"query": "x"}),
+            _tool_result_line("t1", "Error calling cognikernel recall: timeout", is_error=True),
+        ]
+        r = self._ingest(tmp_path, lines)
+        assert r["denied_responses"] == 0
+        assert r["memory_tool_responses"] == 1
+
+    def test_reissuing_a_denied_call_is_a_retry(self, tmp_path: Path) -> None:
+        lines = [
+            _tool_use_line("m1", "Read", "t1", {"file_path": "app/main.py"}),
+            _tool_result_line("t1", _DENIAL, is_error=True),
+            _tool_use_line("m2", "Read", "t2", {"file_path": "app/main.py"}),
+            _tool_result_line("t2", "def go(): ..."),
+        ]
+        r = self._ingest(tmp_path, lines)
+        assert r["denied_responses"] == 1
+        assert r["retried_denials"] == 1
+        assert r["responses"] == 2
+
+    def test_a_different_call_after_a_denial_is_not_a_retry(self, tmp_path: Path) -> None:
+        lines = [
+            _tool_use_line("m1", "Read", "t1", {"file_path": "app/main.py"}),
+            _tool_result_line("t1", _DENIAL, is_error=True),
+            _tool_use_line("m2", "Read", "t2", {"file_path": "app/other.py"}),
+        ]
+        assert self._ingest(tmp_path, lines)["retried_denials"] == 0
 
 
 # ── store_telemetry ───────────────────────────────────────────────────────────
@@ -508,3 +628,83 @@ class TestFindAndIngestTelemetry:
                 "SELECT COUNT(*) FROM api_telemetry WHERE project_id=?", (project_id,)
             ).fetchone()[0]
         assert count == 1  # upsert, not duplicate insert
+
+
+# ── round-trip persistence and doctor stats (S4 T-403) ────────────────────────
+
+class TestRoundTripPersistenceAndStats:
+    def test_store_telemetry_persists_round_trip_columns(self, db_conn) -> None:
+        conn, project_id = db_conn
+        store_telemetry(conn, {
+            "project_id": project_id, "session_id": "s-rt",
+            "input_tokens": 1, "cache_creation_tokens": 0, "cache_read_tokens": 0,
+            "output_tokens": 1, "responses": 10, "memory_tool_responses": 2,
+            "denied_responses": 1, "retried_denials": 1, "usage_basis": "per_response",
+        })
+        row = conn.execute(
+            "SELECT responses, memory_tool_responses, denied_responses, retried_denials, "
+            "usage_basis FROM api_telemetry WHERE session_id = 's-rt'"
+        ).fetchone()
+        assert tuple(row) == (10, 2, 1, 1, "per_response")
+
+    def test_an_old_shaped_row_defaults_to_zero_counts_and_per_response(self, db_conn) -> None:
+        """The only producer of rows is the fixed ingest, so a caller that omits
+        the new keys is still counting per response."""
+        conn, project_id = db_conn
+        store_telemetry(conn, {
+            "project_id": project_id, "session_id": "s-old",
+            "input_tokens": 1, "cache_creation_tokens": 0,
+            "cache_read_tokens": 0, "output_tokens": 1,
+        })
+        row = conn.execute(
+            "SELECT responses, memory_tool_responses, denied_responses, retried_denials, "
+            "usage_basis FROM api_telemetry WHERE session_id = 's-old'"
+        ).fetchone()
+        assert tuple(row) == (0, 0, 0, 0, "per_response")
+
+    def test_empty_table_reports_zero_round_trips(self, db_conn) -> None:
+        conn, project_id = db_conn
+        stats = get_cache_stats(conn, project_id)
+        assert stats["legacy_sessions"] == 0
+        assert stats["round_trips"] == {
+            "responses": 0, "memory_tool_responses": 0,
+            "denied_responses": 0, "retried_denials": 0,
+        }
+        assert stats["induced_share"] == 0.0
+
+    def test_legacy_rows_are_excluded_and_reported(self, db_conn) -> None:
+        """A row ingested before usage was counted per response is inflated 2-3x.
+        It must not be silently averaged in with corrected rows."""
+        conn, project_id = db_conn
+        store_telemetry(conn, {
+            "project_id": project_id, "session_id": "s-new",
+            "input_tokens": 200, "cache_creation_tokens": 0,
+            "cache_read_tokens": 800, "output_tokens": 10,
+        })
+        conn.execute(
+            "INSERT INTO api_telemetry (project_id, session_id, input_tokens, "
+            "cache_creation_tokens, cache_read_tokens, output_tokens, ingested_at, usage_basis) "
+            "VALUES (?, ?, 600, 0, 90000, 30, 1, ?)",
+            (project_id, "s-legacy", "per_line_legacy"),
+        )
+        conn.commit()
+        stats = get_cache_stats(conn, project_id)
+        assert stats["sessions_with_data"] == 1
+        assert stats["total_cache_read_tokens"] == 800
+        assert stats["legacy_sessions"] == 1
+
+    def test_induced_share_spans_all_three_round_trip_classes(self, db_conn) -> None:
+        conn, project_id = db_conn
+        for sid, resp, mem, den, ret in (("a", 10, 2, 1, 1), ("b", 30, 3, 2, 1)):
+            store_telemetry(conn, {
+                "project_id": project_id, "session_id": sid,
+                "input_tokens": 1, "cache_creation_tokens": 0, "cache_read_tokens": 0,
+                "output_tokens": 1, "responses": resp, "memory_tool_responses": mem,
+                "denied_responses": den, "retried_denials": ret,
+            })
+        stats = get_cache_stats(conn, project_id)
+        assert stats["round_trips"] == {
+            "responses": 40, "memory_tool_responses": 5,
+            "denied_responses": 3, "retried_denials": 2,
+        }
+        assert abs(stats["induced_share"] - 0.25) < 1e-9
