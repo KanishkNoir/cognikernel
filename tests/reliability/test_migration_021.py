@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+from cognikernel.config import EXPECTED_SCHEMA_VERSION
 from cognikernel.storage.connection import get_connection
 from cognikernel.storage.migrations import _MIGRATIONS_DIR, run_migrations
 import cognikernel.storage.migrations as migrations_module
@@ -133,7 +134,7 @@ class TestCrashMidScript:
             ).fetchone()[0]
             cols = {r[1] for r in conn2.execute("PRAGMA table_info(events)").fetchall()}
 
-        assert version == "21"
+        assert version == str(EXPECTED_SCHEMA_VERSION)
         assert {"superseded_at", "archived_at", "captured_at_sha", "supersede_reason"} <= cols
 
 
@@ -146,7 +147,7 @@ class TestReentrancy:
             run_migrations(conn)
             assert conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
-            ).fetchone()[0] == "21"
+            ).fetchone()[0] == str(EXPECTED_SCHEMA_VERSION)
 
             changes_before = conn.total_changes
             run_migrations(conn)  # second call — must be a true no-op
@@ -215,7 +216,7 @@ class TestConcurrentOpen:
             ).fetchone()[0]
             cols = [r[1] for r in conn.execute("PRAGMA table_info(events)").fetchall()]
 
-        assert version == "21"
+        assert version == str(EXPECTED_SCHEMA_VERSION)
         dupes = {c for c in cols if cols.count(c) > 1}
         assert not dupes, f"duplicate columns from a double-applied migration: {dupes}"
 

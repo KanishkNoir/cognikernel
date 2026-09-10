@@ -1207,6 +1207,17 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
         print(f"  avg cache hit rate : {hit_pct:.1f}%")
         print(f"  cache reads served : {read:,} tok")
         print(f"  effective saved    : {saved:,} tok (read billed ~0.1x)")
+        round_trips = cache_stats.get("round_trips") or {}
+        responses = round_trips.get("responses", 0)
+        if responses:
+            share = cache_stats.get("induced_share", 0.0) * 100
+            print(f"  API responses      : {responses:,}")
+            print(
+                f"  added by CK tools  : {share:.1f}% "
+                f"(memory-tool-only {round_trips.get('memory_tool_responses', 0)}, "
+                f"denied {round_trips.get('denied_responses', 0)}, "
+                f"retried {round_trips.get('retried_denials', 0)})"
+            )
         recent = cache_stats["recent_sessions"]
         if recent:
             print("  last sessions      :")
@@ -1217,6 +1228,15 @@ def _cmd_doctor(args: argparse.Namespace) -> None:
                 total_t = inp + read
                 pct = f"{read / total_t * 100:.0f}%" if total_t else "n/a"
                 print(f"    {sess_short}  cache={pct}  saved={read:,}tok")
+    legacy_sessions = cache_stats.get("legacy_sessions", 0)
+    if legacy_sessions:
+        # Rows ingested before usage was counted per response are inflated 2-3x
+        # and kept out of every figure above; say so rather than leave a gap.
+        print(
+            f"  legacy rows        : {legacy_sessions} session(s) counted per transcript "
+            f"line (inflated 2-3x), excluded above"
+        )
+        print("                       re-run 'cognikernel telemetry <project_path>' to correct them")
 
     print()
     print("-- subsystem health -----------------------------------------")
