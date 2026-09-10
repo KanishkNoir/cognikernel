@@ -41,6 +41,35 @@ def _assistant_line(
     })
 
 
+def _block_line(
+    message_id: str,
+    block_type: str = "text",
+    input_t: int = 100,
+    cache_create: int = 0,
+    cache_read: int = 0,
+    output_t: int = 50,
+) -> str:
+    """One JSONL line as Claude Code writes it: a SINGLE content block of a response.
+
+    A response with several blocks (text, thinking, tool_use) is written as several
+    lines that share `message.id` and repeat the response's full `usage` on each —
+    the usage is per response, not per block.
+    """
+    return json.dumps({
+        "type": "assistant",
+        "message": {
+            "id": message_id,
+            "content": [{"type": block_type}],
+            "usage": {
+                "input_tokens": input_t,
+                "cache_creation_input_tokens": cache_create,
+                "cache_read_input_tokens": cache_read,
+                "output_tokens": output_t,
+            },
+        },
+    })
+
+
 def _make_jsonl(tmp_path: Path, name: str, lines: list[str]) -> Path:
     p = tmp_path / f"{name}.jsonl"
     p.write_text("\n".join(lines), encoding="utf-8")
@@ -129,6 +158,71 @@ class TestIngestSessionJsonl:
         result = ingest_session_jsonl(f, "s1", "proj1")
         assert result["input_tokens"] == 20
         assert result["cache_read_tokens"] == 100
+
+
+class TestIngestCountsEachResponseOnce:
+    """Claude Code writes one JSONL line per content block and repeats the response's
+    usage on every one of them. Summing per line counted a response once per block —
+    2-3x on real sessions, and by a different factor per session depending on how many
+    blocks responses had — which inflated every api_telemetry row and every token
+    figure derived from transcripts. Verified on real transcripts: 1,077 of 1,077
+    multi-line responses carried identical usage on every line.
+    """
+
+    def test_usage_repeated_on_every_block_line_counts_once(self, tmp_path: Path) -> None:
+        lines = [
+            _block_line("msg_1", "text", 3, 1200, 40000, 800),
+            _block_line("msg_1", "thinking", 3, 1200, 40000, 800),
+            _block_line("msg_1", "tool_use", 3, 1200, 40000, 800),
+        ]
+        result = ingest_session_jsonl(_make_jsonl(tmp_path, "s1", lines), "s1", "p")
+        assert result["input_tokens"] == 3
+        assert result["cache_creation_tokens"] == 1200
+        assert result["cache_read_tokens"] == 40000
+        assert result["output_tokens"] == 800
+
+    def test_distinct_responses_are_summed(self, tmp_path: Path) -> None:
+        lines = [
+            _block_line("msg_1", "text", 10, 100, 1000, 50),
+            _block_line("msg_1", "tool_use", 10, 100, 1000, 50),
+            _block_line("msg_2", "text", 20, 200, 2000, 60),
+        ]
+        result = ingest_session_jsonl(_make_jsonl(tmp_path, "s1", lines), "s1", "p")
+        assert result["input_tokens"] == 30
+        assert result["cache_creation_tokens"] == 300
+        assert result["cache_read_tokens"] == 3000
+        assert result["output_tokens"] == 110
+
+    def test_lines_without_a_message_id_each_count(self, tmp_path: Path) -> None:
+        """Older or hand-built transcripts may carry no id. With nothing to group
+        on, each line is its own response — the previous behaviour, kept."""
+        lines = [_assistant_line(100, 0, 0, 50), _assistant_line(100, 0, 0, 50)]
+        result = ingest_session_jsonl(_make_jsonl(tmp_path, "s1", lines), "s1", "p")
+        assert result["input_tokens"] == 200
+        assert result["output_tokens"] == 100
+
+    def test_reports_the_number_of_api_responses(self, tmp_path: Path) -> None:
+        lines = [
+            _block_line("msg_1", "text"),
+            _block_line("msg_1", "thinking"),
+            _block_line("msg_1", "tool_use"),
+            _block_line("msg_2", "text"),
+            _assistant_line(1, 0, 0, 1),
+        ]
+        result = ingest_session_jsonl(_make_jsonl(tmp_path, "s1", lines), "s1", "p")
+        assert result["responses"] == 3
+
+    def test_interleaved_user_lines_do_not_split_a_response(self, tmp_path: Path) -> None:
+        """A tool_result user line lands between blocks of the same response in
+        real transcripts; grouping is by id, not by adjacency."""
+        lines = [
+            _block_line("msg_1", "tool_use", 5, 0, 500, 40),
+            json.dumps({"type": "user", "message": {"content": [{"type": "tool_result"}]}}),
+            _block_line("msg_1", "text", 5, 0, 500, 40),
+        ]
+        result = ingest_session_jsonl(_make_jsonl(tmp_path, "s1", lines), "s1", "p")
+        assert result["output_tokens"] == 40
+        assert result["responses"] == 1
 
 
 # ── store_telemetry ───────────────────────────────────────────────────────────
