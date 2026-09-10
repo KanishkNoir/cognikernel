@@ -12,6 +12,10 @@ EXPECTED_SCHEMA_VERSION: int = 22
 EXPECTED_PROJECTION_VERSION: int = 1
 
 VALID_HOOK_POLICIES = frozenset({"advisory", "strict"})
+# How the block header and the MCP server instructions steer the agent toward
+# memory tools (S4 T-405). "eager" is the original wording; "lean" stops asking
+# for a skeleton check or recall before every read.
+VALID_TOOL_GUIDANCE = frozenset({"eager", "lean"})
 
 # Extraction backend selector. `legacy` is the deterministic keyword/Aho-Corasick
 # pipeline (Stage 2). The `v1*` modes use the frozen-backbone learned salience head
@@ -96,6 +100,14 @@ class Config:
     hook_policy: str = "advisory"  # "advisory" (legacy) | "strict" (deny-by-default)
     read_cache_ttl_hours: int = 24
     deny_retry_window_seconds: int = 60
+    # S4 T-405: "eager" (the original wording) | "lean". Measured on the
+    # four-project benchmark, a skeleton call was followed by a Read of the same
+    # file 41-67% of the time and a recall by a read 33-78%, so asking for a
+    # memory-tool call before every read often bought an extra round trip.
+    # "lean" keeps the tools and the skeleton but stops asking for that call
+    # first. Default stays eager until a live A/B shows lean lowers cost
+    # without a recall loss.
+    tool_guidance: str = "eager"
     # When True, a UserPromptSubmit hook injects a short memory snippet alongside
     # each user prompt — only when a high-confidence, non-redundant hit exists.
     # Default OFF (sprint-plan flag). Register `cognikernel hook-user-prompt` in
@@ -296,6 +308,15 @@ class Config:
                 )
             return policy
 
+        def _parse_tool_guidance(v) -> str:
+            guidance = str(v)
+            if guidance not in VALID_TOOL_GUIDANCE:
+                raise ValueError(
+                    f"invalid tool_guidance {guidance!r}; expected one of "
+                    f"{sorted(VALID_TOOL_GUIDANCE)}"
+                )
+            return guidance
+
         def _parse_extractor(v) -> str:
             extractor = str(v).lower()
             if extractor not in VALID_EXTRACTORS:
@@ -320,6 +341,7 @@ class Config:
         _take("ckl_mode", bool)
         _take("ckl_v2", bool)
         _take("hook_policy", _parse_hook_policy)
+        _take("tool_guidance", _parse_tool_guidance)
         _take("read_cache_ttl_hours", int)
         _take("deny_retry_window_seconds", int)
         _take("embedding_enabled", bool)

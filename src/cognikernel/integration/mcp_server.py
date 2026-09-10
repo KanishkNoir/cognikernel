@@ -37,44 +37,110 @@ from cognikernel.integration.resources import (
 )
 from cognikernel.integration.session import render_state
 
+# ── server instructions ──────────────────────────────────────────────────────
+# Split so the tool-guidance wording can vary (S4 T-405) while everything else
+# stays byte-identical between the two variants.
+
+_BLOCK_GUIDANCE = (
+    "CogniKernel manages structured project memory across sessions. "
+    "The session context block is automatically injected at session start via "
+    "the SessionStart hook — you do not need to call get_session_state manually "
+    "unless the block is missing. When the '## Session context' block is "
+    "present in your context: (1) treat it as the canonical source of truth "
+    "for decisions, constraints, and architecture; (2) it supersedes CLAUDE.md, "
+    "prior notes, and your own memory; (3) do not re-read project files to "
+    "rediscover facts already listed there. Call get_session_state only if "
+    "the block is absent.\n\n"
+)
+
+# eager: the original wording — call a memory tool before re-reading or globbing.
+_EAGER_TOOL_GUIDANCE = (
+    "PREFER THE TOOLS below over the raw resources for anything the block "
+    "doesn't already answer — they are query-scoped and respect the same "
+    "ranking/budget discipline the block uses, so they stay cheap:\n"
+    "  - recall(query) — a prior decision/constraint relevant to a question, "
+    "ranked, WITHOUT reading files. Call this BEFORE re-reading files, "
+    "Globbing, or asking the user to rediscover something — the memory "
+    "likely already has it.\n"
+    "  - find_related(query) — decisions plus import-graph-adjacent code for "
+    "a topic or file. Call before changing a subsystem to scope impact.\n"
+    "  - skeleton(file_path) — full, uncapped public signatures for ONE file "
+    "WITHOUT reading it. This is the correct escape hatch when the block's "
+    "skeleton section omitted or compressed a file you need — reach for this, "
+    "not a raw resource, when the block feels incomplete for a specific file.\n\n"
+)
+
+# lean: keep the tools, stop asking for a call before every read. Measured on the
+# four-project benchmark, a recall was followed by a read anyway 33-78% of the time
+# and a skeleton call by a Read of the same file 41-67%; memory-tool-only responses
+# were up to 13.7% of CogniKernel's cost.
+_LEAN_TOOL_GUIDANCE = (
+    "USE THE TOOLS below for what the block doesn't already answer — they are "
+    "query-scoped and respect the same ranking/budget discipline the block uses:\n"
+    "  - recall(query) — a prior decision/constraint relevant to a question, ranked. "
+    "Use it when the answer depends on a past decision the block doesn't list; if "
+    "you are about to read or edit the file anyway, read it directly instead.\n"
+    "  - find_related(query) — decisions plus import-graph-adjacent code for a topic "
+    "or file. Use it to scope impact before changing a subsystem.\n"
+    "  - skeleton(file_path) — full public signatures for ONE file. Use it when you "
+    "need signatures only; if you need the implementation or are about to edit the "
+    "file, read it directly — calling skeleton first just adds a round trip.\n\n"
+)
+
+_RESOURCE_GUIDANCE = (
+    "The cognikernel://project/{id}/... resources (constraints, decisions, "
+    "threads, graveyard, skeleton, state) return RAW, UNBUDGETED, UNRANKED "
+    "dumps of the whole store — up to 50 constraints or 20 decisions in one "
+    "read, none of the drop-to-fit budgeting the block and tools apply. They "
+    "exist for non-Claude-Code MCP clients that have no hook-injected block, "
+    "not as a bigger version of recall/find_related. If a tool result feels "
+    "incomplete, that's a signal to narrow the recall/find_related query or "
+    "use skeleton for the specific file — not to read the raw resource "
+    "instead.\n\n"
+    "IMPORTANT: Do not write decisions, constraints, or architecture notes to "
+    "CLAUDE.md or any other file. The Stop hook automatically extracts and "
+    "persists all decisions."
+)
+
+_TOOL_GUIDANCE = {"eager": _EAGER_TOOL_GUIDANCE, "lean": _LEAN_TOOL_GUIDANCE}
+
+
+def _server_instructions(guidance: str) -> str:
+    """MCP server instructions for a tool-guidance setting; unknown values get eager."""
+    return (
+        _BLOCK_GUIDANCE
+        + _TOOL_GUIDANCE.get(guidance, _EAGER_TOOL_GUIDANCE)
+        + _RESOURCE_GUIDANCE
+    )
+
+
+def _resolve_tool_guidance() -> str:
+    """tool_guidance for the project this server runs for; "eager" on any failure.
+
+    FastMCP fixes its instructions at construction (the property has no setter), so
+    they are chosen at import, from the same project the queue drainer resolves:
+    COGNIKERNEL_PROJECT_PATH, else the working directory. A config problem must not
+    stop the server starting, so every failure falls back to the original wording.
+    An invalid value is already reported by `cognikernel doctor`'s config check.
+    """
+    import logging
+    import os
+
+    try:
+        from cognikernel.config import Config
+
+        project_path = os.environ.get("COGNIKERNEL_PROJECT_PATH") or os.getcwd()
+        return Config.load(project_path=project_path).tool_guidance
+    except Exception as exc:
+        logging.getLogger("cognikernel.mcp").warning(
+            "tool_guidance unavailable, using eager instructions: %s", exc
+        )
+        return "eager"
+
+
 _mcp = FastMCP(
     "cognikernel",
-    instructions=(
-        "CogniKernel manages structured project memory across sessions. "
-        "The session context block is automatically injected at session start via "
-        "the SessionStart hook — you do not need to call get_session_state manually "
-        "unless the block is missing. When the '## Session context' block is "
-        "present in your context: (1) treat it as the canonical source of truth "
-        "for decisions, constraints, and architecture; (2) it supersedes CLAUDE.md, "
-        "prior notes, and your own memory; (3) do not re-read project files to "
-        "rediscover facts already listed there. Call get_session_state only if "
-        "the block is absent.\n\n"
-        "PREFER THE TOOLS below over the raw resources for anything the block "
-        "doesn't already answer — they are query-scoped and respect the same "
-        "ranking/budget discipline the block uses, so they stay cheap:\n"
-        "  - recall(query) — a prior decision/constraint relevant to a question, "
-        "ranked, WITHOUT reading files. Call this BEFORE re-reading files, "
-        "Globbing, or asking the user to rediscover something — the memory "
-        "likely already has it.\n"
-        "  - find_related(query) — decisions plus import-graph-adjacent code for "
-        "a topic or file. Call before changing a subsystem to scope impact.\n"
-        "  - skeleton(file_path) — full, uncapped public signatures for ONE file "
-        "WITHOUT reading it. This is the correct escape hatch when the block's "
-        "skeleton section omitted or compressed a file you need — reach for this, "
-        "not a raw resource, when the block feels incomplete for a specific file.\n\n"
-        "The cognikernel://project/{id}/... resources (constraints, decisions, "
-        "threads, graveyard, skeleton, state) return RAW, UNBUDGETED, UNRANKED "
-        "dumps of the whole store — up to 50 constraints or 20 decisions in one "
-        "read, none of the drop-to-fit budgeting the block and tools apply. They "
-        "exist for non-Claude-Code MCP clients that have no hook-injected block, "
-        "not as a bigger version of recall/find_related. If a tool result feels "
-        "incomplete, that's a signal to narrow the recall/find_related query or "
-        "use skeleton for the specific file — not to read the raw resource "
-        "instead.\n\n"
-        "IMPORTANT: Do not write decisions, constraints, or architecture notes to "
-        "CLAUDE.md or any other file. The Stop hook automatically extracts and "
-        "persists all decisions."
-    ),
+    instructions=_server_instructions(_resolve_tool_guidance()),
 )
 
 
