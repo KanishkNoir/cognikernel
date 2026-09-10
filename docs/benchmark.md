@@ -119,19 +119,32 @@ efficiency metric that wins on every project.
 
 ### Total reads and cost
 
-| Project | reads Δ | raw tokens Δ | **weighted cost Δ** |
-|---|---|---|---|
-| Relay | **−38.1%** | −17.5% | **−15.1%** |
-| Toolbelt | +2.9% | **−17.9%** | **−13.3%** |
-| Conductor | +4.5% | +1.1% | +5.3% |
-| Taskflow | +6.7% | +9.9% | +32.5% |
+> **Correction (2026-09-10).** An earlier version of this table summed token usage once
+> per transcript *line*. Claude Code writes one line per content block and repeats the
+> response's full usage on each, so a response was counted once per block — 1.9×–3.0×
+> depending on the arm, which distorted the deltas rather than just their scale. The
+> figures below count each API response once. Reads, orientation reads, the memory-cost
+> split and every recall score never used token usage and are unaffected.
 
-Cheaper on Relay and Toolbelt; more expensive on Conductor and Taskflow.
+Deltas are CK vs auto, plus CK vs stock where the project had a stock arm:
 
-**Raw and weighted can disagree, and only weighted is honest.** On Taskflow CK used
-**13% fewer total tokens than stock yet cost 5% more** — its mix carries more
-cache-writes and output (priced 1.25× and 5×) and fewer cache-reads (0.1×). Anyone
-reporting raw tokens would call that a win. It is not.
+| Project | reads Δ | raw tokens Δ | **weighted cost Δ** | weighted vs **stock** |
+|---|---|---|---|---|
+| Relay | **−38.1%** | **−28.3%** | **−25.0%** | **+23.0%** |
+| Toolbelt | +2.9% | −23.0% | **−19.3%** | — |
+| Conductor | +4.5% | −8.0% | +3.0% | — |
+| Taskflow | +6.7% | +0.4% | +4.2% | −10.7% |
+
+Against native auto-memory, CK is cheaper on Relay and Toolbelt and within a few percent
+on Conductor and Taskflow. **Against no memory at all it is not cheaper everywhere:** on
+Relay — the project where it beats auto by the widest margin — CK costs 23% more than the
+stock arm. Round-trips its own tools add account for more than that entire gap:
+memory-tool calls, and reads the strict hook policy denied and the agent then retried.
+An agent with no memory makes neither.
+
+**Raw and weighted can disagree, and only weighted is honest.** On Conductor CK used **8%
+fewer total tokens than auto yet cost 3% more** — its mix carries 22% more output, priced
+at 5×. Anyone reporting raw tokens would call that a win. It is not.
 
 ### Memory cost, split by direction
 
@@ -152,8 +165,13 @@ session whether it is used or not. On Toolbelt it is cheaper on both.
 ## 4. Where CogniKernel does not help
 
 - **Small or re-readable projects.** Taskflow (3 sessions, 1 chain): CK is last on
-  recall and 32.5% more expensive. When the working set fits in a few files, reading
-  them is cheaper than remembering them.
+  recall and costs about the same as auto-memory (+4.2%; 10.7% less than stock). When
+  the working set fits in a few files, re-reading them works as well as remembering
+  them, so memory adds little.
+- **Round-trips the tools add.** On Relay CK costs 23% more than an agent with no
+  memory. Memory-tool calls, and first reads denied under the strict hook policy, account
+  for more than that whole gap — and across the suite 89% of those denials were simply
+  retried within a few responses, so the denial bought nothing but an extra round-trip.
 - **Precise self-authored symbols.** Toolbelt: auto scored **100%** by re-reading
   when unsure; CK answered from memory more often (20/27 vs 17/27) and paid for two
   misses. Confidence without verification has a cost.
