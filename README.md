@@ -278,12 +278,14 @@ CogniKernel ties or loses) are in [`docs/benchmark.md`](docs/benchmark.md):
   your session runs *longer* before compaction, not just cheaper.
 - **Total reads and tokens: a split result, not a sweep.** Once you count every
   read rather than just orientation, CogniKernel is ahead on one project of four
-  (Relay, −38.1%) and slightly behind on the rest. Tokens track the same split:
-  **−17.5% raw / −15.1% price-weighted on Relay** and **−17.9% / −13.3% on
-  Toolbelt**, but *more* expensive on Conductor (+5.3%) and Taskflow (+32.5%).
-  Structured memory repays its overhead on projects with several evolving
-  decisions and several abandoned approaches; on small re-readable ones, reading
-  the files is simply cheaper than remembering them.
+  (Relay, −38.1%) and slightly behind on the rest. Against native auto-memory,
+  price-weighted cost is **−25.0% on Relay** and **−19.3% on Toolbelt**, and within
+  a few percent on Conductor (+3.0%) and Taskflow (+4.2%). Against no memory at
+  all it is not a sweep: on Relay CogniKernel costs **23% more than the no-memory
+  arm**, from round-trips its own tools add. Structured memory repays its overhead
+  on projects with several evolving decisions and several abandoned approaches; on
+  small re-readable ones it adds little. *(Corrected 2026-09-10 — earlier figures
+  double-counted token usage; see `docs/benchmark.md` §3.)*
 
 - **Recall instead of re-derivation.** Where memory earns its keep is projects
   whose state is too large, too evolving, or too long-lived to re-derive
