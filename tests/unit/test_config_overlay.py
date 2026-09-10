@@ -206,3 +206,43 @@ def test_project_identity_is_parsed(tmp_path: Path, monkeypatch) -> None:
 
 def test_valid_hook_policies_set() -> None:
     assert VALID_HOOK_POLICIES == frozenset({"advisory", "strict"})
+
+
+# ── tool_guidance (S4 T-405) ─────────────────────────────────────────────────
+
+
+def test_tool_guidance_defaults_to_eager(tmp_path: Path, monkeypatch) -> None:
+    """eager is today's guidance, so nothing changes unless a project opts in."""
+    monkeypatch.delenv("COGNIKERNEL_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "noprofile")
+    assert Config.load().tool_guidance == "eager"
+
+
+def test_project_overlay_sets_tool_guidance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("COGNIKERNEL_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "noprofile")
+    project = tmp_path / "myproj"
+    (project / ".cognikernel").mkdir(parents=True)
+    (project / ".cognikernel" / "config.toml").write_text(
+        'tool_guidance = "lean"\n', encoding="utf-8",
+    )
+    assert Config.load(project_path=project).tool_guidance == "lean"
+
+
+def test_invalid_tool_guidance_falls_back_and_reports(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("COGNIKERNEL_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "noprofile")
+    project = tmp_path / "myproj"
+    (project / ".cognikernel").mkdir(parents=True)
+    (project / ".cognikernel" / "config.toml").write_text(
+        'tool_guidance = "terse"\n', encoding="utf-8",
+    )
+    cfg, issues = Config.load_with_issues(project_path=project)
+    assert cfg.tool_guidance == "eager"
+    assert len(issues) == 1 and "tool_guidance" in issues[0]
+
+
+def test_valid_tool_guidance_set() -> None:
+    from cognikernel.config import VALID_TOOL_GUIDANCE
+
+    assert VALID_TOOL_GUIDANCE == frozenset({"eager", "lean"})

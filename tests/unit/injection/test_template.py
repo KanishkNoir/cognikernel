@@ -409,3 +409,28 @@ class TestRenderWithBudgetEnforcement:
         )
         out = render_with_budget_enforcement(ctx)
         assert "Short." in out
+
+
+# ── tool guidance in the header (S4 T-405) ────────────────────────────────────
+
+class TestToolGuidanceInHeader:
+    """eager asks for a skeleton check before every Read/Glob/Grep. Measured on the
+    four-project benchmark, a skeleton call was followed by a Read of the SAME file
+    41-67% of the time, so for code the agent is about to change the check was an
+    extra round-trip. lean points at the skeleton for orientation and says to read
+    directly when the implementation is needed."""
+
+    def test_eager_is_the_default_and_keeps_todays_wording(self) -> None:
+        header = _render_header(_make_ctx(skeleton=["entry"]))
+        assert "Before using Read/Glob/Grep, check Codebase skeleton below" in header
+
+    def test_lean_does_not_ask_for_a_skeleton_check_before_every_read(self) -> None:
+        header = _render_header(_make_ctx(skeleton=["entry"], tool_guidance="lean"))
+        assert "Before using Read/Glob/Grep" not in header
+        assert "skeleton" in header.lower()
+        assert "read the file directly" in header.lower()
+
+    def test_no_skeleton_means_no_guidance_either_way(self) -> None:
+        for guidance in ("eager", "lean"):
+            header = _render_header(_make_ctx(tool_guidance=guidance))
+            assert "skeleton" not in header.lower()

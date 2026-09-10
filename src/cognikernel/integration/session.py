@@ -775,6 +775,7 @@ def render_state(
     ctx.section_budgets = config.section_budgets.scaled(config.token_budget)
     # Phase B trust signals — only carried through to the renderer.
     ctx.hook_policy = config.hook_policy
+    ctx.tool_guidance = config.tool_guidance
     ctx.retry_window_seconds = config.deny_retry_window_seconds
     ctx.skeleton_coverage = coverage
     ctx.skeleton_refresh = refresh

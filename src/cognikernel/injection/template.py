@@ -49,6 +49,7 @@ class InjectionContext:
     # ── Phase B trust signals ────────────────────────────────────────────────
     hook_policy: str = "advisory"             # 'advisory' | 'strict'
     retry_window_seconds: int = 60
+    tool_guidance: str = "eager"             # 'eager' | 'lean' (S4 T-405)
     # symbol_files-derived stats; None when callers don't supply them, which
     # keeps the renderer back-compat with non-strict callers.
     skeleton_coverage: object = None          # storage.symbol_files.CoverageStats | None
@@ -225,10 +226,20 @@ def _render_header(ctx: InjectionContext) -> str:
         f"of {ctx.total_sessions} · state v{ctx.state_version}"
     )
     if ctx.skeleton:
-        header += (
-            "\nBefore using Read/Glob/Grep, check Codebase skeleton below — "
-            "classes, methods, and imports listed without re-reading files."
-        )
+        if ctx.tool_guidance == "lean":
+            # S4 T-405: point at the skeleton for orientation without asking for a
+            # check before every read — a skeleton lookup was followed by a Read of
+            # the same file 41-67% of the time on the benchmark.
+            header += (
+                "\nCodebase skeleton below lists public classes, methods and imports — "
+                "use it to orient. When you need a file's implementation, or are "
+                "about to edit it, read the file directly."
+            )
+        else:
+            header += (
+                "\nBefore using Read/Glob/Grep, check Codebase skeleton below — "
+                "classes, methods, and imports listed without re-reading files."
+            )
     if ctx.ckl_mode:
         header += f"\n{CKL_LEGEND}"
     if ctx.ckl_v2:
