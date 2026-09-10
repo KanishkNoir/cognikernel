@@ -1,8 +1,17 @@
 """JSONL-based telemetry ingestion — reads Claude Code session files for cache stats.
 
 Claude Code stores sessions at ~/.claude/projects/<project_hash>/<session_id>.jsonl.
-Each assistant message has a `message.usage` dict with input/cache/output token counts.
+Assistant responses carry a `message.usage` dict with input/cache/output token counts.
 This module parses those files and stores per-session aggregates in api_telemetry.
+
+ONE RESPONSE, MANY LINES. Claude Code writes one JSONL line per content block (text,
+thinking, tool_use), and every line of a response repeats that response's full
+`usage`. Usage is therefore summed once per `message.id`, never once per line.
+Summing per line counted a response once per block — 2-3x on real sessions, and by
+a different factor per session depending on how many blocks its responses had, so
+it did not merely scale the numbers but distorted comparisons between sessions.
+Verified on real transcripts: 1,077 of 1,077 multi-line responses carried identical
+usage on every line.
 """
 from __future__ import annotations
 
@@ -21,11 +30,12 @@ def ingest_session_jsonl(
     """Parse a Claude Code JSONL session file and return aggregated usage stats.
 
     Only assistant messages carry usage data; user/meta/tool lines are skipped.
+    Usage is counted once per API response (grouped by `message.id`, see the module
+    docstring); a line with no id has nothing to group on and counts as its own
+    response. `responses` is the number of API responses that carried usage.
     """
-    input_tokens = 0
-    cache_creation_tokens = 0
-    cache_read_tokens = 0
-    output_tokens = 0
+    by_message_id: dict[str, dict[str, Any]] = {}
+    without_id: list[dict[str, Any]] = []
 
     try:
         text = jsonl_path.read_text(encoding="utf-8")
@@ -42,21 +52,27 @@ def ingest_session_jsonl(
             continue
         if obj.get("type") != "assistant":
             continue
-        usage = obj.get("message", {}).get("usage", {})
+        message = obj.get("message") or {}
+        usage = message.get("usage") or {}
         if not usage:
             continue
-        input_tokens += usage.get("input_tokens", 0)
-        cache_creation_tokens += usage.get("cache_creation_input_tokens", 0)
-        cache_read_tokens += usage.get("cache_read_input_tokens", 0)
-        output_tokens += usage.get("output_tokens", 0)
+        message_id = message.get("id")
+        if message_id:
+            # Every line of a response repeats the same usage; keeping the last
+            # one seen is equivalent and tolerates a truncated earlier line.
+            by_message_id[message_id] = usage
+        else:
+            without_id.append(usage)
 
+    responses = [*by_message_id.values(), *without_id]
     return {
         "project_id": project_id,
         "session_id": session_id,
-        "input_tokens": input_tokens,
-        "cache_creation_tokens": cache_creation_tokens,
-        "cache_read_tokens": cache_read_tokens,
-        "output_tokens": output_tokens,
+        "input_tokens": sum(u.get("input_tokens", 0) or 0 for u in responses),
+        "cache_creation_tokens": sum(u.get("cache_creation_input_tokens", 0) or 0 for u in responses),
+        "cache_read_tokens": sum(u.get("cache_read_input_tokens", 0) or 0 for u in responses),
+        "output_tokens": sum(u.get("output_tokens", 0) or 0 for u in responses),
+        "responses": len(responses),
     }
 
 
