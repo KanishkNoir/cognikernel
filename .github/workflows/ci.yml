@@ -85,7 +85,15 @@ jobs:
       - name: Install from source with unpinned resolution
         run: python -m pip install --upgrade pip && python -m pip install .
       - name: Report resolved dependency versions
-        run: python -c "import importlib.metadata as m; print('tree-sitter', m.version('tree-sitter')); print('tree-sitter-language-pack', m.version('tree-sitter-language-pack'))"
+        run: python -c "import importlib.metadata as m; [print(p, m.version(p)) for p in ('tree-sitter', 'tree-sitter-language-pack', 'mcp')]"
+      - name: Assert the MCP server starts and lists its tools
+        # The same gap, second time: mcp 2.0 removed mcp.server.fastmcp. uv.lock
+        # pinned mcp 1.x, so every other job stayed green while a fresh install's
+        # MCP server exited at startup and Claude Code dropped the memory tools.
+        # Start the real server over stdio, the way Claude Code does.
+        run: |
+          mkdir -p "$RUNNER_TEMP/mcp-check" && cd "$RUNNER_TEMP/mcp-check"
+          python "$GITHUB_WORKSPACE/.github/scripts/check_mcp_server.py"
       - name: Assert TS/JS extraction actually yields symbols
         run: |
           python - <<'PY'
