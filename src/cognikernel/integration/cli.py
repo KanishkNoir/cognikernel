@@ -294,6 +294,25 @@ def main() -> None:
         help="Never fetch from the GitHub release; install only from a local source",
     )
 
+    # ── why ───────────────────────────────────────────────────────────────────
+    p_why = sub.add_parser(
+        "why",
+        help="Explain a claim: its source, session, admission and what it replaced",
+    )
+    p_why.add_argument("project_path", help="Path to the project root")
+    p_why.add_argument(
+        "subject",
+        help='A claim id ("#123") or words that must all appear in the claim',
+    )
+    p_why.add_argument(
+        "--limit", type=int, default=3, metavar="N",
+        help="Claims to show when the subject is text (default: 3)",
+    )
+    p_why.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Output the explanation as JSON",
+    )
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -318,6 +337,8 @@ def main() -> None:
         _cmd_mcp_serve()
     elif args.command == "failures":
         _cmd_failures(args)
+    elif args.command == "why":
+        _cmd_why(args)
     elif args.command == "rebuild":
         _cmd_rebuild(args)
     elif args.command == "lookup":
@@ -1405,6 +1426,33 @@ def _cmd_failures(args: argparse.Namespace) -> None:
         print(f"  [{ts}] session={sess}  stage={f['stage']}")
         print(f"    {f['error_message'][:200]}")
         print()
+
+
+def _cmd_why(args: argparse.Namespace) -> None:
+    """S5 T-502: explain a claim — the answer a summary-based memory cannot give."""
+    from cognikernel.integration.why import explain_claims, render_claims
+    from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
+    from cognikernel.storage.migrations import run_migrations
+
+    config = Config.load(project_path=args.project_path)
+    project_id = resolve_project_id(args.project_path, config)
+    db_path = get_db_path(config, project_id)
+
+    if not db_path.exists():
+        print(f"No database found for {Path(args.project_path).resolve()}", file=sys.stderr)
+        sys.exit(1)
+
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        claims = explain_claims(conn, project_id, args.subject, limit=args.limit)
+
+    if args.as_json:
+        print(json.dumps({"project_id": project_id, "subject": args.subject, "claims": claims}, indent=2))
+        return
+    if not claims:
+        print(f'No claim matches "{args.subject}".')
+        return
+    print(render_claims(claims))
 
 
 def _cmd_rebuild(args: argparse.Namespace) -> None:
