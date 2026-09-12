@@ -282,6 +282,29 @@ _FRAG_DEMOTE = FRAGMENT_DEMOTE     # context-dependent fragments (J5.2)
 _VALUEISH_RE = re.compile(r"\d|\btrue\b|\bfalse\b|\benabled\b|\bdisabled\b|\bnone\b|\balways\b|\bnever\b", re.I)
 _LABEL_FACT_CONF = 0.45  # modest: deterministic floor, below head-confident events
 
+# Labels that frame a reply or report a status rather than name a setting.
+# "ANSWER: dead | 14 days" and "Verified: 13/13 tests pass" have the label-value
+# shape, but they restate a fact already captured or report a transient result —
+# the head was right to call them noise. In the 2026-09-12 micro benchmark every
+# graded answer line was rescued this way and the top two Key decisions of the
+# last session were answer lines. Measured on all 636 backstop-rescued claims in
+# the local stores, these labels account for 17, all restatements or status
+# reports. Deliberately short: excluding a label drops the line outright, and
+# "So:", "Right now:" and "Result:" carried real facts in the same sweep.
+_FRAMING_LABELS = frozenset({
+    "answer", "answers", "summary", "verified", "full suite", "check in",
+    "report", "report updated",
+})
+
+
+def is_label_value_fact(desc: str) -> bool:
+    """The backstop's test: a "Label: value" line that names a setting and has a value."""
+    from cognikernel.extraction.tokenize import is_label_value_line
+
+    if not (is_label_value_line(desc) and _VALUEISH_RE.search(desc)):
+        return False
+    return desc.split(":", 1)[0].strip().lower() not in _FRAMING_LABELS
+
 
 def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None) -> list[Event] | None:
     """Broad mode: classify every prose sentence; keep non-NOISE as typed events.
@@ -325,9 +348,9 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
             return None
         label, conf = scored
         if label == "NOISE":
-            # Deterministic label-value backstop (see _VALUEISH_RE above).
-            from cognikernel.extraction.tokenize import is_label_value_line
-            if is_label_value_line(desc) and _VALUEISH_RE.search(desc):
+            # Deterministic label-value backstop (see _VALUEISH_RE and
+            # _FRAMING_LABELS above).
+            if is_label_value_fact(desc):
                 label, conf = "DECISION", _LABEL_FACT_CONF
             else:
                 continue
