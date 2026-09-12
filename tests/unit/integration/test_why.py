@@ -363,6 +363,82 @@ class TestWhyCommand:
             version = c.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
             assert int(version) == EXPECTED_SCHEMA_VERSION
 
+    def test_importance_is_the_ranking_weight_with_its_six_factors(self, project, capsys) -> None:
+        """G4 (§14 "why was this considered important?"): show the factorisation,
+        not the number."""
+        import math
+
+        proj, _old, new = project
+
+        _why(proj, f"#{new}", as_json=True)
+        importance = json.loads(capsys.readouterr().out)["claims"][0]["importance"]
+
+        assert importance["ranked"] is True
+        assert list(importance["factors"]) == ["base", "recency", "repetition", "centrality", "activity", "type"]
+        assert importance["weight"] == pytest.approx(math.prod(importance["factors"].values()))
+
+    def test_importance_matches_the_weight_the_block_ranks_by(self, project, capsys) -> None:
+        from cognikernel.storage.events import get_events_for_projection
+        from cognikernel.storage.projections import build_projection
+
+        proj, _old, new = project
+        pid = hash_project_path(str(proj))
+        with get_connection(get_db_path(Config.load(), pid)) as c:
+            projection = build_projection(c, pid, get_events_for_projection(c, pid))
+        ranked = {rec["id"]: rec["weight"] for rec in projection.ranked_decisions}
+
+        _why(proj, f"#{new}", as_json=True)
+
+        assert json.loads(capsys.readouterr().out)["claims"][0]["importance"]["weight"] == ranked[new]
+
+    def test_text_shows_the_factorisation_and_the_rank(self, project, capsys) -> None:
+        proj, _old, new = project
+
+        _why(proj, f"#{new}")
+        out = capsys.readouterr().out
+
+        assert "importance" in out and "rank 1 of 1 decisions" in out
+        for name in ("base", "recency", "repetition", "centrality", "activity", "type"):
+            assert f"{name} " in out
+
+    def test_a_superseded_claim_is_not_ranked(self, project, capsys) -> None:
+        proj, old, new = project
+
+        _why(proj, f"#{old}", as_json=True)
+        importance = json.loads(capsys.readouterr().out)["claims"][0]["importance"]
+
+        assert importance["ranked"] is False
+        assert "superseded" in importance["reason"]
+
+    def test_a_claim_folded_into_another_names_the_one_that_ranks(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        """Same-topic choices consolidate to one canonical; the older one is ranked
+        through it, and `why` must say which claim carries its weight."""
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+        proj = tmp_path / "folded"
+        proj.mkdir()
+        pid = hash_project_path(str(proj))
+        db = get_db_path(Config.load(), pid)
+        db.parent.mkdir(parents=True, exist_ok=True)
+        with get_connection(db) as c:
+            run_migrations(c)
+            older, newer = (
+                insert_event(c, Event(
+                    project_id=pid, session_id="s1", event_type="DECISION",
+                    payload={"description": f"Retry policy version {v}", "subject": "retry policy"},
+                    content_hash=f"fold-{v}", created_at=created,
+                ))
+                for v, created in (("a", 1_000), ("b", 2_000))
+            )
+            c.commit()
+
+        _why(proj, f"#{older}", as_json=True)
+        importance = json.loads(capsys.readouterr().out)["claims"][0]["importance"]
+
+        assert importance["ranked"] is False
+        assert importance["folded_into"] == newer
+
     def test_no_match_says_so(self, project, capsys) -> None:
         proj, *_ = project
 

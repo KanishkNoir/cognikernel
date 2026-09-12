@@ -55,8 +55,11 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session it came from — as "session 2 of 4", in the order the sessions
   happened, not as an opaque id — and the sentence in the conversation it was
   extracted from, and who said it. It also shows what the quality gate noted
-  when the claim was admitted, and its history: the claims it replaced or was
-  replaced by, when, and which rule decided it. Replaced claims can be looked
+  when the claim was admitted, why it ranks where it does — its weight in the
+  session block broken into the six factors that produce it (type, how
+  recently and how often it came up, how central and how active its files
+  are), or which claim it was folded into — and its history: the claims it
+  replaced or was replaced by, when, and which rule decided it. Replaced claims can be looked
   up too, which is the point when you are asking why memory changed its mind.
   Anything the store did not record — the commit a claim was captured
   against, or a precise sentence position, which the current extractor never

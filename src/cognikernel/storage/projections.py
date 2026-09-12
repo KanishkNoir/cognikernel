@@ -128,6 +128,8 @@ def build_projection(
     project_id: str,
     events: list,
     built_at: int | None = None,
+    *,
+    explain_weights: bool = False,
 ) -> Projection:
     """Route, consolidate and weight `events` into a Projection. Writes nothing.
 
@@ -135,6 +137,10 @@ def build_projection(
     view (S5 T-503) feeds it the claims live at a past time, and must neither
     overwrite the stored projection nor backfill decision keys — so both of
     those stay in rebuild_projection.
+
+    `explain_weights` attaches each rec's weight factors and their inputs as
+    rec["weight_factors"] for `cognikernel why`. Off by default, so a saved
+    projection is unchanged.
     """
     hard_constraints: list[dict[str, Any]] = []
     ranked_decisions: list[dict[str, Any]] = []
@@ -209,6 +215,7 @@ def build_projection(
         events,
         [hard_constraints, ranked_decisions, graveyard,
          active_threads, list(component_map.values())],
+        explain=explain_weights,
     )
 
     ranked_decisions.sort(key=lambda r: r["weight"], reverse=True)
@@ -285,6 +292,7 @@ def _apply_composite_weights(
     project_id: str,
     events: list,
     bucket_lists: list[list[dict[str, Any]]],
+    explain: bool = False,
 ) -> None:
     """Rewrite each rec's ``weight`` in place using the composite model.
 
@@ -300,7 +308,7 @@ def _apply_composite_weights(
       - centrality: PageRank over the symbol import graph (local edges only).
     """
     from cognikernel.compression.centrality import compute_file_centrality
-    from cognikernel.compression.weights import compute_weight
+    from cognikernel.compression.weights import compute_weight, weight_factors
     from cognikernel.storage.events import Event
 
     # Session ordinals — 1..N by first appearance (events are id-ascending).
@@ -347,6 +355,13 @@ def _apply_composite_weights(
                 mention_count=rec.get("mention_count", 1),
                 last_mentioned_session=session_ord.get(rec.get("session_id", ""), 0),
             )
+            if explain:
+                rec["weight_factors"] = {
+                    "factors": weight_factors(ev, activity_map, centrality_map, current_session),
+                    "sessions_ago": max(0, current_session - ev.last_mentioned_session),
+                    "mention_count": ev.mention_count,
+                    "affected_files": affected,
+                }
             rec["weight"] = compute_weight(ev, activity_map, centrality_map, current_session)
 
 
