@@ -81,6 +81,36 @@ class TestBoilerplateIsTypeIndependent:
         assert v.action == "admit"
 
 
+class TestStepNarration:
+    """D11 — the assistant announcing its next step, typed as a decision by the head.
+
+    In the 2026-09-12 micro benchmark store, 24 step announcements ("Now let's
+    run the full test suite.") were stored at head confidence 0.66–0.99.
+    """
+
+    def test_downgrades_assistant_step_narration(self) -> None:
+        v = admit(_event("DECISION", "Now update dispatcher.py to use the renamed store API.",
+                         source_role="assistant"))
+        assert (v.action, v.rule_id) == ("downgrade", "D11")
+
+    def test_marks_it_as_step_narration(self) -> None:
+        from cognikernel.quality.gate import apply_verdict
+
+        e = _event("THREAD_OPEN", "Now let's run the full test suite.", source_role="assistant")
+        apply_verdict(e, admit(e))
+        assert e.payload["quality"] == "step_narration"
+
+    def test_the_user_saying_it_is_admitted(self) -> None:
+        v = admit(_event("DECISION", "Now update dispatcher.py to use the renamed store API.",
+                         source_role="user"))
+        assert v.action == "admit"
+
+    def test_a_decision_with_its_reason_is_admitted(self) -> None:
+        v = admit(_event("DECISION", "Let's use the SDK client instead, which matches production.",
+                         source_role="assistant"))
+        assert v.action == "admit"
+
+
 class TestGrounding:
     def test_admits_known_path(self) -> None:
         g = GroundingContext(frozenset({"src/storage/connection.py"}))

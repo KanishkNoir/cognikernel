@@ -46,6 +46,7 @@ from cognikernel.quality.detectors import (
     detect_bare_instruction_thread,
     detect_boilerplate,
     detect_junk_constraint,
+    detect_step_narration,
     detect_subject_less,
 )
 
@@ -190,6 +191,16 @@ def _admit_inner(event: Event, ground: GroundingContext | None) -> Verdict:
     if hit is not None:
         return Verdict("downgrade", hit.rule_id, hit.note)
 
+    # D11: the assistant announcing its next step ("Now let's run the full test
+    # suite."), which the salience head types as a decision or thread. Downgrade,
+    # never reject: the verb list is a heuristic, and a demoted claim stays
+    # reachable through recall.
+    hit = detect_step_narration(
+        description, event.event_type, payload.get("source_role", "") or ""
+    )
+    if hit is not None:
+        return Verdict("downgrade", hit.rule_id, hit.note)
+
     # An EMPTY inventory means "cannot verify", not "nothing is real". A brand-new
     # project has no symbol graph yet, and grounding against an empty set would
     # downgrade every component event it ever captured.
@@ -237,6 +248,10 @@ def apply_verdict(event: Event, verdict: Verdict) -> Event:
         # to tell "this was an instruction" from "this was a reference".
         event.payload["authority"] = _DEMOTED_THREAD_AUTHORITY
         event.payload["quality"] = "thread_reference"
+    elif verdict.rule_id == "D11":
+        # The ranking re-checks the text itself (quality.detectors.quality_demotes);
+        # the marker records the admission verdict for `why` and telemetry.
+        event.payload["quality"] = "step_narration"
     else:
         event.payload["quality"] = "context_dependent"
     return event

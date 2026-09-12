@@ -181,6 +181,67 @@ def is_memory_meta(text: str) -> bool:
     return bool(MEMORY_META_RE.search(text or ""))
 
 
+# ── D11: the assistant announcing its next step ──────────────────────────────
+#
+# "Now let's run the full test suite." / "Let me check the frontend structure
+# first." The salience head types these as DECISIONs and threads at high
+# confidence (the 2026-09-12 micro benchmark stored 24 at 0.66–0.99). They say
+# what the assistant is about to do, not what the project decided.
+#
+# Measured 2026-09-12: a broad step-announcement pattern matches 439 of 9,023
+# assistant statements in the local stores. In a labelled sample of 80, about 10
+# carried a real decision ("Let's use the OpenAI SDK client instead…", "Let me
+# fold that into the design as a small model registry rather than a hardcoded
+# model", "I'll also bump MAX_TOTAL_ATTEMPTS from 3→6"). All of those use a
+# decision verb or state a reason, so this rule names only verification,
+# inspection and step verbs, and stands down when a reason is given. On the
+# sample it flags about 55 of 80 and none of the real decisions.
+_STEP_VERIFY = (
+    r"(?:run|re-?run|verify|check|confirm|read|inspect|look|see|test|smoke-test|sanity-check|"
+    r"double-check|orient|re-?dispatch|dispatch|start|report|finish|commit|push|pull|query|trace|"
+    r"attempt|get|find|search|explore|examine|review|make sure)"
+)
+_STEP_NOW_VERB = (
+    r"(?:update|updating|add|adding|rewrite|rewriting|run|running|fix|fixing|create|creating|"
+    r"write|writing|patch|patching|export|exporting|rename|renaming|verify|verifying|check|"
+    r"checking|confirm|confirming|commit|committing|push|pushing|register|registering|wire|"
+    r"wiring|test|testing|build|building|clean|cleaning|move|moving|remove|removing|delete|"
+    r"deleting|install|installing)"
+)
+_STEP_NARRATION_RE = re.compile(
+    # "Let me / Let's / I'll / I'm going to / We'll" + a verify or inspect verb
+    r"^(?:(?:now|next|first|then|finally|okay|ok|alright|great|good|perfect)[,:!]?\s+)?"
+    r"(?:let(?:'s|’s| me| us)|i(?:'ll|’ll| will|'m going to|’m going to| am going to)|we(?:'ll|’ll| will))\s+"
+    r"(?:(?:also|now|just|first|quickly|actually|then)\s+)*" + _STEP_VERIFY + r"\b"
+    # "Now / Next" + an edit or step verb
+    r"|^(?:now|next)[,:]?\s+(?:let(?:'s|’s| me)\s+(?:(?:also|now|just|actually)\s+)*)?"
+    + _STEP_NOW_VERB + r"\b",
+    re.IGNORECASE,
+)
+# A stated reason turns an announcement into a decision worth keeping.
+_STATED_REASON_RE = re.compile(r"\b(?:because|since|instead|rather than|so that|to avoid)\b", re.IGNORECASE)
+_ASSISTANT = "assistant"
+
+
+def is_step_narration(text: str) -> bool:
+    """D11 — the text announces the speaker's next step rather than a decision."""
+    stripped = (text or "").strip()
+    return bool(_STEP_NARRATION_RE.search(stripped)) and not _STATED_REASON_RE.search(stripped)
+
+
+def detect_step_narration(text: str, event_type: str, source_role: str) -> DetectorHit | None:
+    """D11 — assistant step narration stored as a claim.
+
+    Assistant role only: the same words from the user ("Now update the API to
+    v2") are an instruction. Component events carry a path, not a statement.
+    """
+    if source_role != _ASSISTANT or event_type == "COMPONENT_STATUS":
+        return None
+    if not is_step_narration(text):
+        return None
+    return DetectorHit("D11", "assistant announcing its next step, not a project decision")
+
+
 # ── What a stored claim's markers cost it in the ranking ─────────────────────
 #
 # These demotes used to multiply only the stored weight. The composite ranking
@@ -192,6 +253,11 @@ def is_memory_meta(text: str) -> bool:
 MEMORY_META_DEMOTE = 0.15   # R1 memory narration — judged on the text, not a stored tag
 FRAGMENT_DEMOTE = 0.4       # J5.2 context-dependent fragment — "+frag" in provenance
 DOWNGRADE_DEMOTE = 0.5      # quality gate D7 (context_dependent) and D1 (unverified path)
+# D11 assistant step narration — judged on the text, like R1. Gentler than R1:
+# the verb list is a heuristic and about one flagged claim in ten embeds a design
+# detail. Measured on 59 local projects, 0.5 already moves 38 of the 42 narration
+# claims that 0.15 would move out of the block, with the same active threads.
+STEP_NARRATION_DEMOTE = 0.5
 
 
 def quality_demotes(payload: dict) -> list[tuple[str, float]]:
@@ -204,8 +270,13 @@ def quality_demotes(payload: dict) -> list[tuple[str, float]]:
     """
     payload = payload or {}
     demotes: list[tuple[str, float]] = []
-    if is_memory_meta(str(payload.get("description") or "")):
+    description = str(payload.get("description") or "")
+    if is_memory_meta(description):
         demotes.append(("memory narration", MEMORY_META_DEMOTE))
+    # Judged on the text for assistant claims, so claims stored before D11 existed
+    # are covered; the gate's step_narration marker is not read here as well.
+    if payload.get("source_role") == _ASSISTANT and is_step_narration(description):
+        demotes.append(("step narration", STEP_NARRATION_DEMOTE))
     if "+frag" in str(payload.get("provenance") or ""):
         demotes.append(("fragment", FRAGMENT_DEMOTE))
     if payload.get("quality") == "context_dependent":

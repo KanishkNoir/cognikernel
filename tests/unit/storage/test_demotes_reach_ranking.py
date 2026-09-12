@@ -68,6 +68,16 @@ class TestDemotesReachTheRanking:
         assert _weight(projection.ranked_decisions, fragment) == pytest.approx(
             _weight(projection.ranked_decisions, CLEAN) * 0.4)
 
+    def test_assistant_step_narration_ranks_below_a_project_fact(self, conn) -> None:
+        from cognikernel.quality.detectors import STEP_NARRATION_DEMOTE
+
+        narration = "Now update dispatcher.py to use the renamed store API."
+
+        projection = _project(conn, _claim(CLEAN), _claim(narration, source_role="assistant"))
+
+        assert _weight(projection.ranked_decisions, narration) == pytest.approx(
+            _weight(projection.ranked_decisions, CLEAN) * STEP_NARRATION_DEMOTE)
+
     def test_thread_authority_demotes_leave_thread_weight_alone(self, conn) -> None:
         demoted = "Add the response schema for a task."
         clean = "Pick up the JWT auth work next session."
