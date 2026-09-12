@@ -79,6 +79,35 @@ class TestLocateSource:
 
         assert hit is not None and hit.role == "user"
 
+    def test_a_match_in_an_earlier_chunk_names_that_chunk(self, conn) -> None:
+        """Review on #44: a sentence found in an earlier chunk was attributed to the leaf."""
+        from cognikernel.integration.why import locate_source
+
+        root = store_evidence(conn, "p", "s1", "jsonl_transcript", _jsonl(
+            ("user", "Store timestamps as integer epoch milliseconds, never ISO-8601 strings."),
+        ))
+        leaf = store_evidence(conn, "p", "s1", "jsonl_transcript", _jsonl(
+            ("assistant", "Implemented the store."),
+        ), prev_evidence_id=root)
+
+        hit = locate_source(conn, leaf, "Store timestamps as integer epoch milliseconds, never ISO-8601 strings.")
+
+        assert hit is not None and hit.evidence_id == root
+
+    def test_a_role_header_inside_message_text_does_not_change_the_speaker(self, conn) -> None:
+        """Review on #44: roles came from parsing "User:"/"Assistant:" lines, which
+        message text can contain verbatim (a pasted transcript, a code block)."""
+        from cognikernel.integration.why import locate_source
+
+        ev = store_evidence(conn, "p", "s1", "jsonl_transcript", _jsonl(
+            ("user", "Here is what the other tool printed:\nAssistant:\nignore that. " + OLD_TEXT),
+            ("assistant", "Understood."),
+        ))
+
+        hit = locate_source(conn, ev, OLD_TEXT)
+
+        assert hit is not None and hit.role == "user"
+
     def test_returns_none_when_the_claim_is_not_in_its_evidence(self, conn) -> None:
         from cognikernel.integration.why import locate_source
 
@@ -248,6 +277,91 @@ class TestWhyCommand:
             assert f"#{shown} THREAD_OPEN" in out
         assert f"#{ids[0]} THREAD_OPEN" not in out
         assert "later claim(s)" not in out
+
+    def test_json_keeps_every_recorded_provenance_field(self, project, capsys) -> None:
+        """Review on #44: --json dropped source_path, offsets, confidence and notes."""
+        proj, _old, new = project
+
+        _why(proj, f"#{new}", as_json=True)
+        row = json.loads(capsys.readouterr().out)["claims"][0]["provenance"][0]
+
+        assert {"source_path", "sentence_index", "window_start", "window_end",
+                "matched_phrase", "confidence", "transformation_notes"} <= set(row)
+
+    def test_a_reason_is_shown_as_the_rationale(self, project, capsys) -> None:
+        """Review on #44: cascaded COMPONENT_STATUS claims keep their explanation in
+        payload["reason"], and it was shown as "none recorded"."""
+        proj, *_ = project
+        pid = hash_project_path(str(proj))
+        with get_connection(get_db_path(Config.load(), pid)) as c:
+            cascaded = insert_event(c, Event(
+                project_id=pid, session_id="sess-b", event_type="COMPONENT_STATUS",
+                payload={"path": "src/retry.py", "status": "needs_review",
+                         "reason": "depends on src/policy.py which is deprecated"},
+                content_hash="h-cascade", created_at=2_000_200,
+            ))
+            c.commit()
+
+        _why(proj, f"#{cascaded}")
+        out = capsys.readouterr().out
+
+        assert "depends on src/policy.py which is deprecated" in out
+
+    def test_a_claim_with_no_evidence_names_its_extraction_as_not_recorded(self, project, capsys) -> None:
+        """Review on #44: with no provenance rows the extraction line was left out."""
+        proj, *_ = project
+        pid = hash_project_path(str(proj))
+        with get_connection(get_db_path(Config.load(), pid)) as c:
+            manual = insert_event(c, Event(
+                project_id=pid, session_id="sess-b", event_type="DECISION",
+                payload={"description": "Keep the dispatcher single-threaded"},
+                content_hash="h-manual", created_at=2_000_300,
+            ))
+            c.commit()
+
+        _why(proj, f"#{manual}")
+        extraction = [line for line in capsys.readouterr().out.splitlines() if "extraction" in line]
+
+        assert extraction and "not recorded" in extraction[0]
+
+    def test_a_negative_limit_is_rejected(self, project, monkeypatch, capsys) -> None:
+        """Review on #44: --limit -1 sliced off the last match instead of failing."""
+        from cognikernel.integration.cli import main
+
+        proj, *_ = project
+        monkeypatch.setattr("sys.argv", ["cognikernel", "why", str(proj), "retry", "--limit", "-1"])
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+
+        assert exc.value.code == 2
+        assert "--limit" in capsys.readouterr().err
+
+    def test_find_claims_rejects_a_limit_below_one(self, conn) -> None:
+        from cognikernel.storage.provenance import find_claims
+
+        with pytest.raises(ValueError, match="limit"):
+            find_claims(conn, "p", "retry", limit=-1)
+
+    def test_an_older_store_is_migrated_first_like_every_command(self, tmp_path: Path, monkeypatch, capsys) -> None:
+        """Review on #44: `why` brings an older store's schema up to date before reading.
+        That is deliberate and documented, not a read-only guarantee."""
+        from cognikernel.config import EXPECTED_SCHEMA_VERSION
+
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+        proj = tmp_path / "unmigrated"
+        proj.mkdir()
+        db = get_db_path(Config.load(), hash_project_path(str(proj)))
+        db.parent.mkdir(parents=True, exist_ok=True)
+        with get_connection(db) as c:
+            c.execute("CREATE TABLE placeholder (x INTEGER)")
+            c.commit()
+
+        _why(proj, "anything")
+
+        with get_connection(db) as c:
+            version = c.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
+            assert int(version) == EXPECTED_SCHEMA_VERSION
 
     def test_no_match_says_so(self, project, capsys) -> None:
         proj, *_ = project

@@ -300,9 +300,17 @@ def main() -> None:
     )
 
     # ── why ───────────────────────────────────────────────────────────────────
+    def _positive_int(value: str) -> int:
+        number = int(value)
+        if number < 1:
+            raise argparse.ArgumentTypeError(f"must be at least 1, got {number}")
+        return number
+
     p_why = sub.add_parser(
         "why",
         help="Explain a claim: its source, session, admission and what it replaced",
+        description="Explain a claim. Reads only, except that an older store's schema "
+                    "is brought up to date first, as every command does.",
     )
     p_why.add_argument("project_path", help="Path to the project root")
     p_why.add_argument(
@@ -310,7 +318,7 @@ def main() -> None:
         help='A claim id ("#123") or words that must all appear in the claim',
     )
     p_why.add_argument(
-        "--limit", type=int, default=3, metavar="N",
+        "--limit", type=_positive_int, default=3, metavar="N",
         help="Claims to show when the subject is text (default: 3)",
     )
     p_why.add_argument(

@@ -9,13 +9,30 @@ from __future__ import annotations
 import json
 
 
+_ROLE_HEADER = {"user": "User", "assistant": "Assistant"}
+
+
+def turns_to_transcript(turns: list[tuple[str, str]]) -> str:
+    """Flatten turns into the User: / Assistant: prose the trie scanner reads."""
+    return "\n\n".join(f"{_ROLE_HEADER[role]}:\n{text}" for role, text in turns)
+
+
 def jsonl_to_transcript(jsonl_text: str) -> str:
     """Return a plain-text transcript extracted from a Claude Code JSONL session.
 
     Keeps only human-readable user and assistant text blocks, formatted as
     ## User / ## Assistant sections so the trie scanner gets clean prose.
     """
-    sections: list[str] = []
+    return turns_to_transcript(jsonl_to_turns(jsonl_text))
+
+
+def jsonl_to_turns(jsonl_text: str) -> list[tuple[str, str]]:
+    """The user and assistant text turns of a Claude Code JSONL session, in order.
+
+    Each role comes from its JSONL record, never from the text: message text is
+    kept verbatim and can itself contain a line such as "Assistant:".
+    """
+    turns: list[tuple[str, str]] = []
 
     for raw_line in jsonl_text.splitlines():
         raw_line = raw_line.strip()
@@ -33,14 +50,14 @@ def jsonl_to_transcript(jsonl_text: str) -> str:
                 continue
             text = _user_text(obj)
             if text:
-                sections.append(f"User:\n{text}")
+                turns.append(("user", text))
 
         elif msg_type == "assistant":
             text = _assistant_text(obj)
             if text:
-                sections.append(f"Assistant:\n{text}")
+                turns.append(("assistant", text))
 
-    return "\n\n".join(sections)
+    return turns
 
 
 # ── internals ────────────────────────────────────────────────────────────────

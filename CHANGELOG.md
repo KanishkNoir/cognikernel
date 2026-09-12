@@ -50,7 +50,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`cognikernel why <subject>` explains a claim.** Give it a claim id
+- **`cognikernel why <project_path> <subject>` explains a claim.** Give it a claim id
   (`#123`) or words from the claim, and it shows what the claim says, which
   session it came from — as "session 2 of 4", in the order the sessions
   happened, not as an opaque id — and the sentence in the conversation it was
@@ -63,7 +63,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   saves — is named as "not recorded" instead of being left out. The source
   sentence is found by searching the claim's own evidence, so it is shown as
   located, not as recorded. Long histories are shortened around the claim;
-  `--json` keeps everything.
+  `--json` keeps everything. It changes nothing in memory, but like every
+  command it first brings an older store's schema up to date.
 
 - **`cognikernel show --as-of <when>` shows what memory believed at a past
   time.** Give it a date (the end of that day), a date and time, or a git
