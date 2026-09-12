@@ -166,10 +166,21 @@ class TestComputeWeight:
 
         f = weight_factors(e, cmap, centrality_map, current_session=10)
 
-        assert list(f) == ["base", "recency", "repetition", "centrality", "activity", "type"]
+        assert list(f) == ["base", "recency", "repetition", "centrality", "activity", "type", "quality"]
         assert (f["base"] * f["recency"] * f["repetition"] * f["centrality"] * f["activity"] * f["type"]
-                == compute_weight(e, cmap, centrality_map, current_session=10))
-        assert (f["activity"], f["type"], f["centrality"]) == (2.0, 1.5, 1.5)
+                * f["quality"] == compute_weight(e, cmap, centrality_map, current_session=10))
+        assert (f["activity"], f["type"], f["centrality"], f["quality"]) == (2.0, 1.5, 1.5, 1.0)
+
+    def test_quality_markers_lower_the_composite(self) -> None:
+        """The stored weight is not a ranking input, so a demote has to be a factor."""
+        from cognikernel.compression.weights import weight_factors
+
+        clean = _make_event(payload={"description": "Use SQLite", "rationale": ""})
+        downgraded = _make_event(payload={"description": "Use SQLite", "rationale": "",
+                                          "quality": "context_dependent"}, weight=0.5)
+
+        assert weight_factors(downgraded, {}, {})["quality"] == 0.5
+        assert compute_weight(downgraded, {}, {}) == pytest.approx(compute_weight(clean, {}, {}) * 0.5)
 
     def test_old_stable_thread_close_near_zero(self) -> None:
         e = _make_event(event_type="THREAD_CLOSE", last_mentioned_session=0)

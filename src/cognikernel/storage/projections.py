@@ -309,6 +309,7 @@ def _apply_composite_weights(
     """
     from cognikernel.compression.centrality import compute_file_centrality
     from cognikernel.compression.weights import compute_weight, weight_factors
+    from cognikernel.quality.detectors import quality_demotes
     from cognikernel.storage.events import Event
 
     # Session ordinals — 1..N by first appearance (events are id-ascending).
@@ -358,6 +359,7 @@ def _apply_composite_weights(
             if explain:
                 rec["weight_factors"] = {
                     "factors": weight_factors(ev, activity_map, centrality_map, current_session),
+                    "quality_demotes": quality_demotes(ev.payload),
                     "sessions_ago": max(0, current_session - ev.last_mentioned_session),
                     "mention_count": ev.mention_count,
                     "affected_files": affected,

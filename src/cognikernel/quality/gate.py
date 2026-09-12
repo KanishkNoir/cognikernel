@@ -19,10 +19,12 @@ path reaches.
 VERDICTS ARE GRADED BY RECOVERABILITY. D2 and D4 reject: box-drawing artifacts
 and harness boilerplate carry no project content, so keeping them helps nobody.
 D7 downgrades: a subject-less statement still carries a real fact, just one the
-reader cannot resolve, and its harm is occupying the budget-ranked block —
-which weight collapse fixes while leaving it reachable through recall and
-find_related. This mirrors the policy pipeline.py already states for the same
-class of statement ("We DEMOTE (not drop)").
+reader cannot resolve, and its harm is occupying the budget-ranked block. The
+ranking's quality factor (compression.weights) reads the payload marker and
+halves the claim's rank, leaving it reachable through recall and find_related.
+The halved STORED weight does not affect rank — the composite ranking never
+reads it — and only brings archival forward. Until the quality factor existed,
+that stored halving was the whole downgrade, so it never moved a claim.
 
 FAILURE POSTURE: the gate never blocks a session. Any exception inside a
 detector produces an 'admit' verdict tagged rule_id='gate_error', which the
@@ -39,6 +41,7 @@ from dataclasses import dataclass, field
 
 from cognikernel.model import Event
 from cognikernel.quality.detectors import (
+    DOWNGRADE_DEMOTE,
     detect_anaphoric_thread,
     detect_bare_instruction_thread,
     detect_boilerplate,
@@ -57,7 +60,7 @@ _STATEMENT_TYPES = frozenset({
     "APPROACH_ABANDONED", "APPROACH_ABANDONED_DO_NOT_RETRY",
 })
 
-_DOWNGRADE_FACTOR = 0.5
+_DOWNGRADE_FACTOR = DOWNGRADE_DEMOTE
 
 # Where a D9-demoted thread lands. `assistant_decided` is the next tier down
 # from `user_stated` in extraction.authority's precedence table, and is a

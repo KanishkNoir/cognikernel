@@ -1,8 +1,10 @@
 """Composite weight formula for event ranking.
 
-weight = base × recency × repetition × centrality × activity × type_multiplier
+weight = base × recency × repetition × centrality × activity × type_multiplier × quality
 
 Each factor is multiplicative — deficiency in any one suppresses the total.
+`quality` applies the demotes a claim's markers carry (quality.detectors); the
+stored weight is not an input, so a demote that only lowered it did nothing here.
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from cognikernel.compression.centrality import centrality_factor
 from cognikernel.compression.recency import recency_factor
+from cognikernel.quality.detectors import quality_factor
 
 if TYPE_CHECKING:
     from cognikernel.model import Event
@@ -81,7 +84,7 @@ def weight_factors(
     centrality_map: dict[str, float],
     current_session: int = 0,
 ) -> dict[str, float]:
-    """The six named factors of an event's ranking weight, in formula order.
+    """The seven named factors of an event's ranking weight, in formula order.
 
     `cognikernel why` shows these (§14: "show the factorisation, not the
     number"), so compute_weight is their product and there is one formula.
@@ -94,6 +97,7 @@ def weight_factors(
         "centrality": centrality_factor(affected_files, centrality_map),
         "activity": activity_factor(affected_files, component_map),
         "type": TYPE_MULTIPLIER.get(event.event_type, 1.0),
+        "quality": quality_factor(event.payload),
     }
 
 
@@ -105,4 +109,5 @@ def compute_weight(
 ) -> float:
     """Compute the full ranking weight for a single event."""
     f = weight_factors(event, component_map, centrality_map, current_session)
-    return f["base"] * f["recency"] * f["repetition"] * f["centrality"] * f["activity"] * f["type"]
+    return (f["base"] * f["recency"] * f["repetition"] * f["centrality"] * f["activity"] * f["type"]
+            * f["quality"])
