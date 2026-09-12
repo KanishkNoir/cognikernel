@@ -325,10 +325,13 @@ def main() -> None:
     )
     p_explain.add_argument("project_path", help="Path to the project root")
     p_explain.add_argument("query", help="The query or prompt text to explain")
-    p_explain.add_argument("--limit", type=int, default=8, metavar="K",
-                           help="Results recall returns (default: 8, as the MCP tool)")
-    p_explain.add_argument("--per-axis", type=int, default=20, dest="per_axis", metavar="N",
-                           help="Candidates each axis contributes (default: 20); widen to see near misses")
+    from cognikernel.integration.query import RECALL_LIMIT, RECALL_PER_AXIS
+
+    p_explain.add_argument("--limit", type=int, default=None, metavar="K",
+                           help=f"Results recall returns (default: {RECALL_LIMIT}, as the MCP tool)")
+    p_explain.add_argument("--per-axis", type=int, default=None, dest="per_axis", metavar="N",
+                           help=f"Candidates each axis contributes (default: {RECALL_PER_AXIS}); "
+                                "widen to see near misses")
     p_explain.add_argument("--claim", metavar="ID",
                            help='Explain why one claim ("#123") was or was not retrieved')
     p_explain.add_argument("--session", metavar="SESSION_ID",

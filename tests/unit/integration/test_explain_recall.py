@@ -53,7 +53,16 @@ class TestGateDecisions:
         [(_, passed, reason)] = ck1_gate_decisions(
             [_hit(1, dense=None, bm25=1, description="retry cap")], "retry please", Config())
 
-        assert not passed and "shared terms" in reason
+        assert not passed and "shared term" in reason
+
+    def test_one_shared_term_is_singular(self) -> None:
+        """Review on #46: "only 1 shared terms"."""
+        from cognikernel.integration.query import ck1_gate_decisions
+
+        [(_, _, reason)] = ck1_gate_decisions(
+            [_hit(1, dense=None, bm25=1, description="retry cap")], "retry please", Config())
+
+        assert "only 1 shared term (" in reason and "1 shared terms" not in reason
 
     def test_dense_only_mode_explains_the_cosine_floor(self) -> None:
         from cognikernel.integration.query import ck1_gate_decisions
@@ -107,11 +116,11 @@ def store(tmp_path: Path, monkeypatch, cold_model):
     return proj, pid, db, ids
 
 
-def _explain(db: Path, pid: str, query: str, **kw) -> dict:
+def _explain(db: Path, pid: str, query: str, config: Config | None = None, **kw) -> dict:
     from cognikernel.integration.explain_recall import explain_recall
 
     with get_connection(db) as conn:
-        return explain_recall(conn, pid, query, Config(), **kw)
+        return explain_recall(conn, pid, query, config or Config(), **kw)
 
 
 class TestExplainRecall:
@@ -175,6 +184,69 @@ class TestExplainRecall:
         assert data["fallback"] == "legacy lexical scan"
         assert data["candidates"] and data["candidates"][0]["id"] == ids["policy"]
 
+    def test_a_fallback_score_is_called_a_jaccard_score_not_a_fused_one(self, store, monkeypatch) -> None:
+        """Review on #46: the legacy scan's score is Jaccard overlap, not RRF."""
+        _, pid, db, ids = store
+        monkeypatch.setattr("cognikernel.storage.fts.fts_enabled", lambda c: False)
+
+        data = _explain(db, pid, "retry policy attempts", claim_id=ids["policy"])
+
+        assert data["score_kind"] == "jaccard"
+        assert "Jaccard" in data["claim"]["verdict"] and "fused" not in data["claim"]["verdict"]
+
+    def test_a_fallback_miss_says_only_that_it_fell_below_the_cut(self, store, monkeypatch) -> None:
+        """Review on #46: a claim the Jaccard scan matched but ranked below the cut
+        was reported as matching no retrieval axis."""
+        _, pid, db, ids = store
+        monkeypatch.setattr("cognikernel.storage.fts.fts_enabled", lambda c: False)
+
+        data = _explain(db, pid, "retry policy attempts", limit=1, claim_id=ids["base"])
+
+        verdict = data["claim"]["verdict"]
+        assert "top 1" in verdict and "no retrieval axis matched" not in verdict
+
+    def test_dense_status_comes_from_the_same_snapshot_as_the_search(self, store, monkeypatch) -> None:
+        """Review on #46: the model finishing loading after the search must not make
+        the output claim a dense axis the candidates were computed without."""
+        _, pid, db, _ = store
+        calls = iter([False])
+        monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: next(calls, True))
+        monkeypatch.setattr("cognikernel.embedding.retrieval.recall", lambda *a, **k: [])
+        monkeypatch.setattr("cognikernel.integration.explain_recall._fastembed_installed", lambda: True)
+
+        data = _explain(db, pid, "retry policy")
+
+        assert data["axes"]["dense"]["status"] == "not loaded"
+
+    def test_ck1_applies_the_injection_size_limit(self, store) -> None:
+        """Review on #46: the live push drops what does not fit query_injection_max_tokens;
+        the explanation must not report those claims as pushed."""
+        proj, pid, db, _ = store
+        # Three terms shared with the policy claim (the BM25-only floor), without
+        # restating it closely enough for the echo filter to drop it.
+        prompt = "the webhook worker keeps failing deliveries, which retry policy and how many attempts do we use"
+        assert _explain(db, pid, prompt)["ck1"]["injected"], "precondition: something passes the gate"
+        tiny = Config(query_injection_max_tokens=5)
+
+        ck1 = _explain(db, pid, prompt, config=tiny)["ck1"]
+
+        from cognikernel.integration.query import recall_for_prompt
+
+        assert ck1["injected"] == []
+        assert ck1["over_budget"]
+        assert recall_for_prompt(str(proj), prompt, config=tiny) == ""
+
+    def test_uses_the_live_retrieval_defaults(self, store, monkeypatch) -> None:
+        """Review on #46: the limits are named once, where the live paths use them."""
+        _, pid, db, _ = store
+        monkeypatch.setattr("cognikernel.integration.query.RECALL_LIMIT", 1)
+        monkeypatch.setattr("cognikernel.integration.query.CK1_CANDIDATES", 1)
+
+        data = _explain(db, pid, "retry")
+
+        assert data["fusion"]["limit"] == 1
+        assert len(data["ck1"]["candidates"]) <= 1
+
 
 class TestExplainRecallCommand:
     def _run(self, proj: Path, query: str, **kw) -> None:
@@ -195,6 +267,17 @@ class TestExplainRecallCommand:
         assert "lexical (BM25)" in out and "dense" in out
         assert f"#{ids['policy']}" in out
         assert "CK-1" in out
+
+    def test_text_does_not_claim_bm25_ranking_when_the_legacy_scan_ran(self, store, capsys, monkeypatch) -> None:
+        """Review on #46: with no axis at all, recall used the Jaccard scan, not BM25."""
+        proj, _, _, _ = store
+        monkeypatch.setattr("cognikernel.storage.fts.fts_enabled", lambda c: False)
+
+        self._run(proj, "retry policy attempts jitter")
+        out = capsys.readouterr().out
+
+        assert "legacy lexical scan" in out
+        assert "BM25 alone" not in out
 
     def test_text_shows_recall_plus_near_misses_and_counts_the_rest(self, store, capsys) -> None:
         """Measured on a real store: one query fused 27 candidates. The text view keeps

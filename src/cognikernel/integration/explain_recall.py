@@ -22,33 +22,33 @@ from typing import Any
 
 from cognikernel.config import Config
 
-RECALL_LIMIT = 8
-RECALL_PER_AXIS = 20
-# recall_for_prompt: hybrid_recall(conn, project_id, prompt, k=8, n_per_axis=10)
-CK1_LIMIT = 8
-CK1_PER_AXIS = 10
-
 _MAX_DESCRIPTION = 70
 _NEAR_MISSES = 4
 
 
-def _dense_status() -> dict[str, Any]:
-    from cognikernel.embedding.model import EMBEDDING_MODEL_VERSION, is_ready
+def _fastembed_installed() -> bool:
+    return importlib.util.find_spec("fastembed") is not None
 
-    if importlib.util.find_spec("fastembed") is None:
+
+def _dense_status(available: bool) -> dict[str, Any]:
+    """Status from the availability snapshot the search itself used: the model can
+    finish loading after the search, and must not be reported as having ranked it."""
+    from cognikernel.embedding.model import EMBEDDING_MODEL_VERSION
+
+    if not _fastembed_installed():
         return {"status": "not installed", "model": EMBEDDING_MODEL_VERSION}
-    return {"status": "available" if is_ready() else "not loaded", "model": EMBEDDING_MODEL_VERSION}
+    return {"status": "available" if available else "not loaded", "model": EMBEDDING_MODEL_VERSION}
 
 
 def _ck1(conn: sqlite3.Connection, project_id: str, query: str, config: Config,
          session_id: str | None) -> dict[str, Any]:
     from cognikernel.delta.supersede import normalize_for_overlap
-    from cognikernel.integration.query import ck1_gate_decisions, is_ck1_echo
+    from cognikernel.integration import query as live
     from cognikernel.retrieval.hybrid import hybrid_candidates
 
-    hits = hybrid_candidates(conn, project_id, query, n_per_axis=CK1_PER_AXIS)["fused"][:CK1_LIMIT]
+    hits = hybrid_candidates(conn, project_id, query, n_per_axis=live.CK1_PER_AXIS)["fused"][:live.CK1_CANDIDATES]
     q_toks = normalize_for_overlap(query)
-    echoes = [h["id"] for h in hits if q_toks and is_ck1_echo(q_toks, h)]
+    echoes = [h["id"] for h in hits if q_toks and live.is_ck1_echo(q_toks, h)]
     remaining = [h for h in hits if h["id"] not in echoes]
 
     seen: set[int] = set()
@@ -59,9 +59,14 @@ def _ck1(conn: sqlite3.Connection, project_id: str, query: str, config: Config,
     already_seen = [h["id"] for h in remaining if h["id"] in seen]
     remaining = [h for h in remaining if h["id"] not in seen]
 
-    decisions = ck1_gate_decisions(remaining, query, config)
-    passed = [h["id"] for h, ok, _ in decisions if ok]
+    decisions = live.ck1_gate_decisions(remaining, query, config)
+    passed = [h for h, ok, _ in decisions if ok]
+    capped = passed[: config.ck1_max_events]
+    # The same size-limit loop recall_for_prompt runs before it pushes anything.
+    _, injected = live.fit_ck1_budget(capped, config)
     return {
+        "limit": live.CK1_CANDIDATES,
+        "per_axis": live.CK1_PER_AXIS,
         "candidates": [h["id"] for h in hits],
         "echo_filtered": echoes,
         "session": session_id,
@@ -72,8 +77,10 @@ def _ck1(conn: sqlite3.Connection, project_id: str, query: str, config: Config,
             for h, ok, reason in decisions
         ],
         "cap": config.ck1_max_events,
-        "over_cap": passed[config.ck1_max_events:],
-        "injected": passed[: config.ck1_max_events],
+        "over_cap": [h["id"] for h in passed[config.ck1_max_events:]],
+        "budget_tokens": config.query_injection_max_tokens,
+        "over_budget": [h["id"] for h in capped if h["id"] not in injected],
+        "injected": injected,
     }
 
 
@@ -99,10 +106,14 @@ def _claim_verdict(conn: sqlite3.Connection, project_id: str, claim_id: int, exp
     bm25_rank = next((i for i, h in enumerate(candidates["lexical_hits"], 1) if h["id"] == claim_id), None)
 
     if position is None and explanation["fallback"]:
-        verdict = f"not in the legacy lexical scan's top {limit}; no retrieval axis matched this query"
+        verdict = (f"not in the legacy lexical scan's top {limit} (neither axis returned any "
+                   "candidate for this query, so recall used that scan)")
     elif position is None:
         verdict = (f"neither axis surfaced it within its top {per_axis} for this query; "
                    f"try --per-axis {per_axis * 5}, or words the claim itself uses")
+    elif position <= limit and explanation["fallback"]:
+        score = next(c["score"] for c in explanation["candidates"] if c["id"] == claim_id)
+        verdict = f"returned by the legacy lexical scan at rank {position} (Jaccard score {score:.2f})"
     elif position <= limit:
         score = next(c["score"] for c in explanation["candidates"] if c["id"] == claim_id)
         verdict = f"returned by recall at rank {position} (fused score {score:.2f})"
@@ -119,10 +130,12 @@ def _claim_verdict(conn: sqlite3.Connection, project_id: str, claim_id: int, exp
         ck1_verdict = "CK-1 skips it: this session has already seen it"
     elif claim_id in ck1["over_cap"]:
         ck1_verdict = f"CK-1 passes it but is over its cap of {ck1['cap']}"
+    elif claim_id in ck1["over_budget"]:
+        ck1_verdict = f"CK-1 passes it but it does not fit the {ck1['budget_tokens']}-token injection limit"
     elif decision is not None:
         ck1_verdict = f"CK-1 gate rejects it: {decision['reason']}"
     else:
-        ck1_verdict = f"not among CK-1's {CK1_LIMIT} candidates"
+        ck1_verdict = f"not among CK-1's {ck1['limit']} candidates"
     return {**base, "verdict": f"{verdict}; {ck1_verdict}", "fused_rank": position,
             "dense_rank": dense_rank, "bm25_rank": bm25_rank}
 
@@ -133,22 +146,25 @@ def explain_recall(
     query: str,
     config: Config,
     *,
-    limit: int = RECALL_LIMIT,
-    per_axis: int = RECALL_PER_AXIS,
+    limit: int | None = None,
+    per_axis: int | None = None,
     claim_id: int | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    from cognikernel.integration.query import _lexical_recall
+    """`limit` and `per_axis` default to the live recall sizes in query.py."""
+    from cognikernel.integration import query as live
     from cognikernel.retrieval.hybrid import _RRF_K, hybrid_candidates
     from cognikernel.storage.fts import build_match_query
 
+    limit = live.RECALL_LIMIT if limit is None else limit
+    per_axis = live.RECALL_PER_AXIS if per_axis is None else per_axis
     candidates = hybrid_candidates(conn, project_id, query, n_per_axis=per_axis)
     fused = candidates["fused"]
     fallback = None
     if not fused:
         # _recall_hits: hybrid returned nothing, so recall uses the Jaccard scan.
         fused = [{**h, "dense_rank": None, "bm25_rank": None, "cosine": None}
-                 for h in _lexical_recall(conn, project_id, query, limit)]
+                 for h in live._lexical_recall(conn, project_id, query, limit)]
         fallback = "legacy lexical scan"
 
     explanation: dict[str, Any] = {
@@ -160,10 +176,12 @@ def explain_recall(
                 else "unavailable (no FTS5 index in this SQLite build)",
                 "matches": len(candidates["lexical_hits"]),
             },
-            "dense": {**_dense_status(), "matches": len(candidates["dense_hits"])},
+            "dense": {**_dense_status(candidates["dense_available"]), "matches": len(candidates["dense_hits"])},
         },
         "fusion": {"method": "reciprocal rank fusion", "k": _RRF_K, "per_axis": per_axis, "limit": limit},
         "fallback": fallback,
+        # "rrf": normalized fusion score; "jaccard": the legacy scan's token overlap.
+        "score_kind": "jaccard" if fallback else "rrf",
         "candidates": [
             {
                 "rank": rank,
@@ -202,13 +220,16 @@ def render_explain(data: dict[str, Any]) -> str:
         f"  lexical (BM25)  {lexical['status']} · {lexical['matches']} match(es) in its top {fusion['per_axis']}",
         f"  dense           {dense['status']} ({dense['model']}) · {dense['matches']} match(es)",
     ]
-    if dense["status"] != "available":
-        lines.append("                  without it, recall and CK-1 rank on BM25 alone, as a cold hook does")
     if data["fallback"]:
         lines.append("  fallback        neither axis returned anything, so recall used the legacy lexical scan")
-    lines.append(f"  recall          {fusion['method']} (K={fusion['k']}), top {fusion['limit']} returned")
+        lines.append(f"  recall          legacy lexical scan (score = Jaccard overlap), top {fusion['limit']} returned")
+    else:
+        if dense["status"] != "available" and lexical["status"] == "available":
+            lines.append("                  without it, recall and CK-1 rank on BM25 alone, as a cold hook does")
+        lines.append(f"  recall          {fusion['method']} (K={fusion['k']}, score = normalized fusion), "
+                     f"top {fusion['limit']} returned")
 
-    lines += ["", "  rank  claim     recall  fused  dense  bm25  cosine  claim text"]
+    lines += ["", "  rank  claim     recall  score  dense  bm25  cosine  claim text"]
     if not data["candidates"]:
         lines.append("  (no candidates)")
     # Measured on a real store: one query fused 27 candidates. Show recall's top
@@ -226,7 +247,7 @@ def render_explain(data: dict[str, Any]) -> str:
         lines.append(f"  ... {hidden} more candidate(s) below the cut (see --json)")
 
     ck1 = data["ck1"]
-    lines += ["", f"CK-1 per-prompt push (top {CK1_LIMIT} candidates, {CK1_PER_AXIS} per axis)"]
+    lines += ["", f"CK-1 per-prompt push (top {ck1['limit']} candidates, {ck1['per_axis']} per axis)"]
     if not ck1["candidates"]:
         lines.append("  no candidates: nothing would be pushed")
     else:
@@ -241,9 +262,11 @@ def render_explain(data: dict[str, Any]) -> str:
             lines.append(f"  #{d['id']:<7} {'pass' if d['passed'] else 'fail'}  {d['reason']}")
         if ck1["over_cap"]:
             lines.append(f"  cap {ck1['cap']}           drops " + ", ".join(f"#{i}" for i in ck1["over_cap"]))
+        if ck1["over_budget"]:
+            lines.append("  size limit      drops " +", ".join(f"#{i}" for i in ck1["over_budget"])
+                         + f" (injection limit {ck1['budget_tokens']} tokens)")
         if ck1["injected"]:
-            lines.append("  would push      " + ", ".join(f"#{i}" for i in ck1["injected"])
-                         + " (subject to the injection size limit)")
+            lines.append("  would push      " + ", ".join(f"#{i}" for i in ck1["injected"]))
         else:
             lines.append("  would push      nothing (silence is the default)")
 

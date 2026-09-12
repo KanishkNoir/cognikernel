@@ -21,6 +21,14 @@ from cognikernel.storage.migrations import run_migrations
 
 _MAX_DESC = 140
 
+# Live retrieval sizes, named once: `cognikernel explain-recall` reads these, so
+# changing one here changes what it explains too.
+RECALL_LIMIT = 8        # results the recall / find_related tools return
+RECALL_PER_AXIS = 20    # candidates each axis contributes to recall
+CK1_CANDIDATES = 8      # fused candidates the per-prompt push considers
+CK1_PER_AXIS = 10       # candidates each axis contributes to the push
+CK1_HEADER = "[CogniKernel — relevant prior context]"
+
 # K2 surfacing precision: a graveyard entry is always a prohibition, but a
 # CONSTRAINT_HARD is only a *prohibition* (something an edit could re-violate)
 # when it carries an explicit negative/abandonment marker. Positive hard rules
@@ -180,7 +188,7 @@ def _recall_hits(conn: sqlite3.Connection, project_id: str, query: str, k: int) 
     """
     from cognikernel.retrieval.hybrid import hybrid_recall
 
-    hits = hybrid_recall(conn, project_id, query, k=k)
+    hits = hybrid_recall(conn, project_id, query, k=k, n_per_axis=RECALL_PER_AXIS)
     if hits:
         return hits
     return _lexical_recall(conn, project_id, query, k)
@@ -190,6 +198,27 @@ def _fmt_hit(h: dict, extra: str = "") -> str:
     subj = f"[{h['subject']}] " if h.get("subject") else ""
     desc = (h.get("description") or "")[:_MAX_DESC]
     return f"- ({h['event_type']} · {h['score']:.2f}{extra}) {subj}{desc}"
+
+
+def fit_ck1_budget(passed: list[dict], config: Config) -> tuple[list[str], list[int]]:
+    """The injection size limit: the header plus each passed hit, in order, until
+    the next one would exceed query_injection_max_tokens. Returns (lines, ids)."""
+    max_chars = config.query_injection_max_tokens * 4  # tok → approx chars
+    lines = [CK1_HEADER]
+    used = len(CK1_HEADER)
+    injected: list[int] = []
+    for h in passed:
+        line = _fmt_hit(h)
+        if used + len(line) + 1 > max_chars:
+            break
+        lines.append(line)
+        used += len(line) + 1
+        injected.append(h["id"])
+    return lines, injected
+
+
+def _shared(n: int) -> str:
+    return f"{n} shared term{'' if n == 1 else 's'}"
 
 
 def is_ck1_echo(q_toks: set[str], hit: dict) -> bool:
@@ -278,20 +307,20 @@ def ck1_gate_decisions(
             # permissive on short/generic prompts in a small store (measured:
             # "yep i would like to replace the constraint" passed ≤5∧≤5).
             elif config.ck1_dual_anchor_terms and shared < config.ck1_dual_anchor_terms:
-                ok, reason = False, (f"both axes agree, but only {shared} shared terms "
+                ok, reason = False, (f"both axes agree, but only {_shared(shared)} "
                                      f"(needs {config.ck1_dual_anchor_terms})")
             else:
-                ok, reason = True, f"both axes agree (dense rank {d}, bm25 rank {b}, {shared} shared terms)"
+                ok, reason = True, f"both axes agree (dense rank {d}, bm25 rank {b}, {_shared(shared)})"
         elif bm25_live:
             if b is None:
                 ok, reason = False, "dense axis unavailable, and bm25 did not surface it"
             elif b > 2:
                 ok, reason = False, f"dense axis unavailable; bm25 rank {b} > 2"
             elif shared < config.ck1_min_term_overlap:
-                ok, reason = False, (f"dense axis unavailable; bm25 rank {b}, but only {shared} shared terms "
+                ok, reason = False, (f"dense axis unavailable; bm25 rank {b}, but only {_shared(shared)} "
                                      f"(needs {config.ck1_min_term_overlap})")
             else:
-                ok, reason = True, f"bm25 rank {b} with {shared} shared terms (dense axis unavailable)"
+                ok, reason = True, f"bm25 rank {b} with {_shared(shared)} (dense axis unavailable)"
         elif dense_live:
             cosine = h.get("cosine") or 0.0
             if d is None:
@@ -332,12 +361,11 @@ def recall_for_prompt(
         project_id, db_path = _resolve(project_path, config)
         if not db_path.exists():
             return ""
-        max_chars = config.query_injection_max_tokens * 4  # tok → approx chars
         with get_connection(db_path) as conn:
             run_migrations(conn)
             from cognikernel.retrieval.hybrid import hybrid_recall
 
-            hits = hybrid_recall(conn, project_id, prompt_text, k=8, n_per_axis=10)
+            hits = hybrid_recall(conn, project_id, prompt_text, k=CK1_CANDIDATES, n_per_axis=CK1_PER_AXIS)
             if not hits:
                 return ""
             seen: set[int] = set()
@@ -348,17 +376,8 @@ def recall_for_prompt(
             passed = select_ck1_hits(hits, prompt_text, config, seen)
             if not passed:
                 return ""
-            lines = ["[CogniKernel — relevant prior context]"]
-            used = len(lines[0])
-            injected: list[int] = []
-            for h in passed:
-                line = _fmt_hit(h)
-                if used + len(line) + 1 > max_chars:
-                    break
-                lines.append(line)
-                used += len(line) + 1
-                injected.append(h["id"])
-            if len(lines) <= 1:
+            lines, injected = fit_ck1_budget(passed, config)
+            if not injected:
                 return ""
             if session_id and injected:
                 from cognikernel.storage.render_ledger import record_rendered
@@ -500,7 +519,7 @@ def surface_prohibitions_for_edit(
         return ""
 
 
-def recall_memory(project_path: str, query: str, limit: int = 8, config: Config | None = None) -> str:
+def recall_memory(project_path: str, query: str, limit: int = RECALL_LIMIT, config: Config | None = None) -> str:
     """Return prior decisions/constraints most relevant to `query`, ranked."""
     try:
         project_id, db_path = _resolve(project_path, config)

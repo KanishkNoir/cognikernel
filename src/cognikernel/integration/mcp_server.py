@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from cognikernel.integration.query import find_related_memory, recall_memory
+from cognikernel.integration.query import RECALL_LIMIT, find_related_memory, recall_memory
 from cognikernel.integration.resources import (
     list_projects,
     render_section,
@@ -165,7 +165,7 @@ def get_session_state(project_path: str) -> str:
         "isn't already in the session context block."
     )
 )
-def recall(project_path: str, query: str, limit: int = 8) -> str:
+def recall(project_path: str, query: str, limit: int = RECALL_LIMIT) -> str:
     return recall_memory(project_path, query, limit)
 
 
@@ -175,7 +175,7 @@ def recall(project_path: str, query: str, limit: int = 8) -> str:
         "UNION import-graph-adjacent events. Use to scope impact before changing a module."
     )
 )
-def find_related(project_path: str, query: str, limit: int = 8) -> str:
+def find_related(project_path: str, query: str, limit: int = RECALL_LIMIT) -> str:
     return find_related_memory(project_path, query, limit)
 
 
