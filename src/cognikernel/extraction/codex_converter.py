@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 
+from cognikernel.extraction.jsonl_converter import turns_to_transcript
+
 # Injected machine context that arrives under the *user* role but is not user
 # prose (Codex prepends these every session). Matched against the stripped head of
 # the text, case-insensitively; kept deliberately small to avoid eating real prose.
@@ -30,7 +32,13 @@ def codex_rollout_to_transcript(jsonl_text: str) -> str:
     Tolerant by design: unparseable lines and unknown record types are skipped,
     never raised — a truncated/garbage rollout yields a partial transcript.
     """
-    sections: list[str] = []
+    return turns_to_transcript(codex_rollout_to_turns(jsonl_text))
+
+
+def codex_rollout_to_turns(jsonl_text: str) -> list[tuple[str, str]]:
+    """The user and assistant message turns of a Codex rollout, in order, each role
+    taken from its record rather than from the text."""
+    turns: list[tuple[str, str]] = []
 
     for raw_line in jsonl_text.splitlines():
         raw_line = raw_line.strip()
@@ -51,14 +59,14 @@ def codex_rollout_to_transcript(jsonl_text: str) -> str:
         if role == "user":
             text = _message_text(payload)
             if text and not _is_system_injection(text):
-                sections.append(f"User:\n{text}")
+                turns.append(("user", text))
         elif role == "assistant":
             text = _message_text(payload)
             if text:
-                sections.append(f"Assistant:\n{text}")
+                turns.append(("assistant", text))
         # developer/system and any other role: drop.
 
-    return "\n\n".join(sections)
+    return turns
 
 
 # ── internals ────────────────────────────────────────────────────────────────

@@ -95,6 +95,9 @@ def find_claims(
     it scans the project's events rather than the FTS index, which only covers
     live claims. Live claims come first, then by weight, newest first.
     """
+    if limit < 1:
+        # matches[:limit] with a negative limit would drop matches, not cap them.
+        raise ValueError(f"limit must be at least 1, got {limit}")
     subject = subject.strip()
     by_id = _ID_SUBJECT.match(subject)
     if by_id:

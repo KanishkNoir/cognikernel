@@ -34,11 +34,12 @@ _converter_warned = False
 
 _TOKEN = re.compile(r"[a-z0-9_]+")
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
-_SECTION_HEADER = re.compile(r"^(User|Assistant):\n", re.M)
 
 # A located sentence must carry at least this share of the claim's content words.
 _MIN_COVERAGE = 0.6
 _MAX_SOURCE_CHARS = 400
+# Bounds the walk back through a session's evidence chunks on a corrupt chain.
+_MAX_CHUNKS = 10_000
 
 _STOPWORDS = frozenset({
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it",
@@ -51,46 +52,41 @@ _ADMISSION_KEYS = ("quality", "grounding")
 
 @dataclass(frozen=True)
 class SourceMatch:
-    evidence_id: int
+    evidence_id: int   # the chunk the sentence was found in
     role: str          # "user" | "assistant" | "unknown"
     text: str
     coverage: float
+    scope: str = "chunk"   # "chunk": inside evidence_id itself; "transcript": only in
+                           # the session transcript up to evidence_id (a turn split
+                           # across chunks)
 
 
 def _content_tokens(text: str) -> set[str]:
     return {t for t in _TOKEN.findall(text.casefold()) if t not in _STOPWORDS}
 
 
-def _as_transcript(source_type: str, raw: bytes) -> str:
+def _turns(source_type: str, raw: bytes) -> list[tuple[str, str]]:
+    """The evidence's (role, text) turns, roles taken from the source records."""
     try:
         # Imports the extraction package, whose trie needs pyahocorasick. A broken
         # install must not crash `why`; the claim is still explainable without its
         # source sentence, and the warning says why the sentence is missing.
-        from cognikernel.extraction.transcript import transcript_from_source
+        from cognikernel.extraction.transcript import turns_from_source
     except ImportError as exc:
         global _converter_warned
         if not _converter_warned:  # once per process, not once per claim
             _log.warning("why: transcript converter unavailable, source sentences not located: %s", exc)
             _converter_warned = True
-        return ""
+        return []
     try:
-        return transcript_from_source(source_type, raw.decode("utf-8", errors="replace"))
+        return turns_from_source(source_type, raw.decode("utf-8", errors="replace"))
     except Exception:
-        return ""
+        return []
 
 
-def _sections(transcript: str) -> list[tuple[str, str]]:
-    parts = _SECTION_HEADER.split(transcript)
-    if len(parts) == 1:
-        return [("unknown", transcript)]
-    sections = [("unknown", parts[0])] if parts[0].strip() else []
-    sections.extend((parts[i].lower(), parts[i + 1]) for i in range(1, len(parts) - 1, 2))
-    return sections
-
-
-def _best_sentence(transcript: str, wanted: set[str]) -> tuple[str, str, float] | None:
+def _best_sentence(turns: list[tuple[str, str]], wanted: set[str]) -> tuple[str, str, float] | None:
     best: tuple[str, str, float] | None = None
-    for role, body in _sections(transcript):
+    for role, body in turns:
         for sentence in _SENTENCE_BREAK.split(body):
             sentence = sentence.strip()
             if not sentence:
@@ -102,8 +98,14 @@ def _best_sentence(transcript: str, wanted: set[str]) -> tuple[str, str, float] 
 
 
 def locate_source(conn: sqlite3.Connection, evidence_id: int, description: str) -> SourceMatch | None:
-    """The sentence a claim came from, searched in its evidence chunk first and
-    then in the whole session transcript up to that chunk. Never raises."""
+    """The sentence a claim came from. Never raises.
+
+    Searched chunk by chunk — the claim's own evidence, then each earlier chunk of
+    the session, nearest first — so a match names the chunk that holds it. Only if
+    no single chunk holds it (a turn split across two captures) is the whole
+    transcript searched, and the match is then marked as located in the
+    transcript up to this chunk rather than in it.
+    """
     wanted = _content_tokens(description)
     if not wanted:
         return None
@@ -113,18 +115,33 @@ def locate_source(conn: sqlite3.Connection, evidence_id: int, description: str) 
         return None
     if evidence is None:
         return None
-    candidates = [evidence.content]
-    if evidence.prev_evidence_id is not None:
-        try:
-            candidates.append(load_full_transcript(conn, evidence_id))
-        except Exception:
-            pass
-    for raw in candidates:
-        hit = _best_sentence(_as_transcript(evidence.source_type, raw), wanted)
+
+    chunk, chunk_id, visited = evidence, evidence_id, set()
+    while chunk is not None and chunk_id not in visited and len(visited) < _MAX_CHUNKS:
+        visited.add(chunk_id)
+        hit = _best_sentence(_turns(chunk.source_type, chunk.content), wanted)
         if hit is not None:
             role, text, coverage = hit
-            return SourceMatch(evidence_id, role, text, round(coverage, 2))
-    return None
+            return SourceMatch(chunk_id, role, text, round(coverage, 2), "chunk")
+        if chunk.prev_evidence_id is None:
+            break
+        chunk_id = chunk.prev_evidence_id
+        try:
+            chunk = load_evidence(conn, chunk_id)
+        except Exception:
+            chunk = None
+
+    if evidence.prev_evidence_id is None:
+        return None
+    try:
+        full = load_full_transcript(conn, evidence_id)
+    except Exception:
+        return None
+    hit = _best_sentence(_turns(evidence.source_type, full), wanted)
+    if hit is None:
+        return None
+    role, text, coverage = hit
+    return SourceMatch(evidence_id, role, text, round(coverage, 2), "transcript")
 
 
 # ── structure (shared by text and --json) ─────────────────────────────────────
@@ -159,6 +176,17 @@ def _explain(conn: sqlite3.Connection, event: Event, order: dict[str, SessionPos
         source = locate_source(conn, row["evidence_id"], str(payload.get("description") or ""))
         if source is not None:
             break
+    source_info = None
+    if source is not None:
+        # The chunk that holds the sentence may be an earlier one than any linked row.
+        chunk = conn.execute(
+            "SELECT session_id, captured_at FROM raw_evidence WHERE id = ?", (source.evidence_id,)
+        ).fetchone()
+        source_info = {
+            **asdict(source),
+            "captured_at": chunk["captured_at"] if chunk else None,
+            "session": _session(order, chunk["session_id"]) if chunk else None,
+        }
 
     return {
         "id": event.id,
@@ -167,7 +195,8 @@ def _explain(conn: sqlite3.Connection, event: Event, order: dict[str, SessionPos
         "superseded_by": event.superseded_by,
         **transitions.get(event.id, {"superseded_at": None, "supersede_reason": None, "archived_at": None}),
         "description": payload.get("description") or "",
-        "rationale": payload.get("rationale") or None,
+        # Cascaded COMPONENT_STATUS claims record their explanation as "reason".
+        "rationale": payload.get("rationale") or payload.get("reason") or None,
         "authority": payload.get("authority"),
         "confidence": payload.get("confidence"),
         "weight": event.weight,
@@ -175,15 +204,21 @@ def _explain(conn: sqlite3.Connection, event: Event, order: dict[str, SessionPos
         "created_at": event.created_at,
         "session": _session(order, event.session_id),
         "admission": {key: payload[key] for key in _ADMISSION_KEYS if payload.get(key)},
-        "source": asdict(source) if source else None,
+        "source": source_info,
         "provenance": [
             {
                 "evidence_id": row["evidence_id"],
                 "source_type": row["source_type"],
+                "source_path": row["source_path"],
                 "captured_at": row["captured_at"],
                 "session": _session(order, row["session_id"]),
                 "extractor_version": row["extractor_version"],
                 "matched_phrase": row["matched_phrase"],
+                "sentence_index": row["sentence_index"],
+                "window_start": row["window_start"],
+                "window_end": row["window_end"],
+                "confidence": row["confidence"],
+                "transformation_notes": row["transformation_notes"],
                 "offsets_recorded": any(row[k] is not None for k in ("sentence_index", "window_start", "window_end")),
             }
             for row in provenance
@@ -269,18 +304,21 @@ def _render_one(claim: dict[str, Any]) -> str:
         lines.append(_line("source", "no evidence linked"))
     elif claim["source"]:
         src = claim["source"]
-        row = next(p for p in claim["provenance"] if p["evidence_id"] == src["evidence_id"])
+        where = (f"evidence #{src['evidence_id']}" if src["scope"] == "chunk"
+                 else f"the session transcript up to evidence #{src['evidence_id']}")
+        session = _session_label(src["session"]) if src["session"] else "session not recorded"
         lines.append(_line("source", f'{src["role"]}: "{src["text"]}"'))
-        lines.append(_line("", f"located in evidence #{src['evidence_id']} · "
-                              f"{_session_label(row['session'])} · captured {_when(row['captured_at'])}"))
+        lines.append(_line("", f"located in {where} · {session} · captured {_when(src['captured_at'])}"))
     else:
         lines.append(_line("source", "not located in its evidence (searched by claim text)"))
 
-    extractors = sorted({p["extractor_version"] for p in claim["provenance"]})
+    extractors = sorted({p["extractor_version"] or "version not recorded" for p in claim["provenance"]})
     if extractors:
         offsets = ("sentence offsets recorded" if any(p["offsets_recorded"] for p in claim["provenance"])
                    else "sentence offsets not recorded by this extractor")
         lines.append(_line("extraction", f"{', '.join(extractors)} · {offsets}"))
+    else:
+        lines.append(_line("extraction", "not recorded (no evidence is linked to this claim)"))
 
     lines.append(_line("commit", claim["commit"][:12] if claim["commit"] else "not recorded"))
 
