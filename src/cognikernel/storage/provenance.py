@@ -15,6 +15,8 @@ how recalled history ended up attributed to the wrong session.
 """
 from __future__ import annotations
 
+import datetime
+import json
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -77,6 +79,51 @@ def session_order(
         row["session_id"]: SessionPosition(row["session_id"], position, total, row["first_seen"])
         for position, row in enumerate(rows, 1)
     }
+
+
+def session_labels(conn: sqlite3.Connection, project_id: str) -> dict[str, str]:
+    """A short label per session for the session block and recall: "S2 · 09-12".
+
+    The number is the session's place in order (session_order) and the date the
+    local day it was first seen. It replaces the raw session id, which carries no
+    order: in the micro benchmark the recap placed only 3–5 of 7 facts in the
+    right session, answering from a block that named sessions by id.
+    """
+    return {
+        session_id: f"S{pos.position} · {datetime.datetime.fromtimestamp(pos.first_seen / 1000):%m-%d}"
+        for session_id, pos in session_order(conn, project_id).items()
+    }
+
+
+def changed_claim_ids(conn: sqlite3.Connection, project_id: str) -> set[int]:
+    """Claims whose value changed over time — the ones a session label is for.
+
+    A claim changed when it superseded another, or when an older claim with the
+    same decision key said something different (the golden-record consolidation
+    folds those at read time without a supersession link). A restatement of the
+    same value is not a change, and a fact stated once needs no label.
+    """
+    changed = {
+        row[0] for row in conn.execute(
+            "SELECT DISTINCT superseded_by FROM events WHERE project_id = ? AND superseded_by IS NOT NULL",
+            (project_id,),
+        )
+    }
+    earlier: dict[str, set[str]] = {}
+    for event_id, key, payload in conn.execute(
+        """
+        SELECT id, decision_key, payload FROM events
+        WHERE project_id = ? AND decision_key IS NOT NULL AND decision_key != ''
+        ORDER BY created_at, id
+        """,
+        (project_id,),
+    ):
+        description = " ".join(str(json.loads(payload).get("description") or "").lower().split())
+        seen = earlier.setdefault(key, set())
+        if seen - {description}:
+            changed.add(event_id)
+        seen.add(description)
+    return changed
 
 
 def is_live(event: Event) -> bool:

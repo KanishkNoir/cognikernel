@@ -83,6 +83,74 @@ def test_recall_memory_end_to_end_lexical(tmp_path, monkeypatch) -> None:
     assert "PostgreSQL" in out
 
 
+def _two_session_project(tmp_path, monkeypatch):
+    """A project with one claim from each of two sessions, captured a day apart."""
+    from datetime import datetime
+
+    from cognikernel.config import Config
+    from cognikernel.integration.session import init_project
+    from cognikernel.storage.connection import get_connection, get_db_path, hash_project_path
+    from cognikernel.storage.evidence import store_evidence
+
+    monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path))
+    monkeypatch.setattr("cognikernel.embedding.model.is_ready", lambda: False)
+    proj = str(tmp_path / "proj")
+    (tmp_path / "proj").mkdir()
+    init_project(proj)
+    pid = hash_project_path(proj)
+    first, second = "3f2a9c1e-first-session", "8b7d4e20-second-session"
+    ids = {}
+    with get_connection(get_db_path(Config.load(project_path=proj), pid)) as c:
+        for sid, day, key, desc in (
+            (first, 11, "primary", "Use PostgreSQL for the primary database"),
+            (first, 11, "weekly", "Back up the PostgreSQL database weekly"),
+            (second, 12, "nightly", "Back up the PostgreSQL database nightly"),
+        ):
+            at = int(datetime(2026, 9, day, 10, 0).timestamp() * 1000)
+            if key != "weekly":
+                store_evidence(c, pid, sid, "transcript", desc.encode(), captured_at=at)
+            cur = c.execute(
+                """INSERT INTO events (project_id, session_id, created_at, event_type,
+                                       payload, content_hash, weight, mention_count)
+                   VALUES (?, ?, ?, 'DECISION', ?, ?, 1.0, 1)""",
+                (pid, sid, at, json.dumps({"description": desc}), f"h-{key}"),
+            )
+            ids[key] = cur.lastrowid
+        # The nightly backup replaced the weekly one: its value changed over time.
+        c.execute("UPDATE events SET superseded_by = ? WHERE id = ?", (ids["nightly"], ids["weekly"]))
+        c.commit()
+    return proj, first, second, ids
+
+
+def test_recall_labels_a_claim_whose_value_changed_and_nothing_else(tmp_path, monkeypatch) -> None:
+    """A label goes where the store holds an earlier value of the same thing."""
+    proj, first, second, _ = _two_session_project(tmp_path, monkeypatch)
+
+    out = recall_memory(proj, "postgresql database")
+
+    primary = next(line for line in out.splitlines() if "primary database" in line)
+    nightly = next(line for line in out.splitlines() if "nightly" in line)
+    assert "S2 · 09-12" in nightly
+    assert "S1" not in primary
+    assert first not in out and second not in out
+
+
+def test_find_related_labels_a_changed_claim_too(tmp_path, monkeypatch) -> None:
+    proj, first, second, ids = _two_session_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "cognikernel.embedding.retrieval.find_related",
+        lambda conn, project_id, event_id, k=8: [{"id": ids["nightly"], "why": "semantic", "score": 0.8},
+                                                  {"id": ids["primary"], "why": "semantic", "score": 0.6}],
+    )
+
+    out = find_related_memory(proj, "primary database")
+
+    related = [line for line in out.splitlines() if line.startswith("- ")]
+    assert any("nightly" in line and "S2 · 09-12" in line for line in related)
+    assert all("S1" not in line for line in related if "primary database" in line)
+    assert second not in out
+
+
 def test_query_functions_never_raise(tmp_path, monkeypatch) -> None:
     """Both entrypoints return a string even when the underlying call blows up."""
     monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path))
