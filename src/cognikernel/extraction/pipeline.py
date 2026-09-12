@@ -262,35 +262,10 @@ _MIN_CONTENT_WORDS = 4
 _CONTENT_WORD_RE = re.compile(r"[a-z0-9]{3,}")
 
 # R1 — memory-meta self-reference: the assistant narrating CogniKernel's OWN memory
-# ("the session context has…", "the recall surfaces…", "graveyard records…") rather
-# than stating a project fact. These are extraction echoes from recall-heavy sessions.
-# We DEMOTE (not drop): weight collapses so they fall off the budget-ranked block while
-# staying in the store — real facts survive via their canonical (non-meta) capture, so
-# the retention gate stays green. Terms chosen to NOT match real project facts (e.g.
-# 'in-memory'/'in-process' decisions are excluded; 'graveyard' is a CogniKernel-only term).
-_MEMORY_META_RE = re.compile(
-    r"\b(session[- ]context|injection block|injected (?:session )?context|cognikernel|"
-    r"stop hook|graveyard|pending confirmation|memory confirms|recorded in memory|"
-    r"from memory|the recall (?:surfaces|surfaced|returns|returned|results|mentions|shows|tool)|"
-    # Claude Code compaction-summary instructions leak into transcripts when a
-    # session compacts mid-run; they are harness meta, not project facts
-    # (GAMMA_CK_TEST: "Resume directly — do not acknowledge the summary"
-    # landed in Hard constraints).
-    r"resume directly|do not acknowledge the summary|do not recap what was happening|"
-    r"continue the conversation from where it left off|"
-    # J5: leak shapes collected from the 7 benchmark DBs (scripts/_j5_meta_scan.py).
-    # Event-type tokens narrated in prose ("There's an APPROACH_ABANDONED_DO_NOT_RETRY
-    # entry recording…") — underscore forms only, so prose like "hard constraint" stays:
-    r"approach_abandoned\w*|constraint_hard|constraint_soft|thread_open|component_status|"
-    # supersession governance narration (not the superseded fact itself):
-    r"(?:now|explicitly) superseded|rejection is superseded|superseded abandoned|"
-    # memory-reference framing around a fact whose canonical capture exists separately:
-    r"memory (?:shows|says)|recorded decision|decision to record|decision log|"
-    r"locked in the project memory|prior decision being overridden|entry recording|"
-    # the MCP server instructions themselves leaking into extraction:
-    r"call recall\b|missing from the block)\b",
-    re.IGNORECASE,
-)
+# ("the session context has…", "the recall surfaces…") rather than stating a project
+# fact. The predicate lives in quality.detectors.is_memory_meta, a leaf, so the ranking
+# can read it too. We DEMOTE (not drop): real facts survive via their canonical
+# (non-meta) capture.
 _META_DEMOTE = 0.15  # weight multiplier for memory-meta sentences
 _FRAG_DEMOTE = 0.4   # weight multiplier for context-dependent fragments (J5.2)
 
@@ -367,7 +342,9 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
         if chash in seen:
             continue
         seen.add(chash)
-        is_meta = bool(_MEMORY_META_RE.search(desc))
+        from cognikernel.quality.detectors import is_memory_meta
+
+        is_meta = is_memory_meta(desc)
         prov = provenance + ("+meta" if is_meta else "") + ("+frag" if is_frag else "")
         weight = conf * (_META_DEMOTE if is_meta else 1.0) * (_FRAG_DEMOTE if is_frag else 1.0)
         ev = Event(
@@ -425,7 +402,9 @@ def _filter_and_retype_with_head(events: list[Event], head=None) -> list[Event] 
         e.event_type = label
         e.payload["confidence"] = conf
         suffix = "+head"
-        if _MEMORY_META_RE.search(desc):
+        from cognikernel.quality.detectors import is_memory_meta
+
+        if is_memory_meta(desc):
             suffix += "+meta"
             e.weight = (e.weight or conf) * _META_DEMOTE
         if is_frag:

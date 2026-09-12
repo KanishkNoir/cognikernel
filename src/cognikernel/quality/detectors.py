@@ -129,6 +129,58 @@ def detect_boilerplate(text: str) -> DetectorHit | None:
     return None
 
 
+# ── R1: memory-meta narration ────────────────────────────────────────────────
+#
+# The assistant narrating CogniKernel's OWN memory ("the session context
+# flagged…", "CogniKernel's Stop hook will persist it") instead of stating a
+# project fact. Extraction demotes these (pipeline._META_DEMOTE). The list lives
+# here, in the leaf, so the ranking can read the same predicate.
+#
+# Precision first. Measured 2026-09-12 on all 162 claims the earlier list had
+# tagged in the local stores: 30 were real project facts, from three classes —
+# a project that discusses CogniKernel as a design subject ("vendor
+# CogniKernel's event-sourced store"), "from memory" as an ordinary phrase
+# ("re-emit the stored JSON as chunks from memory"), and a project's own
+# "graveyard" of rejected ideas. Each alternative below is a strict narrowing of
+# the one it replaced, checked over all 12,149 stored events: nothing matches now
+# that did not match before. It still matches 6 real facts that quote memory
+# ("that's the hard constraint (CONSTRAINT_HARD: …)"), and no longer matches 27
+# narration claims, only 2 of which were weight-ranked. A miss leaves a claim
+# undemoted; a false match demotes a real fact, which is the costlier error.
+MEMORY_META_RE = re.compile(
+    r"\b(?:session[- ]context|injection block|injected (?:session )?context|"
+    # CogniKernel acting as the tool, not as a subject of the project's own design.
+    r"cognikernel(?:'s|’s)?\s+(?:stop hook|(?:userpromptsubmit |skeleton[- ]gate )?hooks?|mcp|"
+    r"skeleton(?:[- ]gate| tool)?|session[- ]?(?:context|state)|memory(?!\s+store)|recall|tools?|"
+    r"says|(?:has |had )?flagged|agrees|captures|will (?:record|persist|extract|pick)|scaffold\w*|"
+    r"config\w*|(?:stored )?(?:project )?state|read-gate|strict mode|is blocking|doesn't expose)|"
+    r"stop hook|pending confirmation|memory confirms|recorded in memory|"
+    # "from memory" only as framing or retrieval, never the ordinary phrase.
+    r"from memory\s*:|(?:pull\w*|recall\w*|retriev\w*|check\w*)\b[^.]{0,60}\bfrom memory|"
+    # The graveyard as CogniKernel's section, not a project's word for rejected ideas.
+    r"(?:record\w*|extract\w*|persist\w*)\b[^.]{0,40}\bgraveyard|as a graveyard entry|"
+    r"the recall (?:surfaces|surfaced|returns|returned|results|mentions|shows|tool)|"
+    # Compaction-summary instructions leaking into transcripts.
+    r"resume directly|do not acknowledge the summary|do not recap what was happening|"
+    r"continue the conversation from where it left off|"
+    # Event-type tokens narrated in prose; underscore forms only, so "hard constraint" stays.
+    r"approach_abandoned\w*|constraint_hard|constraint_soft|thread_open|component_status|"
+    # Supersession governance narration, not the superseded fact itself.
+    r"(?:now|explicitly) superseded|rejection is superseded|superseded abandoned|"
+    # Memory-reference framing around a fact whose canonical capture exists separately.
+    r"memory (?:shows|says)|recorded decision|decision to record|decision log|"
+    r"locked in the project memory|prior decision being overridden|entry recording|"
+    # The MCP server instructions themselves.
+    r"call recall|missing from the block)(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def is_memory_meta(text: str) -> bool:
+    """R1 — the text narrates CogniKernel's own memory, not the project."""
+    return bool(MEMORY_META_RE.search(text or ""))
+
+
 # ── D5: cross-type duplicates ────────────────────────────────────────────────
 #
 # Content-hash dedup is per (event_type, description), so the SAME fact stored

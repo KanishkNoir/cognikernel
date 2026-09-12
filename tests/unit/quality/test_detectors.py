@@ -8,6 +8,56 @@ from cognikernel.quality.detectors import (
 )
 
 
+class TestIsMemoryMeta:
+    """R1 — the assistant narrating CogniKernel's own memory, not a project fact.
+
+    Measured 2026-09-12 on every tagged claim in the local stores (162): 30 were
+    real project facts. They matched because a project discusses CogniKernel
+    as a design subject, or uses "from memory" / "graveyard" as ordinary words.
+    Sentences here are synthetic, one per measured class.
+    """
+
+    def test_flags_cognikernel_acting_as_the_tool(self) -> None:
+        from cognikernel.quality.detectors import is_memory_meta
+
+        assert is_memory_meta("CogniKernel's Stop hook will persist the updated rationale.")
+        assert is_memory_meta("The CogniKernel MCP server is holding the database lock.")
+        assert is_memory_meta("There is no source code yet, only CogniKernel scaffolding.")
+
+    def test_flags_session_context_and_harness_narration(self) -> None:
+        from cognikernel.quality.detectors import is_memory_meta
+
+        assert is_memory_meta("The session context flagged a hard constraint before I touched the cache.")
+        assert is_memory_meta("Resume directly — do not acknowledge the summary.")
+
+    def test_flags_memory_framing(self) -> None:
+        from cognikernel.quality.detectors import is_memory_meta
+
+        assert is_memory_meta("I'll pull the established invariants from memory before touching code.")
+        assert is_memory_meta("Key decisions from memory: the upsert returns is_new.")
+        assert is_memory_meta("This will be recorded in the graveyard at session end.")
+
+    def test_a_project_that_discusses_cognikernel_is_not_meta(self) -> None:
+        from cognikernel.quality.detectors import is_memory_meta
+
+        assert not is_memory_meta("Keep our own store rather than vendoring CogniKernel's event model.")
+        assert not is_memory_meta("The memory systems compared were Mem0, Zep, Letta and CogniKernel.")
+        assert not is_memory_meta("CogniKernel has no world-time concept, so the resolver is needed anyway.")
+        assert not is_memory_meta("Add the CogniKernel memory store directory to .gitignore.")
+
+    def test_from_memory_as_an_ordinary_phrase_is_not_meta(self) -> None:
+        from cognikernel.quality.detectors import is_memory_meta
+
+        assert not is_memory_meta("On a cache hit, re-emit the stored response as synthetic chunks from memory.")
+        assert not is_memory_meta("The connect timeout (5 s, from memory) belongs inside the iterator.")
+
+    def test_the_projects_own_graveyard_is_not_meta(self) -> None:
+        from cognikernel.quality.detectors import is_memory_meta
+
+        assert not is_memory_meta("Per-tenant credentials stay in the graveyard until multi-tenancy is scoped.")
+        assert not is_memory_meta("LangChain is rejected for the request path and goes in the graveyard.")
+
+
 class TestDetectSubjectLess:
     """D7 — statements whose subject only exists in unstated context.
 
