@@ -68,7 +68,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`cognikernel show --as-of <when>` shows what memory believed at a past
   time.** Give it a date (the end of that day), a date and time, or a git
   commit, and it lists the claims that were live then: anything created later
-  is left out, and anything replaced or archived by then is counted as ended.
+  is left out, and anything replaced or archived at a recorded time by then is
+  counted as ended.
   It also says how far back it can be trusted. CogniKernel only started
   recording *when* a claim was replaced or archived in this release, so on an
   older store every replaced claim has no end time. Those are listed

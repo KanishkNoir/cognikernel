@@ -38,22 +38,39 @@ class SessionPosition:
     first_seen: int    # epoch milliseconds
 
 
-def session_order(conn: sqlite3.Connection, project_id: str) -> dict[str, SessionPosition]:
-    """Every session of a project, keyed by id, numbered by first sighting."""
+def session_order(
+    conn: sqlite3.Connection,
+    project_id: str,
+    at_ms: int | None = None,
+) -> dict[str, SessionPosition]:
+    """Every session of a project, keyed by id, numbered by first sighting.
+
+    A session that stored evidence is placed by its earliest capture. An event's
+    created_at orders only a session with no evidence at all, so a replayed or
+    backfilled event cannot pull its session earlier. With `at_ms`, only captures
+    and events at or before that time count: an as-of view numbers the sessions
+    that existed then, not the ones that came after.
+    """
+    cutoff = at_ms if at_ms is not None else 2**62
     rows = conn.execute(
         """
-        SELECT session_id, MIN(first_seen) AS first_seen
-        FROM (
+        SELECT session_id, first_seen FROM (
             SELECT session_id, MIN(captured_at) AS first_seen
-              FROM raw_evidence WHERE project_id = ? GROUP BY session_id
+              FROM raw_evidence
+             WHERE project_id = ? AND captured_at <= ?
+             GROUP BY session_id
             UNION ALL
             SELECT session_id, MIN(created_at) AS first_seen
-              FROM events WHERE project_id = ? GROUP BY session_id
+              FROM events
+             WHERE project_id = ? AND created_at <= ?
+               AND session_id NOT IN (
+                   SELECT session_id FROM raw_evidence WHERE project_id = ? AND captured_at <= ?
+               )
+             GROUP BY session_id
         )
-        GROUP BY session_id
         ORDER BY first_seen, session_id
         """,
-        (project_id, project_id),
+        (project_id, cutoff, project_id, cutoff, project_id, cutoff),
     ).fetchall()
     total = len(rows)
     return {

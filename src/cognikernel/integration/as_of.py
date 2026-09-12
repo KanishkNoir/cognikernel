@@ -22,6 +22,7 @@ from typing import Any
 from cognikernel.integration.why import _session, _session_label, _when
 from cognikernel.storage.projections import build_projection
 from cognikernel.storage.provenance import claims_as_of, session_order
+from cognikernel.utils.decision_key import derive_decision_key
 
 _log = logging.getLogger("cognikernel.as_of")
 
@@ -79,7 +80,13 @@ def _short(text: str) -> str:
 
 def explain_as_of(conn: sqlite3.Connection, project_id: str, at: int, label: str) -> dict[str, Any]:
     claims = claims_as_of(conn, project_id, at)
-    order = session_order(conn, project_id)
+    order = session_order(conn, project_id, at_ms=at)
+    # rebuild_projection backfills missing decision keys in the store and then
+    # consolidates same-topic choices. The as-of view must consolidate the same
+    # way without writing, so keys are derived on these in-memory copies only.
+    for event in claims.live:
+        if event.decision_key is None:
+            event.decision_key = derive_decision_key(event.payload, event.event_type)
     projection = build_projection(conn, project_id, claims.live, built_at=at)
 
     def entry(rec: dict[str, Any]) -> dict[str, Any]:
@@ -125,18 +132,12 @@ def _day(ms: int) -> str:
     return datetime.datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d")
 
 
-def render_as_of(data: dict[str, Any]) -> str:
+def _horizon(data: dict[str, Any]) -> list[str]:
+    """Counts, end-time horizon and centrality caveat — stated on every view,
+    including an empty one."""
     counts = data["counts"]
-    if not any(counts.values()):
-        first = data["earliest_claim"]
-        tail = f"; the first claim was recorded {_when(first)}" if first else ""
-        return f"No claims existed yet as of {data['label']}{tail}."
-
-    lines = [
-        f"As of {data['label']}",
-        f"  {counts['live']} live · {counts['ended']} ended by then · "
-        f"{counts['unknown']} with no recorded end time",
-    ]
+    lines = [f"  {counts['live']} live · {counts['ended']} ended by then · "
+             f"{counts['unknown']} with no recorded end time"]
     if data["first_recorded_end"] and counts["unknown"]:
         lines.append(f"  end times are recorded from {_day(data['first_recorded_end'])}; "
                      "a claim replaced or archived before then has none")
@@ -147,6 +148,17 @@ def render_as_of(data: dict[str, Any]) -> str:
         lines.append("  no end times are recorded in this store; "
                      "every replaced or archived claim is listed under Timing unknown")
     lines.append("  ranking uses the sessions up to then; file centrality uses today's import graph")
+    return lines
+
+
+def render_as_of(data: dict[str, Any]) -> str:
+    counts = data["counts"]
+    if not any(counts.values()):
+        first = data["earliest_claim"]
+        tail = f"; the first claim was recorded {_when(first)}" if first else ""
+        return "\n".join([f"No claims existed yet as of {data['label']}{tail}.", *_horizon(data)])
+
+    lines = [f"As of {data['label']}", *_horizon(data)]
 
     for title, key in (("Hard constraints", "hard_constraints"), ("Decisions", "decisions"),
                        ("Do not retry", "graveyard"), ("Open threads", "active_threads")):

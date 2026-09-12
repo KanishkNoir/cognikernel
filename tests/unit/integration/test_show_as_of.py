@@ -151,12 +151,65 @@ class TestShowAsOf:
         assert f"#{ids['pre021']}" in unknown[1] and "polling loop" in unknown[1]
         assert "polling loop" not in unknown[0]
 
-    def test_before_any_claim_says_nothing_existed(self, project, capsys) -> None:
+    def test_before_any_claim_says_nothing_existed_and_still_states_the_horizon(self, project, capsys) -> None:
         proj, _ = project
 
         _show(proj, "2026-08-01")
+        out = capsys.readouterr().out
 
-        assert "No claims existed yet" in capsys.readouterr().out
+        assert "No claims existed yet" in out
+        assert "end times are recorded from 2026-09-05" in out
+        assert "file centrality" in out
+
+    def test_session_positions_count_only_sessions_that_existed_then(self, project, capsys) -> None:
+        """Review on #45: at 2026-09-02 only the first session existed."""
+        proj, _ = project
+
+        _show(proj, "2026-09-02")
+        out = capsys.readouterr().out
+
+        assert "session 1 of 1" in out
+        assert " of 3" not in out
+
+    def test_legacy_claims_without_decision_keys_consolidate_without_writing(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        """Review on #45: pre-016 claims have no decision_key. rebuild_projection backfills
+        and consolidates them; the as-of view must consolidate them the same way, in
+        memory, without writing the keys."""
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "data"))
+        proj = tmp_path / "legacy"
+        proj.mkdir()
+        pid = hash_project_path(str(proj))
+        db = get_db_path(Config.load(), pid)
+        db.parent.mkdir(parents=True, exist_ok=True)
+        with get_connection(db) as c:
+            run_migrations(c)
+            for version, created in (("a", T1), ("b", T2)):
+                insert_event(c, Event(
+                    project_id=pid, session_id="s1", event_type="DECISION",
+                    payload={"description": f"Retry policy version {version}", "subject": "retry policy"},
+                    content_hash=f"legacy-{version}", created_at=created,
+                ))
+            c.commit()
+
+        _show(proj, "2026-09-06", as_json=True)
+        data = json.loads(capsys.readouterr().out)
+
+        assert data["counts"]["live"] == 2
+        assert len(data["decisions"]) == 1
+        with get_connection(db) as c:
+            assert c.execute("SELECT COUNT(*) FROM events WHERE decision_key IS NULL").fetchone()[0] == 2
+
+    def test_an_empty_as_of_is_an_error_not_the_current_view(self, project, capsys) -> None:
+        """Review on #45: `--as-of ""` fell back to the current projection."""
+        proj, _ = project
+
+        with pytest.raises(SystemExit) as exc:
+            _show(proj, "")
+
+        assert exc.value.code == 1
+        assert "YYYY-MM-DD" in capsys.readouterr().err
 
     def test_json_output(self, project, capsys) -> None:
         proj, ids = project

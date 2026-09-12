@@ -1118,7 +1118,7 @@ def _cmd_process_jobs(args: argparse.Namespace) -> None:
 
 def _cmd_show(args: argparse.Namespace) -> None:
     from cognikernel.integration.session import get_projection, render_state
-    if getattr(args, "as_of", None):
+    if getattr(args, "as_of", None) is not None:  # `--as-of ""` is an error, not "absent"
         _cmd_show_as_of(args)
         return
     if args.as_json:
