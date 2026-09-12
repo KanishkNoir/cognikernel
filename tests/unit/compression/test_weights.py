@@ -152,6 +152,25 @@ class TestComputeWeight:
         # Expected ≈ 1.0 × (1/1.3) × 1.48 × 1.5 × 2.0 × 1.5 ≈ high
         assert w > 4.0
 
+    def test_named_factors_multiply_to_exactly_the_weight(self) -> None:
+        """G4 (§14 "why was this considered important?"): the factorisation `why`
+        shows is the one the ranking computes, not a re-derivation of it."""
+        from cognikernel.compression.weights import weight_factors
+
+        e = _make_event(
+            event_type="CONSTRAINT_HARD", mention_count=5, last_mentioned_session=8,
+            payload={"description": "No Redis", "rationale": "", "affected_files": ["auth.py"]},
+        )
+        cmap = {"auth.py": {"status": "in_flux"}}
+        centrality_map = {"auth.py": 1.0, "other.py": 0.5}
+
+        f = weight_factors(e, cmap, centrality_map, current_session=10)
+
+        assert list(f) == ["base", "recency", "repetition", "centrality", "activity", "type"]
+        assert (f["base"] * f["recency"] * f["repetition"] * f["centrality"] * f["activity"] * f["type"]
+                == compute_weight(e, cmap, centrality_map, current_session=10))
+        assert (f["activity"], f["type"], f["centrality"]) == (2.0, 1.5, 1.5)
+
     def test_old_stable_thread_close_near_zero(self) -> None:
         e = _make_event(event_type="THREAD_CLOSE", last_mentioned_session=0)
         cmap = {"stable.py": {"status": "stable"}}

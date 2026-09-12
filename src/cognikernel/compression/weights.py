@@ -75,6 +75,28 @@ def activity_factor(
     return max(boosts)
 
 
+def weight_factors(
+    event: "Event",
+    component_map: dict[str, dict],
+    centrality_map: dict[str, float],
+    current_session: int = 0,
+) -> dict[str, float]:
+    """The six named factors of an event's ranking weight, in formula order.
+
+    `cognikernel why` shows these (§14: "show the factorisation, not the
+    number"), so compute_weight is their product and there is one formula.
+    """
+    affected_files: list[str] = event.payload.get("affected_files", [])
+    return {
+        "base": BASE_WEIGHT.get(event.event_type, 0.5),
+        "recency": recency_factor(max(0, current_session - event.last_mentioned_session)),
+        "repetition": repetition_factor(event.mention_count),
+        "centrality": centrality_factor(affected_files, centrality_map),
+        "activity": activity_factor(affected_files, component_map),
+        "type": TYPE_MULTIPLIER.get(event.event_type, 1.0),
+    }
+
+
 def compute_weight(
     event: "Event",
     component_map: dict[str, dict],
@@ -82,17 +104,5 @@ def compute_weight(
     current_session: int = 0,
 ) -> float:
     """Compute the full ranking weight for a single event."""
-    base = BASE_WEIGHT.get(event.event_type, 0.5)
-
-    sessions_ago = max(0, current_session - event.last_mentioned_session)
-    recency = recency_factor(sessions_ago)
-
-    repetition = repetition_factor(event.mention_count)
-
-    affected_files: list[str] = event.payload.get("affected_files", [])
-    centrality = centrality_factor(affected_files, centrality_map)
-    activity = activity_factor(affected_files, component_map)
-
-    type_mult = TYPE_MULTIPLIER.get(event.event_type, 1.0)
-
-    return base * recency * repetition * centrality * activity * type_mult
+    f = weight_factors(event, component_map, centrality_map, current_session)
+    return f["base"] * f["recency"] * f["repetition"] * f["centrality"] * f["activity"] * f["type"]

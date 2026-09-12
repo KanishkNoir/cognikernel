@@ -18,7 +18,9 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from cognikernel.model import Event
+from cognikernel.storage.events import get_events_for_projection
 from cognikernel.storage.evidence import load_evidence, load_full_transcript
+from cognikernel.storage.projections import Projection, build_projection
 from cognikernel.storage.provenance import (
     SessionPosition,
     claim_provenance,
@@ -28,6 +30,8 @@ from cognikernel.storage.provenance import (
     session_order,
     supersession_chain,
 )
+from cognikernel.utils.decision_key import derive_decision_key
+from cognikernel.utils.paths import canonicalize_path, is_bare_basename
 
 _log = logging.getLogger("cognikernel.why")
 _converter_warned = False
@@ -165,7 +169,85 @@ def _status(event: Event, transition: dict[str, Any]) -> str:
     return "active"
 
 
-def _explain(conn: sqlite3.Connection, event: Event, order: dict[str, SessionPosition]) -> dict[str, Any]:
+# Projection buckets, as the block names them. Decisions keep the projection's own
+# order (it is the ranking); the other buckets are ordered by weight here.
+_BUCKETS = (
+    ("hard_constraints", "hard constraints"),
+    ("ranked_decisions", "decisions"),
+    ("graveyard", "do-not-retry entries"),
+    ("active_threads", "open threads"),
+    ("component_map", "components"),
+)
+
+
+def _ranking(conn: sqlite3.Connection, project_id: str) -> Projection | None:
+    """The live ranking with each rec's weight factors attached. Writes nothing.
+
+    rebuild_projection backfills missing decision keys in the store before it
+    consolidates; they are derived on these in-memory events instead, as
+    `show --as-of` does, so the weights match the block without a write.
+    """
+    try:
+        events = get_events_for_projection(conn, project_id)
+        for event in events:
+            if event.decision_key is None:
+                event.decision_key = derive_decision_key(event.payload, event.event_type)
+        return build_projection(conn, project_id, events, explain_weights=True)
+    except Exception as exc:
+        _log.warning("why: ranking weights unavailable: %s", exc)
+        return None
+
+
+def _importance(event: Event, projection: Projection | None) -> dict[str, Any]:
+    """§14 "why was this considered important?": the weight the block ranks by, as
+    its six factors — or why the claim is not ranked at all."""
+    if event.superseded_by is not None:
+        return {"ranked": False, "folded_into": None,
+                "reason": f"superseded by #{event.superseded_by}; only live claims are ranked"}
+    if event.archived:
+        return {"ranked": False, "folded_into": None, "reason": "archived; only live claims are ranked"}
+    if projection is None:
+        return {"ranked": False, "folded_into": None, "reason": "the ranking could not be rebuilt (see the warning log)"}
+
+    for attr, label in _BUCKETS:
+        bucket = getattr(projection, attr)
+        recs = list(bucket.values()) if isinstance(bucket, dict) else list(bucket)
+        if attr != "ranked_decisions":
+            recs.sort(key=lambda r: (-r["weight"], r.get("id") or 0))
+        for rank, rec in enumerate(recs, 1):
+            if rec.get("id") == event.id:
+                detail = rec.get("weight_factors") or {}
+                return {
+                    "ranked": True,
+                    "weight": rec["weight"],
+                    "factors": detail.get("factors", {}),
+                    "sessions_ago": detail.get("sessions_ago"),
+                    "mention_count": detail.get("mention_count"),
+                    "affected_files": detail.get("affected_files", []),
+                    "bucket": label,
+                    "rank": rank,
+                    "of": len(recs),
+                }
+
+    # Live but absent: consolidation kept one canonical claim for its topic, or the
+    # component collapse kept the latest status for its path.
+    key = event.decision_key if event.decision_key is not None else derive_decision_key(event.payload, event.event_type)
+    if key:
+        for rec in projection.hard_constraints + projection.ranked_decisions:
+            if rec.get("decision_key") == key:
+                return {"ranked": False, "folded_into": rec["id"],
+                        "reason": f"folded into #{rec['id']}, the claim that ranks for this topic"}
+    if event.event_type == "COMPONENT_STATUS":
+        path = canonicalize_path(str(event.payload.get("path") or ""))
+        if path and not is_bare_basename(path) and path in projection.component_map:
+            rec = projection.component_map[path]
+            return {"ranked": False, "folded_into": rec["id"],
+                    "reason": f"folded into #{rec['id']}, the latest status for {path}"}
+    return {"ranked": False, "folded_into": None, "reason": "live, but not in the ranked block"}
+
+
+def _explain(conn: sqlite3.Connection, event: Event, order: dict[str, SessionPosition],
+             projection: Projection | None) -> dict[str, Any]:
     payload = event.payload
     chain = supersession_chain(conn, event.id)
     transitions = claim_transitions(conn, [e.id for e in chain] + [event.id])
@@ -199,7 +281,10 @@ def _explain(conn: sqlite3.Connection, event: Event, order: dict[str, SessionPos
         "rationale": payload.get("rationale") or payload.get("reason") or None,
         "authority": payload.get("authority"),
         "confidence": payload.get("confidence"),
-        "weight": event.weight,
+        # The weight stored at admission. The ranking recomputes its own weight and
+        # does not read this one; `importance` is what the block ranks by.
+        "stored_weight": event.weight,
+        "importance": _importance(event, projection),
         "mention_count": event.mention_count,
         "created_at": event.created_at,
         "session": _session(order, event.session_id),
@@ -242,7 +327,9 @@ def _explain(conn: sqlite3.Connection, event: Event, order: dict[str, SessionPos
 
 def explain_claims(conn: sqlite3.Connection, project_id: str, subject: str, limit: int = 3) -> list[dict[str, Any]]:
     order = session_order(conn, project_id)
-    return [_explain(conn, event, order) for event in find_claims(conn, project_id, subject, limit=limit)]
+    claims = find_claims(conn, project_id, subject, limit=limit)
+    projection = _ranking(conn, project_id) if claims else None
+    return [_explain(conn, event, order, projection) for event in claims]
 
 
 # ── text rendering ────────────────────────────────────────────────────────────
@@ -278,6 +365,30 @@ def _transition_text(item: dict[str, Any]) -> str:
     return ""
 
 
+def _plural(n: int | None, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _importance_lines(claim: dict[str, Any]) -> list[str]:
+    imp = claim["importance"]
+    stored = claim["stored_weight"]
+    stored_line = _line("", f"stored weight {stored:.2f} is not what ranks it" if isinstance(stored, (int, float))
+                        else "no stored weight")
+    if not imp["ranked"]:
+        return [_line("importance", f"not ranked: {imp['reason']}"), stored_line]
+    f = imp["factors"]
+    files = "no files" if not imp["affected_files"] else _plural(len(imp["affected_files"]), "file")
+    return [
+        _line("importance", f"weight {imp['weight']:.2f} · rank {imp['rank']} of {imp['of']} {imp['bucket']}"),
+        _line("", f"= base {f['base']:.2f} ({claim['event_type']}) × recency {f['recency']:.2f} "
+                  f"({_plural(imp['sessions_ago'], 'session')} ago) × repetition {f['repetition']:.2f} "
+                  f"({_plural(imp['mention_count'], 'mention')})"),
+        _line("", f"  × centrality {f['centrality']:.2f} ({files}) × activity {f['activity']:.2f} ({files}) "
+                  f"× type {f['type']:.2f}"),
+        stored_line,
+    ]
+
+
 def _render_one(claim: dict[str, Any]) -> str:
     status = "active" if claim["status"] == "active" else _transition_text(claim)
     lines = [
@@ -290,7 +401,6 @@ def _render_one(claim: dict[str, Any]) -> str:
     confidence = claim["confidence"]
     lines.append(_line("authority", " · ".join([
         claim["authority"] or "not recorded",
-        f"weight {claim['weight']:.2f}",
         f"confidence {confidence:.2f}" if isinstance(confidence, (int, float)) else "confidence not recorded",
         f"mentioned {claim['mention_count']}x",
     ])))
@@ -299,6 +409,7 @@ def _render_one(claim: dict[str, Any]) -> str:
     lines.append(_line("admission", "admitted · " + (
         " · ".join(f"{k}: {v}" for k, v in admission.items()) if admission else "no gate annotation"
     )))
+    lines.extend(_importance_lines(claim))
 
     if not claim["provenance"]:
         lines.append(_line("source", "no evidence linked"))
