@@ -157,6 +157,11 @@ def main() -> None:
         dest="as_json",
         help="Output raw projection JSON instead of rendered text",
     )
+    p_show.add_argument(
+        "--as-of", dest="as_of", metavar="WHEN",
+        help="Show what the store believed at a past time: YYYY-MM-DD (end of that day), "
+             "'YYYY-MM-DD HH:MM', or a git commit sha",
+    )
 
     # ── doctor ────────────────────────────────────────────────────────────────
     p_doctor = sub.add_parser("doctor", help="Check DB health and print a summary")
@@ -1113,6 +1118,9 @@ def _cmd_process_jobs(args: argparse.Namespace) -> None:
 
 def _cmd_show(args: argparse.Namespace) -> None:
     from cognikernel.integration.session import get_projection, render_state
+    if getattr(args, "as_of", None):
+        _cmd_show_as_of(args)
+        return
     if args.as_json:
         proj = get_projection(args.project_path)
         data = {
@@ -1426,6 +1434,35 @@ def _cmd_failures(args: argparse.Namespace) -> None:
         print(f"  [{ts}] session={sess}  stage={f['stage']}")
         print(f"    {f['error_message'][:200]}")
         print()
+
+
+def _cmd_show_as_of(args: argparse.Namespace) -> None:
+    """S5 T-503: the belief set at a past time, with its horizon stated."""
+    from cognikernel.integration.as_of import explain_as_of, parse_when, render_as_of
+    from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
+    from cognikernel.storage.migrations import run_migrations
+
+    try:
+        at, label = parse_when(args.as_of, args.project_path)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    config = Config.load(project_path=args.project_path)
+    project_id = resolve_project_id(args.project_path, config)
+    db_path = get_db_path(config, project_id)
+    if not db_path.exists():
+        print(f"No database found for {Path(args.project_path).resolve()}", file=sys.stderr)
+        sys.exit(1)
+
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        data = explain_as_of(conn, project_id, at, label)
+
+    if args.as_json:
+        print(json.dumps(data, indent=2))
+        return
+    print(render_as_of(data))
 
 
 def _cmd_why(args: argparse.Namespace) -> None:

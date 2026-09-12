@@ -118,7 +118,24 @@ def rebuild_projection(conn: sqlite3.Connection, project_id: str) -> Projection:
         pass  # keys are an enhancement; never block a rebuild on them
 
     events = get_events_for_projection(conn, project_id, after_id=0)
+    projection = build_projection(conn, project_id, events)
+    save_projection(conn, projection)
+    return projection
 
+
+def build_projection(
+    conn: sqlite3.Connection,
+    project_id: str,
+    events: list,
+    built_at: int | None = None,
+) -> Projection:
+    """Route, consolidate and weight `events` into a Projection. Writes nothing.
+
+    rebuild_projection feeds it the live events and saves the result. The as-of
+    view (S5 T-503) feeds it the claims live at a past time, and must neither
+    overwrite the stored projection nor backfill decision keys — so both of
+    those stay in rebuild_projection.
+    """
     hard_constraints: list[dict[str, Any]] = []
     ranked_decisions: list[dict[str, Any]] = []
     component_map: dict[str, dict[str, Any]] = {}
@@ -200,7 +217,7 @@ def rebuild_projection(conn: sqlite3.Connection, project_id: str) -> Projection:
 
     projection = Projection(
         project_id=project_id,
-        built_at=int(time.time() * 1000),
+        built_at=built_at if built_at is not None else int(time.time() * 1000),
         event_id_high_water=high_water,
         hard_constraints=hard_constraints,
         ranked_decisions=ranked_decisions,
@@ -209,7 +226,6 @@ def rebuild_projection(conn: sqlite3.Connection, project_id: str) -> Projection:
         active_threads=active_threads,
         summary="",
     )
-    save_projection(conn, projection)
     return projection
 
 
