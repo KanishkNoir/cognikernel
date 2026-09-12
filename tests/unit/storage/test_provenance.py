@@ -58,6 +58,29 @@ class TestSessionOrder:
 
         assert set(session_order(conn, P)) == {"s1"}
 
+    def test_evidence_capture_orders_a_session_even_when_an_event_is_older(self, conn) -> None:
+        """Review on #44: a replayed or backfilled event can carry a created_at earlier
+        than its session's evidence. Evidence time is the documented rule; an event's
+        time only orders a session that stored no evidence."""
+        store_evidence(conn, P, "first", "transcript", b"a", captured_at=1000)
+        store_evidence(conn, P, "second", "transcript", b"b", captured_at=2000)
+        _event(conn, "second", "an event stamped before its session's evidence", created_at=100)
+
+        order = session_order(conn, P)
+
+        assert (order["first"].position, order["second"].position) == (1, 2)
+
+    def test_a_cutoff_counts_only_sessions_seen_by_then(self, conn) -> None:
+        """Review on #45: an as-of view must not number sessions that happened later."""
+        store_evidence(conn, P, "s1", "transcript", b"a", captured_at=1000)
+        store_evidence(conn, P, "s2", "transcript", b"b", captured_at=2000)
+        _event(conn, "s3", "a session with no evidence", created_at=3000)
+
+        order = session_order(conn, P, at_ms=1500)
+
+        assert set(order) == {"s1"}
+        assert order["s1"].total == 1
+
 
 class TestFindClaims:
     def test_by_id_with_or_without_hash(self, conn) -> None:

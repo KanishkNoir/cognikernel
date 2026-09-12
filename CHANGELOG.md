@@ -65,6 +65,19 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   located, not as recorded. Long histories are shortened around the claim;
   `--json` keeps everything.
 
+- **`cognikernel show --as-of <when>` shows what memory believed at a past
+  time.** Give it a date (the end of that day), a date and time, or a git
+  commit, and it lists the claims that were live then: anything created later
+  is left out, and anything replaced or archived at a recorded time by then is
+  counted as ended.
+  It also says how far back it can be trusted. CogniKernel only started
+  recording *when* a claim was replaced or archived in this release, so on an
+  older store every replaced claim has no end time. Those are listed
+  separately under "Timing unknown" — never guessed to be live or gone — and
+  the output states from which date end times exist. Ranking is rebuilt from
+  the sessions up to that time; how central a file is still comes from
+  today's code, and the output says so.
+
 - **`cognikernel doctor` shows how many extra round trips CogniKernel's own
   tools caused.** It now reports how many API responses a project's sessions
   took, and what share of them CogniKernel added: responses that only called

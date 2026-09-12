@@ -38,22 +38,39 @@ class SessionPosition:
     first_seen: int    # epoch milliseconds
 
 
-def session_order(conn: sqlite3.Connection, project_id: str) -> dict[str, SessionPosition]:
-    """Every session of a project, keyed by id, numbered by first sighting."""
+def session_order(
+    conn: sqlite3.Connection,
+    project_id: str,
+    at_ms: int | None = None,
+) -> dict[str, SessionPosition]:
+    """Every session of a project, keyed by id, numbered by first sighting.
+
+    A session that stored evidence is placed by its earliest capture. An event's
+    created_at orders only a session with no evidence at all, so a replayed or
+    backfilled event cannot pull its session earlier. With `at_ms`, only captures
+    and events at or before that time count: an as-of view numbers the sessions
+    that existed then, not the ones that came after.
+    """
+    cutoff = at_ms if at_ms is not None else 2**62
     rows = conn.execute(
         """
-        SELECT session_id, MIN(first_seen) AS first_seen
-        FROM (
+        SELECT session_id, first_seen FROM (
             SELECT session_id, MIN(captured_at) AS first_seen
-              FROM raw_evidence WHERE project_id = ? GROUP BY session_id
+              FROM raw_evidence
+             WHERE project_id = ? AND captured_at <= ?
+             GROUP BY session_id
             UNION ALL
             SELECT session_id, MIN(created_at) AS first_seen
-              FROM events WHERE project_id = ? GROUP BY session_id
+              FROM events
+             WHERE project_id = ? AND created_at <= ?
+               AND session_id NOT IN (
+                   SELECT session_id FROM raw_evidence WHERE project_id = ? AND captured_at <= ?
+               )
+             GROUP BY session_id
         )
-        GROUP BY session_id
         ORDER BY first_seen, session_id
         """,
-        (project_id, project_id),
+        (project_id, cutoff, project_id, cutoff, project_id, cutoff),
     ).fetchall()
     total = len(rows)
     return {
@@ -171,3 +188,71 @@ def claim_transitions(conn: sqlite3.Connection, event_ids: list[int | None]) -> 
         }
         for row in rows
     }
+
+
+@dataclass
+class AsOfClaims:
+    """Every claim created by `at`, sorted into exactly one of three buckets."""
+
+    at: int
+    live: list[Event]
+    ended: list[Event]
+    unknown: list[Event]
+    earliest_claim: int | None        # first created_at in the project
+    first_recorded_end: int | None    # first superseded_at / archived_at recorded at all
+
+
+def claims_as_of(conn: sqlite3.Connection, project_id: str, at_ms: int) -> AsOfClaims:
+    """What the store believed at `at_ms`, from the 021 transition columns (T-503).
+
+    A claim created at or before `at_ms` is:
+      ended    superseded or archived at a RECORDED time at or before `at_ms`
+      unknown  superseded or archived with no recorded time (every pre-021 row)
+      live     otherwise — including a claim replaced only after `at_ms`
+
+    Unknown is never folded into live or ended: a guess either way would make
+    the replay confidently wrong instead of honestly bounded.
+    """
+    live: list[Event] = []
+    ended: list[Event] = []
+    unknown: list[Event] = []
+    rows = conn.execute(
+        "SELECT * FROM events WHERE project_id = ? AND created_at <= ? ORDER BY id",
+        (project_id, at_ms),
+    ).fetchall()
+    for row in rows:
+        recorded_ends: list[int] = []
+        unrecorded_end = False
+        if row["superseded_by"] is not None:
+            if row["superseded_at"] is None:
+                unrecorded_end = True
+            else:
+                recorded_ends.append(row["superseded_at"])
+        if row["archived"]:
+            if row["archived_at"] is None:
+                unrecorded_end = True
+            else:
+                recorded_ends.append(row["archived_at"])
+
+        event = _row_to_event(row)
+        if any(end <= at_ms for end in recorded_ends):
+            ended.append(event)
+        elif unrecorded_end:
+            unknown.append(event)
+        else:
+            live.append(event)
+
+    earliest = conn.execute(
+        "SELECT MIN(created_at) FROM events WHERE project_id = ?", (project_id,)
+    ).fetchone()[0]
+    first_end = conn.execute(
+        """
+        SELECT MIN(t) FROM (
+            SELECT superseded_at AS t FROM events WHERE project_id = ? AND superseded_at IS NOT NULL
+            UNION ALL
+            SELECT archived_at AS t FROM events WHERE project_id = ? AND archived_at IS NOT NULL
+        )
+        """,
+        (project_id, project_id),
+    ).fetchone()[0]
+    return AsOfClaims(at_ms, live, ended, unknown, earliest, first_end)
