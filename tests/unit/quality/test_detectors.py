@@ -58,6 +58,49 @@ class TestIsMemoryMeta:
         assert not is_memory_meta("LangChain is rejected for the request path and goes in the graveyard.")
 
 
+class TestQualityDemotes:
+    """What a stored claim's markers cost it in the ranking (quality factor)."""
+
+    def test_a_clean_claim_has_no_demote(self) -> None:
+        from cognikernel.quality.detectors import quality_demotes, quality_factor
+
+        payload = {"description": "The dispatcher is a polling loop over the store."}
+
+        assert quality_demotes(payload) == []
+        assert quality_factor(payload) == 1.0
+
+    def test_each_marker_names_its_demote(self) -> None:
+        from cognikernel.quality.detectors import quality_demotes
+
+        assert quality_demotes({"description": "CogniKernel's Stop hook will persist it."}) == [("memory narration", 0.15)]
+        assert quality_demotes({"description": "Use it for retries.", "provenance": "salience_v2_broad+frag"}) == [("fragment", 0.4)]
+        assert quality_demotes({"description": "It must not stall.", "quality": "context_dependent"}) == [("context-dependent", 0.5)]
+        assert quality_demotes({"description": "src/x.py modified", "grounding": "unverified"}) == [("unverified path", 0.5)]
+
+    def test_demotes_multiply(self) -> None:
+        from cognikernel.quality.detectors import quality_factor
+
+        payload = {"description": "CogniKernel's Stop hook will persist it.", "provenance": "head+meta+frag"}
+
+        assert quality_factor(payload) == 0.15 * 0.4
+
+    def test_memory_narration_is_judged_on_the_text_not_a_stored_tag(self) -> None:
+        """Old `+meta` tags include the false matches #49 removed; the text is re-checked."""
+        from cognikernel.quality.detectors import quality_demotes
+
+        payload = {"description": "Per-tenant credentials stay in the graveyard until multi-tenancy is scoped.",
+                   "provenance": "salience_v2_broad+meta"}
+
+        assert quality_demotes(payload) == []
+
+    def test_thread_authority_demotes_are_not_weight_demotes(self) -> None:
+        """D9/D10 demote a thread's authority, which is what thread selection reads."""
+        from cognikernel.quality.detectors import quality_demotes
+
+        assert quality_demotes({"description": "Add the schema.", "quality": "instruction_not_thread"}) == []
+        assert quality_demotes({"description": "This is the next item.", "quality": "thread_reference"}) == []
+
+
 class TestDetectSubjectLess:
     """D7 — statements whose subject only exists in unstated context.
 

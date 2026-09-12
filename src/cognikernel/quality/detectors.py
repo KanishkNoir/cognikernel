@@ -181,6 +181,48 @@ def is_memory_meta(text: str) -> bool:
     return bool(MEMORY_META_RE.search(text or ""))
 
 
+# ── What a stored claim's markers cost it in the ranking ─────────────────────
+#
+# These demotes used to multiply only the stored weight. The composite ranking
+# (compression.weights) has recomputed every weight from scratch since
+# 2026-05-29 and never read the stored one, so none of them ever moved a claim
+# in the session block (research/fixes/weight_demotes_inert.md). The ranking now
+# applies them as its "quality" factor. Extraction and the gate still multiply
+# the stored weight too, where it only brings archival forward.
+MEMORY_META_DEMOTE = 0.15   # R1 memory narration — judged on the text, not a stored tag
+FRAGMENT_DEMOTE = 0.4       # J5.2 context-dependent fragment — "+frag" in provenance
+DOWNGRADE_DEMOTE = 0.5      # quality gate D7 (context_dependent) and D1 (unverified path)
+
+
+def quality_demotes(payload: dict) -> list[tuple[str, float]]:
+    """The demotes a stored claim carries, as (label, factor), in a fixed order.
+
+    Memory narration is re-checked on the description rather than read from the
+    `+meta` provenance tag: tags written before the pattern was narrowed include
+    real project facts. D9/D10 markers are not here — they demote a thread's
+    authority, which is what thread selection reads.
+    """
+    payload = payload or {}
+    demotes: list[tuple[str, float]] = []
+    if is_memory_meta(str(payload.get("description") or "")):
+        demotes.append(("memory narration", MEMORY_META_DEMOTE))
+    if "+frag" in str(payload.get("provenance") or ""):
+        demotes.append(("fragment", FRAGMENT_DEMOTE))
+    if payload.get("quality") == "context_dependent":
+        demotes.append(("context-dependent", DOWNGRADE_DEMOTE))
+    if payload.get("grounding") == "unverified":
+        demotes.append(("unverified path", DOWNGRADE_DEMOTE))
+    return demotes
+
+
+def quality_factor(payload: dict) -> float:
+    """The product of a claim's quality demotes; 1.0 for a clean claim."""
+    factor = 1.0
+    for _, demote in quality_demotes(payload):
+        factor *= demote
+    return factor
+
+
 # ── D5: cross-type duplicates ────────────────────────────────────────────────
 #
 # Content-hash dedup is per (event_type, description), so the SAME fact stored

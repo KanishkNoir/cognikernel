@@ -50,8 +50,9 @@ class TestGateWiring:
         assert any(c["rule_id"] == "D4" for c in counts)
 
     def test_subject_less_event_is_stored_but_demoted(self, conn: sqlite3.Connection) -> None:
-        # D7 downgrades rather than rejects: still recallable, but weight
-        # collapsed so it falls off the budget-ranked block.
+        # D7 downgrades rather than rejects: still recallable. The stored weight
+        # below is not what ranks it; the ranking's quality factor reads the
+        # marker (tests/unit/storage/test_demotes_reach_ranking.py).
         ids = persist_events(
             [_event("DECISION", "It must not take down the pipeline.")], conn, _META
         )

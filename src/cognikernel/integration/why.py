@@ -221,6 +221,7 @@ def _importance(event: Event, projection: Projection | None) -> dict[str, Any]:
                     "ranked": True,
                     "weight": rec["weight"],
                     "factors": detail.get("factors", {}),
+                    "quality_demotes": detail.get("quality_demotes", []),
                     "sessions_ago": detail.get("sessions_ago"),
                     "mention_count": detail.get("mention_count"),
                     "affected_files": detail.get("affected_files", []),
@@ -385,6 +386,8 @@ def _importance_lines(claim: dict[str, Any]) -> list[str]:
                   f"({_plural(imp['mention_count'], 'mention')})"),
         _line("", f"  × centrality {f['centrality']:.2f} ({files}) × activity {f['activity']:.2f} ({files}) "
                   f"× type {f['type']:.2f}"),
+        _line("", f"  × quality {f.get('quality', 1.0):.2f} "
+                  f"({', '.join(label for label, _ in imp['quality_demotes']) or 'no demotes'})"),
         stored_line,
     ]
 
