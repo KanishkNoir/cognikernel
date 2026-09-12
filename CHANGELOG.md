@@ -78,6 +78,19 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the sessions up to that time; how central a file is still comes from
   today's code, and the output says so.
 
+- **`cognikernel explain-recall <query>` shows why memory retrieved what it
+  did — and why it didn't retrieve something.** It lists the words actually
+  searched, whether each search method was available (keyword search, and
+  meaning-based search, which needs the embedding model loaded), and every
+  candidate each method found, with its rank and whether it made the cut for
+  the `recall` tool. It then walks the per-prompt push step by step: what was
+  dropped for just repeating the prompt, what the session had already seen,
+  and a reason for every accept or reject ("dense rank 7 > 5", "only 1 shared
+  terms, needs 2"). Add `--claim #123` to ask about one claim — including one
+  that was replaced, which recall never searches. The explanation runs the
+  same code recall and the push run, so it can't describe something they
+  don't do.
+
 - **`cognikernel doctor` shows how many extra round trips CogniKernel's own
   tools caused.** It now reports how many API responses a project's sessions
   took, and what share of them CogniKernel added: responses that only called

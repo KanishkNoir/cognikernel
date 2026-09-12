@@ -192,6 +192,17 @@ def _fmt_hit(h: dict, extra: str = "") -> str:
     return f"- ({h['event_type']} · {h['score']:.2f}{extra}) {subj}{desc}"
 
 
+def is_ck1_echo(q_toks: set[str], hit: dict) -> bool:
+    """True when a hit merely restates the prompt (the self-echo filter)."""
+    from cognikernel.delta.supersede import normalize_for_overlap
+
+    d_toks = normalize_for_overlap(hit.get("description", ""))
+    if not d_toks:
+        return False
+    inter = len(q_toks & d_toks)
+    return inter / len(q_toks | d_toks) >= 0.6 or inter / len(d_toks) >= 0.8
+
+
 def select_ck1_hits(
     hits: list[dict],
     prompt_text: str,
@@ -204,14 +215,7 @@ def select_ck1_hits(
 
     q_toks = normalize_for_overlap(prompt_text)
     if q_toks:
-        def _echo(h: dict) -> bool:
-            d_toks = normalize_for_overlap(h.get("description", ""))
-            if not d_toks:
-                return False
-            inter = len(q_toks & d_toks)
-            return inter / len(q_toks | d_toks) >= 0.6 or inter / len(d_toks) >= 0.8
-
-        hits = [h for h in hits if not _echo(h)]
+        hits = [h for h in hits if not is_ck1_echo(q_toks, h)]
     if seen_ids:
         hits = [h for h in hits if h["id"] not in seen_ids]
     return _ck1_dual_evidence(hits, prompt_text, config)
@@ -235,39 +239,73 @@ def _ck1_dual_evidence(
                   cold-path ceiling)
       dense only: dense_rank ≤ 2 AND cosine ≥ 0.60 (self-comparable within one axis)
     """
+    passed = [h for h, ok, _ in ck1_gate_decisions(hits, prompt_text, config) if ok]
+    return passed[: config.ck1_max_events]
+
+
+def ck1_gate_decisions(
+    hits: list[dict],
+    prompt_text: str,
+    config: Config,
+) -> list[tuple[dict, bool, str]]:
+    """The dual-evidence gate's verdict for every hit, with its reason.
+
+    The single implementation of the gate: `_ck1_dual_evidence` keeps the passes,
+    and `cognikernel explain-recall` (S5 T-501) prints every reason, so an
+    explanation can never describe a gate the live path does not run. Checks run
+    in the same order as the original conjunctions; the first failing check is
+    the reason given.
+    """
     from cognikernel.delta.supersede import normalize_for_overlap
 
     dense_live = any(h.get("dense_rank") is not None for h in hits)
     bm25_live = any(h.get("bm25_rank") is not None for h in hits)
     q_toks = normalize_for_overlap(prompt_text)
-    passed: list[dict] = []
+    decisions: list[tuple[dict, bool, str]] = []
     for h in hits:
         d, b = h.get("dense_rank"), h.get("bm25_rank")
+        shared = len(q_toks & normalize_for_overlap(h.get("description", "")))
         if dense_live and bm25_live:
-            ok = (
-                d is not None and b is not None
-                and d <= config.ck1_dense_rank_max
-                and b <= config.ck1_bm25_rank_max
-            )
+            if d is None:
+                ok, reason = False, "both axes ran, but the dense axis did not surface it"
+            elif b is None:
+                ok, reason = False, "both axes ran, but the bm25 axis did not surface it"
+            elif d > config.ck1_dense_rank_max:
+                ok, reason = False, f"dense rank {d} > {config.ck1_dense_rank_max}"
+            elif b > config.ck1_bm25_rank_max:
+                ok, reason = False, f"bm25 rank {b} > {config.ck1_bm25_rank_max}"
             # Lexical anchor even in dual mode: rank agreement alone is too
             # permissive on short/generic prompts in a small store (measured:
             # "yep i would like to replace the constraint" passed ≤5∧≤5).
-            if ok and config.ck1_dual_anchor_terms:
-                shared = q_toks & normalize_for_overlap(h.get("description", ""))
-                ok = len(shared) >= config.ck1_dual_anchor_terms
-        elif bm25_live:
-            if b is None or b > 2:
-                ok = False
+            elif config.ck1_dual_anchor_terms and shared < config.ck1_dual_anchor_terms:
+                ok, reason = False, (f"both axes agree, but only {shared} shared terms "
+                                     f"(needs {config.ck1_dual_anchor_terms})")
             else:
-                shared = q_toks & normalize_for_overlap(h.get("description", ""))
-                ok = len(shared) >= config.ck1_min_term_overlap
+                ok, reason = True, f"both axes agree (dense rank {d}, bm25 rank {b}, {shared} shared terms)"
+        elif bm25_live:
+            if b is None:
+                ok, reason = False, "dense axis unavailable, and bm25 did not surface it"
+            elif b > 2:
+                ok, reason = False, f"dense axis unavailable; bm25 rank {b} > 2"
+            elif shared < config.ck1_min_term_overlap:
+                ok, reason = False, (f"dense axis unavailable; bm25 rank {b}, but only {shared} shared terms "
+                                     f"(needs {config.ck1_min_term_overlap})")
+            else:
+                ok, reason = True, f"bm25 rank {b} with {shared} shared terms (dense axis unavailable)"
         elif dense_live:
-            ok = d is not None and d <= 2 and (h.get("cosine") or 0.0) >= 0.60
+            cosine = h.get("cosine") or 0.0
+            if d is None:
+                ok, reason = False, "bm25 axis unavailable, and dense did not surface it"
+            elif d > 2:
+                ok, reason = False, f"bm25 axis unavailable; dense rank {d} > 2"
+            elif cosine < 0.60:
+                ok, reason = False, f"bm25 axis unavailable; cosine {cosine:.2f} < 0.60"
+            else:
+                ok, reason = True, f"dense rank {d}, cosine {cosine:.2f} (bm25 axis unavailable)"
         else:
-            ok = False
-        if ok:
-            passed.append(h)
-    return passed[: config.ck1_max_events]
+            ok, reason = False, "no retrieval axis surfaced any candidate"
+        decisions.append((h, ok, reason))
+    return decisions
 
 
 def recall_for_prompt(

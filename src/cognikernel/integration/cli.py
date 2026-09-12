@@ -318,6 +318,26 @@ def main() -> None:
         help="Output the explanation as JSON",
     )
 
+    # ── explain-recall ────────────────────────────────────────────────────────
+    p_explain = sub.add_parser(
+        "explain-recall",
+        help="Explain what recall and the per-prompt push retrieve for a query, and why",
+    )
+    p_explain.add_argument("project_path", help="Path to the project root")
+    p_explain.add_argument("query", help="The query or prompt text to explain")
+    p_explain.add_argument("--limit", type=int, default=8, metavar="K",
+                           help="Results recall returns (default: 8, as the MCP tool)")
+    p_explain.add_argument("--per-axis", type=int, default=20, dest="per_axis", metavar="N",
+                           help="Candidates each axis contributes (default: 20); widen to see near misses")
+    p_explain.add_argument("--claim", metavar="ID",
+                           help='Explain why one claim ("#123") was or was not retrieved')
+    p_explain.add_argument("--session", metavar="SESSION_ID",
+                           help="Apply this session's render ledger, as the per-prompt push does")
+    p_explain.add_argument("--model-wait", type=float, default=30.0, dest="model_wait", metavar="SECONDS",
+                           help="Seconds to wait for the embedding model before explaining (default: 30; "
+                                "0 explains it as a cold hook sees it)")
+    p_explain.add_argument("--json", action="store_true", dest="as_json", help="Output the explanation as JSON")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -344,6 +364,8 @@ def main() -> None:
         _cmd_failures(args)
     elif args.command == "why":
         _cmd_why(args)
+    elif args.command == "explain-recall":
+        _cmd_explain_recall(args)
     elif args.command == "rebuild":
         _cmd_rebuild(args)
     elif args.command == "lookup":
@@ -1463,6 +1485,51 @@ def _cmd_show_as_of(args: argparse.Namespace) -> None:
         print(json.dumps(data, indent=2))
         return
     print(render_as_of(data))
+
+
+def _cmd_explain_recall(args: argparse.Namespace) -> None:
+    """S5 T-501: every stage of recall and the per-prompt push, with its reason."""
+    import importlib.util
+    import re
+
+    from cognikernel.integration.explain_recall import explain_recall, render_explain
+    from cognikernel.storage.connection import get_connection, get_db_path, resolve_project_id
+    from cognikernel.storage.migrations import run_migrations
+
+    claim_id = None
+    if args.claim:
+        match = re.match(r"^#?(\d+)$", args.claim.strip())
+        if not match:
+            print(f'ERROR: --claim expects a claim id such as "#123", got {args.claim!r}', file=sys.stderr)
+            sys.exit(1)
+        claim_id = int(match.group(1))
+
+    config = Config.load(project_path=args.project_path)
+    project_id = resolve_project_id(args.project_path, config)
+    db_path = get_db_path(config, project_id)
+    if not db_path.exists():
+        print(f"No database found for {Path(args.project_path).resolve()}", file=sys.stderr)
+        sys.exit(1)
+
+    # An explicit wait, like `cognikernel warm`: the explanation should show the
+    # dense axis a warm session uses. --model-wait 0 shows what a cold hook sees.
+    if args.model_wait and args.model_wait > 0 and importlib.util.find_spec("fastembed") is not None:
+        try:
+            from cognikernel.embedding.model import ensure_ready
+
+            ensure_ready(timeout=args.model_wait)
+        except Exception:
+            pass  # reported as "not loaded" in the explanation
+
+    with get_connection(db_path) as conn:
+        run_migrations(conn)
+        data = explain_recall(conn, project_id, args.query, config, limit=args.limit,
+                              per_axis=args.per_axis, claim_id=claim_id, session_id=args.session)
+
+    if args.as_json:
+        print(json.dumps(data, indent=2))
+        return
+    print(render_explain(data))
 
 
 def _cmd_why(args: argparse.Namespace) -> None:
