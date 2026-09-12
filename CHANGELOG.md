@@ -50,6 +50,21 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`cognikernel why <subject>` explains a claim.** Give it a claim id
+  (`#123`) or words from the claim, and it shows what the claim says, which
+  session it came from — as "session 2 of 4", in the order the sessions
+  happened, not as an opaque id — and the sentence in the conversation it was
+  extracted from, and who said it. It also shows what the quality gate noted
+  when the claim was admitted, and its history: the claims it replaced or was
+  replaced by, when, and which rule decided it. Replaced claims can be looked
+  up too, which is the point when you are asking why memory changed its mind.
+  Anything the store did not record — the commit a claim was captured
+  against, or a precise sentence position, which the current extractor never
+  saves — is named as "not recorded" instead of being left out. The source
+  sentence is found by searching the claim's own evidence, so it is shown as
+  located, not as recorded. Long histories are shortened around the claim;
+  `--json` keeps everything.
+
 - **`cognikernel doctor` shows how many extra round trips CogniKernel's own
   tools caused.** It now reports how many API responses a project's sessions
   took, and what share of them CogniKernel added: responses that only called
