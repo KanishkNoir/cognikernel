@@ -26,6 +26,19 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The assistant's own running commentary was being remembered as project
+  decisions.** Two kinds of it reached the session block. Lines like
+  "Now let's run the full test suite." or "Let me check the frontend structure
+  first." were stored as decisions and open work items. They now count as the
+  assistant narrating its next step and rank at half weight, including ones
+  already in your store; a sentence that gives a reason ("…instead, because it
+  matches production") is still kept as a decision. And short "Label: value"
+  lines that frame an answer or report a result — "Summary: …", "Verified:
+  13/13 tests pass", "Answer: …" — are no longer rescued as settings, while
+  settings written that way ("Max attempts: 2") still are. Found in the micro
+  benchmark, where the top two decisions in one session were the agent's own
+  answer lines.
+
 - **Claims CogniKernel marked as low quality still ranked like any other.**
   Since 0.1.1 the quality gate has marked statements whose subject is missing
   ("It must not take down the pipeline") and file paths that don't exist, and

@@ -1,4 +1,6 @@
 """Tests for the shared defect detectors (spec §2)."""
+import pytest
+
 from cognikernel.quality.detectors import (
     DetectorHit,
     detect_boilerplate,
@@ -99,6 +101,56 @@ class TestQualityDemotes:
 
         assert quality_demotes({"description": "Add the schema.", "quality": "instruction_not_thread"}) == []
         assert quality_demotes({"description": "This is the next item.", "quality": "thread_reference"}) == []
+
+    def test_assistant_step_narration_is_demoted(self) -> None:
+        from cognikernel.quality.detectors import STEP_NARRATION_DEMOTE, quality_demotes
+
+        payload = {"description": "Now let's run the full test suite.", "source_role": "assistant"}
+
+        assert quality_demotes(payload) == [("step narration", STEP_NARRATION_DEMOTE)]
+
+    def test_the_same_words_from_the_user_are_an_instruction_not_narration(self) -> None:
+        from cognikernel.quality.detectors import quality_demotes
+
+        assert quality_demotes({"description": "Now let's run the full test suite.", "source_role": "user"}) == []
+
+
+class TestIsStepNarration:
+    """D11 — the assistant announcing its next step, stored as a decision.
+
+    Measured 2026-09-12: 439 of 9,023 assistant statements in the local stores
+    match a broad step-announcement pattern; in a labelled sample of 80, about 10
+    carried a real decision, all with a decision verb or a stated rationale.
+    Sentences here are synthetic, one per measured shape.
+    """
+
+    @pytest.mark.parametrize("text", [
+        "Now let's run the full test suite.",
+        "Now update dispatcher.py to use the renamed store API.",
+        "Now adding tests for the new key-derivation helper.",
+        "Let me check the frontend project structure first.",
+        "Let's also verify the config module fails fast.",
+        "I'll start by pulling relevant memory and reading the supporting files.",
+        "I’m going to inspect the research docs and result summaries.",
+        "Now committing and pushing the sprint.",
+    ])
+    def test_flags_step_announcements(self, text: str) -> None:
+        from cognikernel.quality.detectors import is_step_narration
+
+        assert is_step_narration(text)
+
+    @pytest.mark.parametrize("text", [
+        "Let's use the SDK client instead, which matches production.",
+        "Let me fold that into the design as a small model registry rather than a hardcoded model.",
+        "I'll also bump the attempt cap from 3 to 6.",
+        "I'll compute a deadline once in route() and thread it through to the drain loop.",
+        "Now we store timestamps as integer epoch milliseconds.",
+        "Let me run the suite again because the last change touched the store schema.",
+    ])
+    def test_a_decision_or_a_stated_reason_is_not_narration(self, text: str) -> None:
+        from cognikernel.quality.detectors import is_step_narration
+
+        assert not is_step_narration(text)
 
 
 class TestDetectSubjectLess:
