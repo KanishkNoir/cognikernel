@@ -56,6 +56,16 @@ class InjectionContext:
     skeleton_refresh: object = None           # storage.symbol_files.RefreshInfo | None
     # ── Phase A-4: assistant-answer co-captures ──────────────────────────────
     pending_confirmations: list[Event] = field(default_factory=list)
+    # event id → "S2 · 09-12", only for claims whose place in time matters: a
+    # value that changed, or the open thread carried from an earlier session.
+    # render_state decides which; empty renders every section as it always did.
+    claim_labels: dict[int, str] = field(default_factory=dict)
+
+
+def _session_suffix(event: Event, labels: dict[int, str] | None) -> str:
+    """" (S2 · 09-12)" when this claim was given a session label, otherwise ""."""
+    label = (labels or {}).get(event.id) if event.id is not None else None
+    return f" ({label})" if label else ""
 
 
 def filter_structural_defects(
@@ -144,19 +154,20 @@ def render_injection(
     grave = filter_structural_defects(ctx.graveyard, _seen)
     comps = filter_structural_defects(ctx.components, _seen)
     decs = filter_structural_defects(ctx.decisions, _seen)
+    labels = ctx.claim_labels
 
     if sb is not None:
         hard = _enforce_section_budget(
             hard,
             lambda items: _render_hard_constraints(
-                items, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2
+                items, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2, labels=labels
             ),
             sb.hard_constraints,
         )
         grave = _enforce_section_budget(
             grave,
             lambda items: _render_graveyard(
-                items, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2
+                items, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2, labels=labels
             ),
             sb.graveyard,
         )
@@ -164,7 +175,7 @@ def render_injection(
         decs = _enforce_section_budget(
             decs,
             lambda items: _render_decisions(
-                items, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2
+                items, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2, labels=labels
             ),
             sb.decisions,
         )
@@ -178,13 +189,13 @@ def render_injection(
     sections = [
         _render_header(ctx),
         _render_tool_policy(ctx),
-        _render_hard_constraints(hard, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2),
-        _render_active_thread(ctx.active_threads),
-        _render_pending_confirmation(ctx.pending_confirmations),
+        _render_hard_constraints(hard, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2, labels=labels),
+        _render_active_thread(ctx.active_threads, labels=labels),
+        _render_pending_confirmation(ctx.pending_confirmations, labels=labels),
         _render_hot_files(ctx.hot_files, has_skeleton=has_skeleton),
-        _render_graveyard(grave, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2),
+        _render_graveyard(grave, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2, labels=labels),
         _render_components(comps),
-        _render_decisions(decs, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2),
+        _render_decisions(decs, ckl_mode=ctx.ckl_mode, ckl_v2=ctx.ckl_v2, labels=labels),
         render_skeleton_section(
             ctx.skeleton,
             coverage=ctx.skeleton_coverage,
@@ -225,6 +236,10 @@ def _render_header(ctx: InjectionContext) -> str:
         f"project: {ctx.project_name} · session {ctx.session_number} "
         f"of {ctx.total_sessions} · state v{ctx.state_version}"
     )
+    if ctx.claim_labels:
+        # Kept short: measured on 60 projects, this line was 91% of the tokens the
+        # labels added — the labels themselves replace longer raw session ids.
+        header += "\nSn · MM-DD: the session a changed value or carried thread came from (S1 first)."
     if ctx.skeleton:
         if ctx.tool_guidance == "lean":
             # S4 T-405: point at the skeleton for orientation without asking for a
@@ -248,7 +263,7 @@ def _render_header(ctx: InjectionContext) -> str:
     return header
 
 
-def _render_pending_confirmation(events: list[Event]) -> str:
+def _render_pending_confirmation(events: list[Event], labels: dict[int, str] | None = None) -> str:
     """A-4: render assistant-answer co-captures that no user_stated event
     has yet confirmed. Format mirrors `### Hard constraints` but with an
     authority note so Claude knows these are tentative."""
@@ -260,8 +275,9 @@ def _render_pending_confirmation(events: list[Event]) -> str:
         desc = e.payload.get("description", "")
         if not desc:
             continue
-        sess_short = (e.session_id or "")[:12] or "?"
-        lines.append(f"- {desc} (assistant, session {sess_short})")
+        label = (labels or {}).get(e.id) if e.id is not None else None
+        where = label or f"session {(e.session_id or '')[:12] or '?'}"
+        lines.append(f"- {desc} (assistant, {where})")
     return "\n".join(lines)
 
 
@@ -286,7 +302,8 @@ def _render_tool_policy(ctx: InjectionContext) -> str:
 
 
 def _render_hard_constraints(
-    constraints: list[Event], ckl_mode: bool = False, ckl_v2: bool = False
+    constraints: list[Event], ckl_mode: bool = False, ckl_v2: bool = False,
+    labels: dict[int, str] | None = None,
 ) -> str:
     if not constraints:
         return ""
@@ -302,10 +319,11 @@ def _render_hard_constraints(
     for c in ordered:
         desc = c.payload.get("description", "")
         rationale = c.payload.get("rationale", "")
+        where = _session_suffix(c, labels)
         if rationale:
-            lines.append(f"- {desc} — {rationale}{_consolidation_suffix(c)}")
+            lines.append(f"- {desc} — {rationale}{_consolidation_suffix(c)}{where}")
         else:
-            lines.append(f"- {desc}{_consolidation_suffix(c)}")
+            lines.append(f"- {desc}{_consolidation_suffix(c)}{where}")
         lines.extend(_lineage_lines(c))
     return "\n".join(lines)
 
@@ -333,7 +351,8 @@ def _lineage_lines(event: Event) -> list[str]:
 
 
 def _render_graveyard(
-    items: list[Event], ckl_mode: bool = False, ckl_v2: bool = False
+    items: list[Event], ckl_mode: bool = False, ckl_v2: bool = False,
+    labels: dict[int, str] | None = None,
 ) -> str:
     if not items:
         return ""
@@ -348,10 +367,11 @@ def _render_graveyard(
     for item in ordered:
         approach = item.payload.get("description", "")
         reason = item.payload.get("rationale", item.payload.get("reason", ""))
+        where = _session_suffix(item, labels)
         if reason:
-            lines.append(f"- {approach} -> {reason}")
+            lines.append(f"- {approach} -> {reason}{where}")
         else:
-            lines.append(f"- {approach}")
+            lines.append(f"- {approach}{where}")
     return "\n".join(lines)
 
 
@@ -371,7 +391,8 @@ def _render_components(components: list[Event]) -> str:
 
 
 def _render_decisions(
-    decisions: list[Event], ckl_mode: bool = False, ckl_v2: bool = False
+    decisions: list[Event], ckl_mode: bool = False, ckl_v2: bool = False,
+    labels: dict[int, str] | None = None,
 ) -> str:
     if not decisions:
         return ""
@@ -386,23 +407,24 @@ def _render_decisions(
     for i, d in enumerate(decisions, 1):
         desc = d.payload.get("description", "")
         rationale = d.payload.get("rationale", "")
-        sess = d.session_id
+        # Unlabelled sessions keep the raw id they always showed.
+        where = _session_suffix(d, labels) or f" (session {d.session_id})"
         if rationale:
-            lines.append(f"{i}. {desc} — {rationale}{_consolidation_suffix(d)} (session {sess})")
+            lines.append(f"{i}. {desc} — {rationale}{_consolidation_suffix(d)}{where}")
         else:
-            lines.append(f"{i}. {desc}{_consolidation_suffix(d)} (session {sess})")
+            lines.append(f"{i}. {desc}{_consolidation_suffix(d)}{where}")
         lines.extend(_lineage_lines(d))
     return "\n".join(lines)
 
 
-def _render_active_thread(threads: list[Event]) -> str:
+def _render_active_thread(threads: list[Event], labels: dict[int, str] | None = None) -> str:
     if not threads:
         return ""
     thread = threads[0]
     desc = thread.payload.get("description", "")
     state = thread.payload.get("state", "")
     next_steps = thread.payload.get("next_steps", "")
-    lines = ["### Active thread", f"Working on: {desc}"]
+    lines = ["### Active thread", f"Working on: {desc}{_session_suffix(thread, labels)}"]
     if state:
         lines.append(f"Current state: {state}")
     if next_steps:

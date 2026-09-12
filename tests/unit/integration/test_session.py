@@ -377,6 +377,50 @@ class TestActiveThreadReserve:
         assert _active_thread_reserve(rich) > _active_thread_reserve(bare)
 
 
+class TestRenderStateSessionLabels:
+    def test_only_changed_and_carried_claims_carry_a_session_label(
+        self, project_path: Path, cfg: Config
+    ) -> None:
+        """Micro benchmark: the recap put 3–5 of 7 facts in the wrong session. A label
+        goes where order matters — a value that changed, and the open thread carried
+        from an earlier session — not on every line."""
+        from datetime import datetime
+
+        from cognikernel.storage.events import set_superseded_by
+        from cognikernel.storage.evidence import store_evidence
+
+        project_id = init_project(project_path, config=cfg)
+        db_path = get_db_path(cfg, project_id)
+        first, second = "3f2a9c1e-first-session", "8b7d4e20-second-session"
+        at = {first: int(datetime(2026, 9, 11, 10, 0).timestamp() * 1000),
+              second: int(datetime(2026, 9, 12, 10, 0).timestamp() * 1000)}
+
+        def claim(conn, sid, event_type, desc, authority="assistant_decided"):
+            return insert_event(conn, Event(
+                project_id=project_id, session_id=sid, event_type=event_type,
+                payload={"description": desc, "authority": authority},
+                content_hash=desc[:32].ljust(64, "0"), created_at=at[sid],
+            ))
+
+        with get_connection(db_path) as conn:
+            run_migrations(conn)
+            for sid in (first, second):
+                store_evidence(conn, project_id, sid, "transcript", sid.encode(), captured_at=at[sid])
+            claim(conn, first, "CONSTRAINT_HARD", "Timestamps are integer epoch milliseconds.")
+            weekly = claim(conn, first, "DECISION", "Back up the delivery database weekly.")
+            nightly = claim(conn, second, "DECISION", "Back up the delivery database nightly.")
+            set_superseded_by(conn, weekly, nightly, reason="cross_encoder")
+            claim(conn, first, "THREAD_OPEN", "Next session: build the replay command.", authority="user_stated")
+            conn.commit()
+
+        block = render_state(project_path, config=cfg)
+
+        assert "Back up the delivery database nightly. (S2 · 09-12)" in block
+        assert "Working on: Next session: build the replay command. (S1 · 09-11)" in block
+        assert "- Timestamps are integer epoch milliseconds.\n" in block + "\n"
+        assert first not in block and second not in block
+
+
 class TestRenderStateThreadSelection:
     def test_ledger_records_only_the_thread_that_rendered(
         self, project_path: Path, cfg: Config

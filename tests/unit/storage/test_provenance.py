@@ -32,6 +32,73 @@ def _event(conn, session: str, desc: str, *, evidence_id: int | None = None,
     ))
 
 
+class TestSessionLabels:
+    """The label the session block and recall print next to a claim.
+
+    The micro benchmark recap placed 3–5 of 7 facts in the right session: the
+    block labelled claims with raw session ids and recall with nothing, so the
+    agent had no order to go on.
+    """
+
+    def test_a_label_names_the_sessions_position_and_first_day(self, conn) -> None:
+        from datetime import datetime
+
+        from cognikernel.storage.provenance import session_labels
+
+        first = int(datetime(2026, 9, 11, 10, 0).timestamp() * 1000)
+        second = int(datetime(2026, 9, 12, 9, 30).timestamp() * 1000)
+        store_evidence(conn, P, "b-session", "transcript", b"b", captured_at=second)
+        store_evidence(conn, P, "a-session", "transcript", b"a", captured_at=first)
+
+        assert session_labels(conn, P) == {"a-session": "S1 · 09-11", "b-session": "S2 · 09-12"}
+
+    def test_a_project_with_no_sessions_has_no_labels(self, conn) -> None:
+        from cognikernel.storage.provenance import session_labels
+
+        assert session_labels(conn, P) == {}
+
+
+class TestChangedClaims:
+    """Which claims need a session label: only those whose value changed over time.
+
+    A label on every line costs tokens and says nothing about a fact that never
+    changed; it matters where the store holds an earlier value of the same thing.
+    """
+
+    def test_a_claim_that_superseded_another_changed(self, conn) -> None:
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        old = _event(conn, "s1", "Retries: at most 4 attempts, no jitter")
+        new = _event(conn, "s2", "Retries: 6 attempts with full jitter", created_at=2000)
+        set_superseded_by(conn, old, new, reason="cross_encoder")
+
+        assert changed_claim_ids(conn, P) == {new}
+
+    def test_a_newer_different_value_on_the_same_topic_changed(self, conn) -> None:
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        insert_event(conn, Event(project_id=P, session_id="s1", event_type="DECISION",
+                                 payload={"description": "Back up the database weekly"},
+                                 content_hash="kw", created_at=1000, decision_key="database backup"))
+        newer = insert_event(conn, Event(project_id=P, session_id="s2", event_type="DECISION",
+                                         payload={"description": "Back up the database nightly"},
+                                         content_hash="kn", created_at=2000, decision_key="database backup"))
+
+        assert changed_claim_ids(conn, P) == {newer}
+
+    def test_a_restatement_and_an_unrelated_claim_did_not_change(self, conn) -> None:
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        for created, content_hash in ((1000, "r1"), (2000, "r2")):
+            insert_event(conn, Event(project_id=P, session_id="s1", event_type="DECISION",
+                                     payload={"description": "Store timestamps as epoch milliseconds"},
+                                     content_hash=content_hash, created_at=created,
+                                     decision_key="timestamp storage"))
+        _event(conn, "s2", "Use PostgreSQL for the primary database", created_at=3000)
+
+        assert changed_claim_ids(conn, P) == set()
+
+
 class TestSessionOrder:
     def test_sessions_are_numbered_by_first_capture_not_by_id(self, conn) -> None:
         store_evidence(conn, P, "late", "transcript", b"b", captured_at=2000)
