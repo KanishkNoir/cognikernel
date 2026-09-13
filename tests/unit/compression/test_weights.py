@@ -176,11 +176,10 @@ class TestComputeWeight:
         from cognikernel.compression.weights import weight_factors
 
         clean = _make_event(payload={"description": "Use SQLite", "rationale": ""})
-        downgraded = _make_event(payload={"description": "Use SQLite", "rationale": "",
-                                          "quality": "context_dependent"}, weight=0.5)
+        narration = _make_event(payload={"description": "CogniKernel's Stop hook will persist it.", "rationale": ""})
 
-        assert weight_factors(downgraded, {}, {})["quality"] == 0.5
-        assert compute_weight(downgraded, {}, {}) == pytest.approx(compute_weight(clean, {}, {}) * 0.5)
+        assert weight_factors(narration, {}, {})["quality"] == 0.15
+        assert compute_weight(narration, {}, {}) == pytest.approx(compute_weight(clean, {}, {}) * 0.15)
 
     def test_old_stable_thread_close_near_zero(self) -> None:
         e = _make_event(event_type="THREAD_CLOSE", last_mentioned_session=0)

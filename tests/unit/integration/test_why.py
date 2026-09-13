@@ -376,9 +376,10 @@ class TestWhyCommand:
         assert importance["ranked"] is True
         assert list(importance["factors"]) == ["base", "recency", "repetition", "centrality", "activity", "type",
                                                "quality"]
-        # The fixture claim carries the gate's context_dependent marker.
-        assert importance["factors"]["quality"] == 0.5
-        assert importance["quality_demotes"] == [["context-dependent", 0.5]]
+        # The fixture claim carries the gate's context_dependent marker, which no longer
+        # demotes (research/fixes/heuristics_audit_2026-09-13.md).
+        assert importance["factors"]["quality"] == 1.0
+        assert importance["quality_demotes"] == []
         assert importance["weight"] == pytest.approx(math.prod(importance["factors"].values()))
 
     def test_importance_matches_the_weight_the_block_ranks_by(self, project, capsys) -> None:
@@ -404,7 +405,7 @@ class TestWhyCommand:
         assert "importance" in out and "rank 1 of 1 decisions" in out
         for name in ("base", "recency", "repetition", "centrality", "activity", "type"):
             assert f"{name} " in out
-        assert "quality 0.50 (context-dependent)" in out
+        assert "quality 1.00 (no demotes)" in out
 
     def test_a_superseded_claim_is_not_ranked(self, project, capsys) -> None:
         proj, old, new = project

@@ -266,11 +266,12 @@ _CONTENT_WORD_RE = re.compile(r"[a-z0-9]{3,}")
 # ("the session context has…", "the recall surfaces…") rather than stating a project
 # fact. The predicate lives in quality.detectors.is_memory_meta, a leaf, so the ranking
 # can read it too. We DEMOTE (not drop): real facts survive via their canonical
-# (non-meta) capture. The ranking applies these factors itself (the quality
-# factor in compression.weights); multiplying the stored weight here only brings
-# archival forward, because the composite ranking never reads the stored weight.
+# (non-meta) capture. The ranking applies the memory-meta demote itself (the
+# quality factor in compression.weights); multiplying the stored weight here only
+# brings archival forward, because the composite ranking never reads the stored
+# weight. Fragments no longer lower rank (research/fixes/heuristics_audit_2026-09-13.md).
 _META_DEMOTE = MEMORY_META_DEMOTE  # memory-meta sentences
-_FRAG_DEMOTE = FRAGMENT_DEMOTE     # context-dependent fragments (J5.2)
+_FRAG_DEMOTE = FRAGMENT_DEMOTE     # context-dependent fragments (J5.2), stored weight only
 
 # Deterministic backstop for label-value facts ("Max attempts: 2 (...)",
 # "Recovery window: 30 s", "Open threshold: 3 ..."). The salience head was not

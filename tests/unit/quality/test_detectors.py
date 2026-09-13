@@ -71,20 +71,28 @@ class TestQualityDemotes:
         assert quality_demotes(payload) == []
         assert quality_factor(payload) == 1.0
 
-    def test_each_marker_names_its_demote(self) -> None:
+    def test_memory_narration_names_its_demote(self) -> None:
         from cognikernel.quality.detectors import quality_demotes
 
         assert quality_demotes({"description": "CogniKernel's Stop hook will persist it."}) == [("memory narration", 0.15)]
-        assert quality_demotes({"description": "Use it for retries.", "provenance": "salience_v2_broad+frag"}) == [("fragment", 0.4)]
-        assert quality_demotes({"description": "It must not stall.", "quality": "context_dependent"}) == [("context-dependent", 0.5)]
-        assert quality_demotes({"description": "src/x.py modified", "grounding": "unverified"}) == [("unverified path", 0.5)]
+
+    def test_fragment_subject_less_and_unverified_markers_do_not_demote(self) -> None:
+        """Audit 2026-09-13 (research/fixes/heuristics_audit_2026-09-13.md): on 59 real
+        blocks the fragment and unverified-path demotes changed nothing, and the
+        context-dependent demote kept 13 lines out, about 9 of them real facts."""
+        from cognikernel.quality.detectors import quality_demotes
+
+        assert quality_demotes({"description": "Use it for retries.", "provenance": "salience_v2_broad+frag"}) == []
+        assert quality_demotes({"description": "It must not stall.", "quality": "context_dependent"}) == []
+        assert quality_demotes({"description": "src/x.py modified", "grounding": "unverified"}) == []
 
     def test_demotes_multiply(self) -> None:
         from cognikernel.quality.detectors import quality_factor
 
-        payload = {"description": "CogniKernel's Stop hook will persist it.", "provenance": "head+meta+frag"}
+        payload = {"description": "Now let me check what CogniKernel's skeleton tool returns.",
+                   "source_role": "assistant"}
 
-        assert quality_factor(payload) == 0.15 * 0.4
+        assert quality_factor(payload) == 0.15 * 0.5
 
     def test_memory_narration_is_judged_on_the_text_not_a_stored_tag(self) -> None:
         """Old `+meta` tags include the false matches #49 removed; the text is re-checked."""

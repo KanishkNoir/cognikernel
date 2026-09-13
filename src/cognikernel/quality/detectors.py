@@ -244,15 +244,21 @@ def detect_step_narration(text: str, event_type: str, source_role: str) -> Detec
 
 # ── What a stored claim's markers cost it in the ranking ─────────────────────
 #
-# These demotes used to multiply only the stored weight. The composite ranking
-# (compression.weights) has recomputed every weight from scratch since
-# 2026-05-29 and never read the stored one, so none of them ever moved a claim
-# in the session block (research/fixes/weight_demotes_inert.md). The ranking now
-# applies them as its "quality" factor. Extraction and the gate still multiply
-# the stored weight too, where it only brings archival forward.
+# The composite ranking (compression.weights) has recomputed every weight from
+# scratch since 2026-05-29 and never reads the stored one, so a demote has to be
+# its "quality" factor to move a claim in the session block
+# (research/fixes/weight_demotes_inert.md).
+#
+# Only two demotes earn that place. Ablated on 59 real blocks
+# (research/fixes/heuristics_audit_2026-09-13.md), memory narration kept 28 lines
+# out, mostly junk, and step narration 4, all narration. The fragment and
+# unverified-path markers changed nothing, and the context-dependent marker kept
+# 13 lines out, about 9 of them real facts, so those markers no longer demote.
+# Extraction and the gate still multiply the stored weight by the factors below,
+# which only brings archival forward.
 MEMORY_META_DEMOTE = 0.15   # R1 memory narration — judged on the text, not a stored tag
-FRAGMENT_DEMOTE = 0.4       # J5.2 context-dependent fragment — "+frag" in provenance
-DOWNGRADE_DEMOTE = 0.5      # quality gate D7 (context_dependent) and D1 (unverified path)
+FRAGMENT_DEMOTE = 0.4       # J5.2 context-dependent fragment — stored weight only
+DOWNGRADE_DEMOTE = 0.5      # quality gate downgrades (D1, D7, D9, D10, D11) — stored weight only
 # D11 assistant step narration — judged on the text, like R1. Gentler than R1:
 # the verb list is a heuristic and about one flagged claim in ten embeds a design
 # detail. Measured on 59 local projects, 0.5 already moves 38 of the 42 narration
@@ -265,8 +271,9 @@ def quality_demotes(payload: dict) -> list[tuple[str, float]]:
 
     Memory narration is re-checked on the description rather than read from the
     `+meta` provenance tag: tags written before the pattern was narrowed include
-    real project facts. D9/D10 markers are not here — they demote a thread's
-    authority, which is what thread selection reads.
+    real project facts. The `+frag`, context_dependent and unverified markers are
+    not here (see above). D9/D10 markers are not here either — they demote a
+    thread's authority, which is what thread selection reads.
     """
     payload = payload or {}
     demotes: list[tuple[str, float]] = []
@@ -277,12 +284,6 @@ def quality_demotes(payload: dict) -> list[tuple[str, float]]:
     # are covered; the gate's step_narration marker is not read here as well.
     if payload.get("source_role") == _ASSISTANT and is_step_narration(description):
         demotes.append(("step narration", STEP_NARRATION_DEMOTE))
-    if "+frag" in str(payload.get("provenance") or ""):
-        demotes.append(("fragment", FRAGMENT_DEMOTE))
-    if payload.get("quality") == "context_dependent":
-        demotes.append(("context-dependent", DOWNGRADE_DEMOTE))
-    if payload.get("grounding") == "unverified":
-        demotes.append(("unverified path", DOWNGRADE_DEMOTE))
     return demotes
 
 

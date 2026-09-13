@@ -19,12 +19,10 @@ path reaches.
 VERDICTS ARE GRADED BY RECOVERABILITY. D2 and D4 reject: box-drawing artifacts
 and harness boilerplate carry no project content, so keeping them helps nobody.
 D7 downgrades: a subject-less statement still carries a real fact, just one the
-reader cannot resolve, and its harm is occupying the budget-ranked block. The
-ranking's quality factor (compression.weights) reads the payload marker and
-halves the claim's rank, leaving it reachable through recall and find_related.
-The halved STORED weight does not affect rank — the composite ranking never
-reads it — and only brings archival forward. Until the quality factor existed,
-that stored halving was the whole downgrade, so it never moved a claim.
+reader cannot resolve. The downgrade marks it and halves the STORED weight,
+which only brings archival forward; the composite ranking never reads it. The
+marker does not lower rank either: ablated on 59 real blocks, ranking on it kept
+more real facts out than junk (research/fixes/heuristics_audit_2026-09-13.md).
 
 FAILURE POSTURE: the gate never blocks a session. Any exception inside a
 detector produces an 'admit' verdict tagged rule_id='gate_error', which the
