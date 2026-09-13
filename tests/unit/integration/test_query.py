@@ -122,33 +122,15 @@ def _two_session_project(tmp_path, monkeypatch):
     return proj, first, second, ids
 
 
-def test_recall_labels_a_claim_whose_value_changed_and_nothing_else(tmp_path, monkeypatch) -> None:
-    """A label goes where the store holds an earlier value of the same thing."""
+def test_recall_results_carry_no_session_labels(tmp_path, monkeypatch) -> None:
+    """Labels on changed values were removed (research/benchmarking/micro/results_2026-09-13b.md)."""
     proj, first, second, _ = _two_session_project(tmp_path, monkeypatch)
 
     out = recall_memory(proj, "postgresql database")
 
-    primary = next(line for line in out.splitlines() if "primary database" in line)
-    nightly = next(line for line in out.splitlines() if "nightly" in line)
-    assert "S2 · 09-12" in nightly
-    assert "S1" not in primary
+    assert any("nightly" in line for line in out.splitlines())
+    assert "S2 · 09-12" not in out and "S1 · 09-11" not in out
     assert first not in out and second not in out
-
-
-def test_find_related_labels_a_changed_claim_too(tmp_path, monkeypatch) -> None:
-    proj, first, second, ids = _two_session_project(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        "cognikernel.embedding.retrieval.find_related",
-        lambda conn, project_id, event_id, k=8: [{"id": ids["nightly"], "why": "semantic", "score": 0.8},
-                                                  {"id": ids["primary"], "why": "semantic", "score": 0.6}],
-    )
-
-    out = find_related_memory(proj, "primary database")
-
-    related = [line for line in out.splitlines() if line.startswith("- ")]
-    assert any("nightly" in line and "S2 · 09-12" in line for line in related)
-    assert all("S1" not in line for line in related if "primary database" in line)
-    assert second not in out
 
 
 def test_query_functions_never_raise(tmp_path, monkeypatch) -> None:

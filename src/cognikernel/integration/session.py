@@ -655,36 +655,20 @@ def get_projection(
         return load_or_rebuild(conn, project_id)
 
 
-def _claim_labels(
-    events: list,
-    active_thread: "Event | None",
-    order: dict,
-    labels: dict[str, str],
-    changed_ids: set[int],
-) -> dict[int, str]:
-    """Session labels ("S2 · 09-12") for the claims whose place in time matters.
+def _carried_thread_label(active_thread: "Event | None", order: dict, labels: dict[str, str]) -> str:
+    """"S1 · 09-11" when the active thread was opened before the most recent session, else "".
 
-    Only two kinds: a claim whose value changed (changed_claim_ids), and the active
-    thread when it was opened before the most recent session. Every other claim
-    stays unlabelled — a label on a fact stated once costs tokens and places
-    nothing. A consolidated record's lineage is not a change by itself: it lists
-    every distinct wording under one topic key, and in real stores most are
-    rewordings or moving counts.
+    Labels on changed values were removed: they tagged a handful of lines across 60
+    project stores and never showed an effect in the micro benchmark
+    (research/benchmarking/micro/results_2026-09-13b.md).
     """
-    out: dict[int, str] = {}
-    for event in events:
-        if event.id is None or event.session_id not in labels:
-            continue
-        if event.id in changed_ids:
-            out[event.id] = labels[event.session_id]
-    if active_thread is not None and active_thread.id is not None and active_thread.session_id in order:
-        latest = max(position.position for position in order.values())
-        if order[active_thread.session_id].position < latest:
-            out[active_thread.id] = labels[active_thread.session_id]
-    return out
+    if active_thread is None or active_thread.session_id not in order or active_thread.session_id not in labels:
+        return ""
+    latest = max(position.position for position in order.values())
+    return labels[active_thread.session_id] if order[active_thread.session_id].position < latest else ""
 
 
-def _active_thread_reserve(thread: "Event | None", labels: "dict[int, str] | None" = None) -> int:
+def _active_thread_reserve(thread: "Event | None", label: str = "") -> int:
     """Tokens the Active thread section will cost once rendered, or 0.
 
     Measured from the rendered section, NOT from `estimate_tokens`: the two
@@ -702,7 +686,7 @@ def _active_thread_reserve(thread: "Event | None", labels: "dict[int, str] | Non
     # and integration/resources.py imports session — a module-level import of
     # injection.template here risks a cycle.
     from cognikernel.injection.template import _render_active_thread, count_tokens_accurate
-    return count_tokens_accurate(_render_active_thread([thread], labels=labels))
+    return count_tokens_accurate(_render_active_thread([thread], label=label))
 
 
 def render_state(
@@ -752,17 +736,16 @@ def render_state(
         # Phase B-2: read symbol_files for truthful skeleton header.
         coverage = sf.coverage_stats(conn, project_id)
         refresh = sf.most_recent_refresh(conn, project_id)
-        # Session labels are context for changed values and carried threads. A
-        # failure renders the block without them rather than failing the render.
+        # The carried thread's session label is context; a failure renders the
+        # block without it rather than failing the render.
         try:
-            from cognikernel.storage.provenance import changed_claim_ids, session_labels, session_order
+            from cognikernel.storage.provenance import session_labels, session_order
 
             order = session_order(conn, project_id)
             sess_labels = session_labels(conn, project_id)
-            changed_ids = changed_claim_ids(conn, project_id)
         except Exception as exc:
             logging.getLogger("cognikernel.session").warning("session labels unavailable: %s", exc)
-            order, sess_labels, changed_ids = {}, {}, set()
+            order, sess_labels = {}, {}
 
     project_name = Path(project_path).resolve().name
     hot_files = _compute_hot_files(events)
@@ -772,8 +755,8 @@ def render_state(
     # which suppresses it from CK-1 for the whole session despite never having
     # been shown. Select first, reserve the rendered cost, exclude the rest.
     active_thread = select_active_thread(events)
-    claim_labels = _claim_labels(events, active_thread, order, sess_labels, changed_ids)
-    reserve = _active_thread_reserve(active_thread, claim_labels)
+    thread_label = _carried_thread_label(active_thread, order, sess_labels)
+    reserve = _active_thread_reserve(active_thread, thread_label)
     # This drops EVERY THREAD_OPEN from the fill, not just the loser(s); only
     # `active_thread` (the select_active_thread winner) is appended back
     # below. A thread whose authority routes it to pending_confirmations
@@ -820,7 +803,7 @@ def render_state(
     ctx.retry_window_seconds = config.deny_retry_window_seconds
     ctx.skeleton_coverage = coverage
     ctx.skeleton_refresh = refresh
-    ctx.claim_labels = claim_labels
+    ctx.thread_label = thread_label
     block, survivors = render_with_budget_enforcement_ex(ctx)
     if session_id:
         try:

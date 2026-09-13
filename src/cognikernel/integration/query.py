@@ -11,7 +11,6 @@ Invariants honored:
 from __future__ import annotations
 
 import json
-import logging
 import re
 import sqlite3
 from pathlib import Path
@@ -195,36 +194,10 @@ def _recall_hits(conn: sqlite3.Connection, project_id: str, query: str, k: int) 
     return _lexical_recall(conn, project_id, query, k)
 
 
-def _fmt_hit(h: dict, extra: str = "", session: str = "") -> str:
+def _fmt_hit(h: dict, extra: str = "") -> str:
     subj = f"[{h['subject']}] " if h.get("subject") else ""
     desc = (h.get("description") or "")[:_MAX_DESC]
-    where = f" ({session})" if session else ""
-    return f"- ({h['event_type']} · {h['score']:.2f}{extra}) {subj}{desc}{where}"
-
-
-def _hit_session_labels(conn: sqlite3.Connection, project_id: str, event_ids: list) -> dict[int, str]:
-    """The session label ("S2 · 09-12") for each hit whose value changed over time.
-
-    A fact stated once needs no label; one with an earlier value in the store does,
-    or a recap cannot tell the current value from the old one. A label is context,
-    not the result, so any failure returns {} and the hits print without one.
-    """
-    ids = [i for i in event_ids if i is not None]
-    if not ids:
-        return {}
-    try:
-        from cognikernel.storage.provenance import changed_claim_ids, session_labels
-
-        ids = sorted(changed_claim_ids(conn, project_id) & set(ids))
-        if not ids:
-            return {}
-        labels = session_labels(conn, project_id)
-        marks = ",".join("?" * len(ids))
-        rows = conn.execute(f"SELECT id, session_id FROM events WHERE id IN ({marks})", ids).fetchall()
-        return {row["id"]: labels[row["session_id"]] for row in rows if row["session_id"] in labels}
-    except Exception as exc:
-        logging.getLogger("cognikernel.query").warning("session labels unavailable for recall: %s", exc)
-        return {}
+    return f"- ({h['event_type']} · {h['score']:.2f}{extra}) {subj}{desc}"
 
 
 def fit_ck1_budget(passed: list[dict], config: Config) -> tuple[list[str], list[int]]:
@@ -555,12 +528,10 @@ def recall_memory(project_path: str, query: str, limit: int = RECALL_LIMIT, conf
         with get_connection(db_path) as conn:
             run_migrations(conn)
             hits = _recall_hits(conn, project_id, query, limit)
-            labels = _hit_session_labels(conn, project_id, [h.get("id") for h in hits])
         if not hits:
             return f"No stored decisions relevant to: {query!r}"
         return "\n".join(
-            [f"CogniKernel — decisions relevant to {query!r}:"]
-            + [_fmt_hit(h, session=labels.get(h.get("id"), "")) for h in hits]
+            [f"CogniKernel — decisions relevant to {query!r}:"] + [_fmt_hit(h) for h in hits]
         )
     except Exception as exc:  # never raise into the MCP layer
         return f"recall failed: {exc}"
@@ -593,15 +564,13 @@ def find_related_memory(project_path: str, query: str, limit: int = 8, config: C
                 ).fetchall():
                     p = json.loads(row["payload"])
                     meta[row["id"]] = (row["event_type"], p.get("description", ""), p.get("subject", ""))
-            labels = _hit_session_labels(conn, project_id, ids)
         if not related:
             return f"No related decisions found for: {query!r} (seed: {seed.get('description','')[:_MAX_DESC]})"
         lines = [f"CogniKernel — related to {query!r} (seed: {seed.get('description','')[:_MAX_DESC]}):"]
         for r in related:
             et, desc, subj = meta.get(r["id"], ("?", "", ""))
             subj = f"[{subj}] " if subj else ""
-            where = f" ({labels[r['id']]})" if r["id"] in labels else ""
-            lines.append(f"- ({et} · {r['why']} · {r['score']:.2f}) {subj}{desc[:_MAX_DESC]}{where}")
+            lines.append(f"- ({et} · {r['why']} · {r['score']:.2f}) {subj}{desc[:_MAX_DESC]}")
         return "\n".join(lines)
     except Exception as exc:  # never raise into the MCP layer
         return f"find_related failed: {exc}"
