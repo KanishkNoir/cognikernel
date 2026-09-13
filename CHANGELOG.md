@@ -80,19 +80,11 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **The session block and `recall` now say when a changed value or a carried
-  work item was recorded.** A decision or constraint whose value changed — a
-  retry limit raised from 4 attempts to 6, a backup moved from weekly to
-  nightly, a switch from bcrypt to argon2id — and the open work item carried
-  over from an earlier session are tagged with the session and day they came
-  from, like `(S2 · 09-12)`. A value counts as changed when the claim says what
-  it replaced ("raised from 4 to 6"), or when it holds a different number,
-  choice or negation than a claim on the same topic from an earlier session.
-  Rewording the same fact is not a change, and nothing else is tagged: a fact
-  stated once needs no date, and every tag costs tokens. Decisions used to end
-  in the raw session id, which said nothing about order. Measured on 60 project
-  stores, 42 of 1,429 claim lines get a tag (31 of them carried work items) and
-  the blocks grow by about 1.2%.
+- **The session block says which session an unfinished work item came from.**
+  When the open work item was started in an earlier session, it is tagged with
+  that session's place and day, like `Working on: build the replay command
+  (S1 · 09-12)`. Measured on 60 project stores, 31 blocks carry the tag and
+  they grow by 0.8%.
 
 - **`cognikernel why <project_path> <subject>` explains a claim.** Give it a claim id
   (`#123`) or words from the claim, and it shows what the claim says, which

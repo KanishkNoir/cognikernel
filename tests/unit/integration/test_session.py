@@ -378,12 +378,13 @@ class TestActiveThreadReserve:
 
 
 class TestRenderStateSessionLabels:
-    def test_only_changed_and_carried_claims_carry_a_session_label(
+    def test_only_the_carried_thread_carries_a_session_label(
         self, project_path: Path, cfg: Config
     ) -> None:
-        """Micro benchmark: the recap put 3–5 of 7 facts in the wrong session. A label
-        goes where order matters — a value that changed, and the open thread carried
-        from an earlier session — not on every line."""
+        """A label names the session an open thread was carried over from. Labels on
+        changed values were removed: across 60 project stores and two benchmark runs
+        they tagged a handful of lines, and the one change they targeted never
+        reached the block (research/benchmarking/micro/results_2026-09-13b.md)."""
         from datetime import datetime
 
         from cognikernel.storage.events import set_superseded_by
@@ -415,29 +416,10 @@ class TestRenderStateSessionLabels:
 
         block = render_state(project_path, config=cfg)
 
-        assert "Back up the delivery database nightly. (S2 · 09-12)" in block
         assert "Working on: Next session: build the replay command. (S1 · 09-11)" in block
+        assert f"Back up the delivery database nightly. (session {second})" in block
+        assert "S2 · 09-12" not in block
         assert "- Timestamps are integer epoch milliseconds.\n" in block + "\n"
-        assert first not in block and second not in block
-
-    def test_a_consolidated_record_is_labelled_only_when_its_value_changed(self) -> None:
-        """Lineage holds every distinct wording folded under one topic key. Re-rendered on
-        60 project stores (2026-09-13), most labelled consolidated records were rewordings
-        or moving counts ("Transport: SSE over HTTP…", "Full suite: 38 passed…"), so
-        lineage alone is not a change; the value rule decides."""
-        from cognikernel.integration.session import _claim_labels
-        from cognikernel.storage.provenance import SessionPosition
-
-        order = {"s1": SessionPosition("s1", 1, 2, 1000), "s2": SessionPosition("s2", 2, 2, 2000)}
-        labels = {"s1": "S1 · 09-11", "s2": "S2 · 09-12"}
-        reworded = Event(project_id="p", session_id="s2", event_type="DECISION", content_hash="r", id=7,
-                         payload={"description": "Transport: SSE over HTTP, no buffering.",
-                                  "lineage": [{"description": "Transport is SSE over HTTP.", "session_id": "s1"}]})
-        changed = Event(project_id="p", session_id="s2", event_type="DECISION", content_hash="c", id=8,
-                        payload={"description": "Back up the database nightly.",
-                                 "lineage": [{"description": "Back up the database weekly.", "session_id": "s1"}]})
-
-        assert _claim_labels([reworded, changed], None, order, labels, {8}) == {8: "S2 · 09-12"}
 
 
 class TestRenderStateThreadSelection:

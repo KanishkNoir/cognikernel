@@ -16,13 +16,11 @@ how recalled history ended up attributed to the wrong session.
 from __future__ import annotations
 
 import datetime
-import json
 import re
 import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from cognikernel.quality.detectors import EarlierValues, ValueSignature, states_value_change, value_signature
 from cognikernel.storage.events import Event, _row_to_event
 
 _ID_SUBJECT = re.compile(r"^#?(\d+)$")
@@ -83,85 +81,16 @@ def session_order(
 
 
 def session_labels(conn: sqlite3.Connection, project_id: str) -> dict[str, str]:
-    """A short label per session for the session block and recall: "S2 · 09-12".
+    """A short label per session: "S2 · 09-12".
 
     The number is the session's place in order (session_order) and the date the
-    local day it was first seen. It replaces the raw session id, which carries no
-    order: in the micro benchmark the recap placed only 3–5 of 7 facts in the
-    right session, answering from a block that named sessions by id.
+    local day it was first seen. The session block puts it on the open thread when
+    that thread was carried over from an earlier session.
     """
     return {
         session_id: f"S{pos.position} · {datetime.datetime.fromtimestamp(pos.first_seen / 1000):%m-%d}"
         for session_id, pos in session_order(conn, project_id).items()
     }
-
-
-def changed_claim_ids(conn: sqlite3.Connection, project_id: str) -> set[int]:
-    """Claims whose value changed over time — the ones a session label is for.
-
-    A claim changed when either:
-      - it names the value it replaced ("MAX_ATTEMPTS raised from 4 to 6"), which
-        is how a change stored as a new decision, with no link, shows up; or
-      - a claim it is linked to — one it superseded, or an older one with the same
-        decision key (folded at read time without a supersession link) — came from
-        an earlier session and holds a different value: a number, a named choice
-        or a negation (quality.detectors.EarlierValues).
-    A link alone is not a change. Measured on the local stores, supersession and
-    shared keys mostly join rewordings of one fact, often from the same session
-    (research/injection_format/session_labels_2026-09-13.md).
-
-    Runs on every render and recall, so each claim's values are read once and a
-    topic key is checked in one pass, in session order rather than row order.
-    """
-    positions = {sid: pos.position for sid, pos in session_order(conn, project_id).items()}
-    rows = conn.execute(
-        """
-        SELECT id, session_id, decision_key, superseded_by, payload FROM events
-        WHERE project_id = ?
-        ORDER BY created_at, id
-        """,
-        (project_id,),
-    ).fetchall()
-    sessions = {row["id"]: row["session_id"] for row in rows}
-    descriptions = {row["id"]: str(json.loads(row["payload"]).get("description") or "") for row in rows}
-
-    signatures: dict[int, ValueSignature] = {}
-
-    def signature(event_id: int) -> ValueSignature:
-        if event_id not in signatures:
-            signatures[event_id] = value_signature(descriptions[event_id])
-        return signatures[event_id]
-
-    def position(event_id: int) -> int | None:
-        return positions.get(sessions[event_id])
-
-    changed = {row["id"] for row in rows if states_value_change(descriptions[row["id"]])}
-    same_key: dict[str, list[int]] = {}
-    for row in rows:
-        older, replacement = row["id"], row["superseded_by"]
-        if replacement in sessions and replacement not in changed:
-            old_position, new_position = position(older), position(replacement)
-            if old_position is not None and new_position is not None and old_position < new_position:
-                earlier = EarlierValues()
-                earlier.add(signature(older))
-                if earlier.changed_by(signature(replacement)):
-                    changed.add(replacement)
-        if row["decision_key"] and position(older) is not None:
-            same_key.setdefault(row["decision_key"], []).append(older)
-    for ids in same_key.values():
-        # Stable sort: row order still breaks ties within one session.
-        ids.sort(key=position)
-        earlier = EarlierValues()
-        current_session: list[int] = []
-        for event_id in ids:
-            if current_session and position(current_session[0]) != position(event_id):
-                for done in current_session:
-                    earlier.add(signature(done))
-                current_session = []
-            if event_id not in changed and earlier.changed_by(signature(event_id)):
-                changed.add(event_id)
-            current_session.append(event_id)
-    return changed
 
 
 def is_live(event: Event) -> bool:

@@ -54,59 +54,23 @@ def _make_ctx(**overrides) -> InjectionContext:
 
 # ── session labels ────────────────────────────────────────────────────────────
 
-class TestClaimLabels:
-    """Only claims that need a session label get one: a claim whose value changed
-    over time, and the open thread carried from an earlier session. Which claims
-    qualify is decided by the caller (render_state); the template renders the
-    labels it is given, by event id, and leaves every other line as it was.
+class TestCarriedThreadLabel:
+    """The open thread carried over from an earlier session names that session.
+
+    render_state decides whether the thread qualifies; the template only renders
+    the label it is given. Labels on changed values were removed
+    (research/benchmarking/micro/results_2026-09-13b.md).
     """
 
-    def _labelled(self, event_id: int, *args, **kwargs) -> Event:
-        event = _event(*args, **kwargs)
-        event.id = event_id
-        return event
+    def test_the_active_thread_renders_its_label(self) -> None:
+        thread = _event("THREAD_OPEN", "Build the replay command.", session_id="sess-one")
 
-    def test_each_section_renders_the_label_of_a_claim_it_was_given(self) -> None:
-        ctx = _make_ctx(
-            hard_constraints=[self._labelled(1, "CONSTRAINT_HARD", "Retries use at most 6 attempts.",
-                                             session_id="sess-two")],
-            graveyard=[self._labelled(2, "APPROACH_ABANDONED_DO_NOT_RETRY", "Celery with a Redis broker.",
-                                      session_id="sess-two")],
-            decisions=[self._labelled(3, "DECISION", "Back up the database nightly.", session_id="sess-two")],
-            active_threads=[self._labelled(4, "THREAD_OPEN", "Build the replay command.", session_id="sess-one")],
-            pending_confirmations=[self._labelled(5, "CONSTRAINT_SOFT", "Dead deliveries are kept 14 days.",
-                                                  session_id="sess-two",
-                                                  authority="assistant_answer_to_user_question")],
-            claim_labels={1: "S2 · 09-12", 2: "S2 · 09-12", 3: "S2 · 09-12", 4: "S1 · 09-11", 5: "S2 · 09-12"},
-        )
+        block = render_injection(_make_ctx(active_threads=[thread], thread_label="S1 · 09-11"))
 
-        block = render_injection(ctx)
-
-        assert "- Retries use at most 6 attempts. (S2 · 09-12)" in block
-        assert "- Celery with a Redis broker. (S2 · 09-12)" in block
-        assert "1. Back up the database nightly. (S2 · 09-12)" in block
         assert "Working on: Build the replay command. (S1 · 09-11)" in block
-        assert "- Dead deliveries are kept 14 days. (assistant, S2 · 09-12)" in block
-        assert "sess-one" not in block and "sess-two" not in block
 
-    def test_a_claim_without_a_label_renders_as_it_always_did(self) -> None:
-        ctx = _make_ctx(
-            hard_constraints=[self._labelled(1, "CONSTRAINT_HARD", "Timestamps are integer epoch milliseconds.",
-                                             session_id="sess-one")],
-            decisions=[self._labelled(3, "DECISION", "Use PostgreSQL for the primary database.",
-                                      session_id="sess-one"),
-                       self._labelled(4, "DECISION", "Back up the database nightly.", session_id="sess-two")],
-            claim_labels={4: "S2 · 09-12"},
-        )
-
-        block = render_injection(ctx)
-
-        assert "- Timestamps are integer epoch milliseconds.\n" in block + "\n"
-        assert "Use PostgreSQL for the primary database. (session sess-one)" in block
-        assert "Back up the database nightly. (S2 · 09-12)" in block
-
-    def test_the_header_explains_labels_only_when_a_claim_has_one(self) -> None:
-        assert "S1" in _render_header(_make_ctx(claim_labels={1: "S1 · 09-11"}))
+    def test_the_header_explains_the_label_only_when_there_is_one(self) -> None:
+        assert "S1" in _render_header(_make_ctx(thread_label="S1 · 09-11"))
         assert "S1" not in _render_header(_make_ctx())
 
 
