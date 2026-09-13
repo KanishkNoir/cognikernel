@@ -98,6 +98,79 @@ class TestChangedClaims:
 
         assert changed_claim_ids(conn, P) == set()
 
+    def test_a_reworded_claim_that_replaced_an_earlier_one_did_not_change(self, conn) -> None:
+        """Measured 2026-09-13: supersession mostly collapses rewordings, across sessions too."""
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        old = _event(conn, "s1", "Now running the full suite.")
+        new = _event(conn, "s2", "Running the test suite now.", created_at=2000)
+        set_superseded_by(conn, old, new, reason="cross_encoder")
+
+        assert changed_claim_ids(conn, P) == set()
+
+    def test_a_value_replaced_within_one_session_is_not_a_change_over_time(self, conn) -> None:
+        """The 2026-09-13 benchmark labelled a claim that replaced a sentence from its own session."""
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        old = _event(conn, "s1", "Back up the database weekly")
+        new = _event(conn, "s1", "Back up the database nightly", created_at=2000)
+        set_superseded_by(conn, old, new, reason="cross_encoder")
+
+        assert changed_claim_ids(conn, P) == set()
+
+    def test_a_same_topic_restatement_of_the_value_did_not_change(self, conn) -> None:
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        insert_event(conn, Event(project_id=P, session_id="s1", event_type="DECISION",
+                                 payload={"description": "Retry up to 6 attempts"},
+                                 content_hash="a1", created_at=1000, decision_key="retry policy"))
+        insert_event(conn, Event(project_id=P, session_id="s2", event_type="DECISION",
+                                 payload={"description": "Retries: 6 attempts, as decided earlier"},
+                                 content_hash="a2", created_at=2000, decision_key="retry policy"))
+
+        assert changed_claim_ids(conn, P) == set()
+
+    def test_a_claim_that_names_its_earlier_value_changed_without_a_link(self, conn) -> None:
+        """The benchmark's retry change was a new decision with no link to the old policy."""
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        _event(conn, "s1", "Retries: at most 4 attempts")
+        raised = _event(conn, "s2", "MAX_ATTEMPTS raised from 4 to 6.", created_at=2000)
+
+        assert changed_claim_ids(conn, P) == {raised}
+
+    def test_a_backfilled_claim_from_an_earlier_session_still_counts_as_earlier(self, conn) -> None:
+        """Review on #54: same-key claims are compared in session order, not in the order rows were written."""
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        store_evidence(conn, P, "s1", "transcript", b"a", captured_at=1000)
+        store_evidence(conn, P, "s2", "transcript", b"b", captured_at=2000)
+        nightly = insert_event(conn, Event(project_id=P, session_id="s2", event_type="DECISION",
+                                           payload={"description": "Back up the database nightly"},
+                                           content_hash="n", created_at=2500, decision_key="database backup"))
+        insert_event(conn, Event(project_id=P, session_id="s1", event_type="DECISION",
+                                 payload={"description": "Back up the database weekly"},
+                                 content_hash="w", created_at=3000, decision_key="database backup"))
+
+        assert changed_claim_ids(conn, P) == {nightly}
+
+    def test_each_claims_values_are_read_once(self, conn, monkeypatch) -> None:
+        """Review on #54: this runs on every render and recall, so a long-lived topic key
+        must not cost a comparison of every claim with every earlier one."""
+        import cognikernel.quality.detectors as detectors
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        calls: list[str] = []
+        real = detectors.claim_values
+        monkeypatch.setattr(detectors, "claim_values", lambda text: calls.append(text) or real(text))
+        for n in range(40):
+            insert_event(conn, Event(project_id=P, session_id=f"s{n:02d}", event_type="DECISION",
+                                     payload={"description": f"Keep {n + 1} workers"},
+                                     content_hash=f"k{n}", created_at=1000 + n, decision_key="worker pool"))
+
+        assert len(changed_claim_ids(conn, P)) == 39
+        assert len(calls) <= 40
+
 
 class TestSessionOrder:
     def test_sessions_are_numbered_by_first_capture_not_by_id(self, conn) -> None:
