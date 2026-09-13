@@ -22,6 +22,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from cognikernel.quality.detectors import states_value_change, values_differ
 from cognikernel.storage.events import Event, _row_to_event
 
 _ID_SUBJECT = re.compile(r"^#?(\d+)$")
@@ -98,31 +99,46 @@ def session_labels(conn: sqlite3.Connection, project_id: str) -> dict[str, str]:
 def changed_claim_ids(conn: sqlite3.Connection, project_id: str) -> set[int]:
     """Claims whose value changed over time — the ones a session label is for.
 
-    A claim changed when it superseded another, or when an older claim with the
-    same decision key said something different (the golden-record consolidation
-    folds those at read time without a supersession link). A restatement of the
-    same value is not a change, and a fact stated once needs no label.
+    A claim changed when either:
+      - it names the value it replaced ("MAX_ATTEMPTS raised from 4 to 6"), which
+        is how a change stored as a new decision, with no link, shows up; or
+      - a claim it is linked to — one it superseded, or an older one with the same
+        decision key (folded at read time without a supersession link) — came from
+        an earlier session and holds a different value: a number, a named choice
+        or a negation (quality.detectors.values_differ).
+    A link alone is not a change. Measured on the local stores, supersession and
+    shared keys mostly join rewordings of one fact, often from the same session
+    (research/injection_format/session_labels_2026-09-13.md).
     """
-    changed = {
-        row[0] for row in conn.execute(
-            "SELECT DISTINCT superseded_by FROM events WHERE project_id = ? AND superseded_by IS NOT NULL",
-            (project_id,),
-        )
-    }
-    earlier: dict[str, set[str]] = {}
-    for event_id, key, payload in conn.execute(
+    positions = {sid: pos.position for sid, pos in session_order(conn, project_id).items()}
+    rows = conn.execute(
         """
-        SELECT id, decision_key, payload FROM events
-        WHERE project_id = ? AND decision_key IS NOT NULL AND decision_key != ''
+        SELECT id, session_id, decision_key, superseded_by, payload FROM events
+        WHERE project_id = ?
         ORDER BY created_at, id
         """,
         (project_id,),
-    ):
-        description = " ".join(str(json.loads(payload).get("description") or "").lower().split())
-        seen = earlier.setdefault(key, set())
-        if seen - {description}:
-            changed.add(event_id)
-        seen.add(description)
+    ).fetchall()
+    sessions = {row["id"]: row["session_id"] for row in rows}
+    descriptions = {row["id"]: str(json.loads(row["payload"]).get("description") or "") for row in rows}
+
+    def changed_from(newer: int, older: int) -> bool:
+        new_position, old_position = positions.get(sessions[newer]), positions.get(sessions[older])
+        return (new_position is not None and old_position is not None and old_position < new_position
+                and values_differ(descriptions[newer], descriptions[older]))
+
+    changed = {row["id"] for row in rows if states_value_change(descriptions[row["id"]])}
+    same_key: dict[str, list[int]] = {}
+    for row in rows:
+        replacement = row["superseded_by"]
+        if replacement in sessions and replacement not in changed and changed_from(replacement, row["id"]):
+            changed.add(replacement)
+        if row["decision_key"]:
+            same_key.setdefault(row["decision_key"], []).append(row["id"])
+    for ids in same_key.values():
+        for index, newer in enumerate(ids):
+            if newer not in changed and any(changed_from(newer, older) for older in ids[:index]):
+                changed.add(newer)
     return changed
 
 

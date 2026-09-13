@@ -153,6 +153,83 @@ class TestIsStepNarration:
         assert not is_step_narration(text)
 
 
+class TestValuesDiffer:
+    """Whether a newer claim holds a different value than an older one on the same topic.
+
+    Measured 2026-09-13 on the 432 cross-session pairs the session-label rule
+    linked in the local stores: nearly all were restatements ("Now running the
+    full suite." over "Running the test suite now."), status counts, or junk.
+    A change needs a value both claims carry and disagree on. Sentences here are
+    synthetic, one per measured shape.
+    """
+
+    @pytest.mark.parametrize("newer, older", [
+        ("Retries: 6 attempts with full jitter.", "Retries: at most 4 attempts, no jitter."),
+        ("Attempts: 6", "Attempts: 4"),
+        ("Cap payloads at 1 MiB.", "Cap payloads at 256 KiB."),
+        ("Back up the database nightly.", "Back up the database weekly."),
+        ("We're switching from bcrypt to argon2id for password hashing.", "For password hashing, we'll use bcrypt."),
+        ("The default alias resolves to claude-opus-4-8.", "The default alias resolves to claude-sonnet-4-6."),
+        ("Never retry on a 429 response.", "Retry on a 429 response."),
+    ])
+    def test_a_number_a_choice_or_a_negation_that_differs(self, newer: str, older: str) -> None:
+        from cognikernel.quality.detectors import values_differ
+
+        assert values_differ(newer, older)
+
+    @pytest.mark.parametrize("newer, older", [
+        ("Running the test suite now.", "Now running the full suite."),
+        ("TTL: 1 hour by default.", "TTL: default_ttl_seconds = 3600 seconds."),
+        ("All 120 tests pass.", "All 64 tests pass."),
+        ("Cost: local reranking, ~22 min per cell.", "Cost: two annotators for ~2 weeks."),
+        ("Sprint 4: the ranking bottleneck.", "Sprint 3: sentence records."),
+        ("Adversarial accuracy rose to 23%.", "Temporal accuracy rose to 3%."),
+        ("Production SQL (not SQLite): Postgres for row-level locking.", "PostgreSQL for row-level locking."),
+        ("Retries: 3 attempts with full jitter.", "The policy changed from 2 attempts to 3 attempts."),
+        ("Decisions around argon2id and JWT settings.", "Decisions around argon2-cffi and JWT settings."),
+        ("Do not hand-tune fusion weights; no exceptions.", "Do not hand-tune fusion weights."),
+    ])
+    def test_a_restatement_a_count_or_an_estimate_does_not(self, newer: str, older: str) -> None:
+        from cognikernel.quality.detectors import values_differ
+
+        assert not values_differ(newer, older)
+
+
+class TestStatesValueChange:
+    """A claim that names the value it replaced ("raised from 4 to 6").
+
+    The micro benchmark's retry change was stored as a new decision with no link
+    to the old policy, so no pair could show it. Measured 2026-09-13: 41 live
+    claims in the local stores match this shape, 16 distinct texts, 13 of them
+    real changes; the rest quote a change inside test code or notes.
+    """
+
+    @pytest.mark.parametrize("text", [
+        "Change the retry policy: raise the limit from 4 to 6 attempts.",
+        "MAX_ATTEMPTS raised from 4 to 6.",
+        "We're switching from bcrypt to argon2id for password hashing.",
+        "The policy was changed from 2 → 3 attempts and plain backoff to full jitter.",
+        "Switch the default alias from claude-sonnet to claude-opus.",
+    ])
+    def test_flags_a_claim_naming_its_earlier_value(self, text: str) -> None:
+        from cognikernel.quality.detectors import states_value_change
+
+        assert states_value_change(text)
+
+    @pytest.mark.parametrize("text", [
+        "Even if you change the model from strong to cheap, the deviation stays small.",
+        "The merge moved main from 4a33256 to 49fb301.",
+        "Switch to a semantic cache.",
+        "Retry budgets range from 1 to 10 attempts.",
+        "We moved from there to the store module.",
+        "Alembic migrations must run from a sync fixture to avoid a nested event loop.",
+    ])
+    def test_a_hypothetical_a_commit_or_no_earlier_value_is_not(self, text: str) -> None:
+        from cognikernel.quality.detectors import states_value_change
+
+        assert not states_value_change(text)
+
+
 class TestDetectSubjectLess:
     """D7 — statements whose subject only exists in unstated context.
 

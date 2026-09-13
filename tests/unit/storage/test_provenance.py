@@ -98,6 +98,47 @@ class TestChangedClaims:
 
         assert changed_claim_ids(conn, P) == set()
 
+    def test_a_reworded_claim_that_replaced_an_earlier_one_did_not_change(self, conn) -> None:
+        """Measured 2026-09-13: supersession mostly collapses rewordings, across sessions too."""
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        old = _event(conn, "s1", "Now running the full suite.")
+        new = _event(conn, "s2", "Running the test suite now.", created_at=2000)
+        set_superseded_by(conn, old, new, reason="cross_encoder")
+
+        assert changed_claim_ids(conn, P) == set()
+
+    def test_a_value_replaced_within_one_session_is_not_a_change_over_time(self, conn) -> None:
+        """The 2026-09-13 benchmark labelled a claim that replaced a sentence from its own session."""
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        old = _event(conn, "s1", "Back up the database weekly")
+        new = _event(conn, "s1", "Back up the database nightly", created_at=2000)
+        set_superseded_by(conn, old, new, reason="cross_encoder")
+
+        assert changed_claim_ids(conn, P) == set()
+
+    def test_a_same_topic_restatement_of_the_value_did_not_change(self, conn) -> None:
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        insert_event(conn, Event(project_id=P, session_id="s1", event_type="DECISION",
+                                 payload={"description": "Retry up to 6 attempts"},
+                                 content_hash="a1", created_at=1000, decision_key="retry policy"))
+        insert_event(conn, Event(project_id=P, session_id="s2", event_type="DECISION",
+                                 payload={"description": "Retries: 6 attempts, as decided earlier"},
+                                 content_hash="a2", created_at=2000, decision_key="retry policy"))
+
+        assert changed_claim_ids(conn, P) == set()
+
+    def test_a_claim_that_names_its_earlier_value_changed_without_a_link(self, conn) -> None:
+        """The benchmark's retry change was a new decision with no link to the old policy."""
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        _event(conn, "s1", "Retries: at most 4 attempts")
+        raised = _event(conn, "s2", "MAX_ATTEMPTS raised from 4 to 6.", created_at=2000)
+
+        assert changed_claim_ids(conn, P) == {raised}
+
 
 class TestSessionOrder:
     def test_sessions_are_numbered_by_first_capture_not_by_id(self, conn) -> None:

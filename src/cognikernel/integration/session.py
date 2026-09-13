@@ -664,16 +664,18 @@ def _claim_labels(
 ) -> dict[int, str]:
     """Session labels ("S2 · 09-12") for the claims whose place in time matters.
 
-    Only two kinds: a claim whose value changed (it superseded another, or it is a
-    consolidated record carrying earlier values), and the active thread when it was
-    opened before the most recent session. Every other claim stays unlabelled — a
-    label on a fact stated once costs tokens and places nothing.
+    Only two kinds: a claim whose value changed (changed_claim_ids), and the active
+    thread when it was opened before the most recent session. Every other claim
+    stays unlabelled — a label on a fact stated once costs tokens and places
+    nothing. A consolidated record's lineage is not a change by itself: it lists
+    every distinct wording under one topic key, and in real stores most are
+    rewordings or moving counts.
     """
     out: dict[int, str] = {}
     for event in events:
         if event.id is None or event.session_id not in labels:
             continue
-        if event.id in changed_ids or event.payload.get("lineage"):
+        if event.id in changed_ids:
             out[event.id] = labels[event.session_id]
     if active_thread is not None and active_thread.id is not None and active_thread.session_id in order:
         latest = max(position.position for position in order.values())

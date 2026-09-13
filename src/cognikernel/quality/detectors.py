@@ -242,6 +242,171 @@ def detect_step_narration(text: str, event_type: str, source_role: str) -> Detec
     return DetectorHit("D11", "assistant announcing its next step, not a project decision")
 
 
+# ── Value changes: which claims a session label is for ───────────────────────
+#
+# A session label ("S2 · 09-12") marks a claim whose value changed over time.
+# Measured 2026-09-13 (research/injection_format/session_labels_2026-09-13.md):
+# of 432 claim pairs that supersession or a shared decision key linked across
+# sessions in the local stores, 4 held a real change. The rest were rewordings
+# ("Running the test suite now." over "Now running the full suite."), moving test
+# counts, estimates, section numbers and tool output. So a pair counts only when
+# both claims carry a value of the same kind and the newer one holds a value the
+# older did not:
+#   - a number in a unit a setting is written in, normalised (1 hour is 3600
+#     seconds). Never an estimate ("~2 weeks"), a range, a section number, or a
+#     percentage: in the stores those are measurements whose subject the number
+#     doesn't carry ("temporal 3%" vs "adversarial 23%").
+#   - a named choice from a closed category (weekly/nightly, bcrypt/argon2id,
+#     sonnet/opus), unless it is named only to be rejected ("not SQLite").
+#   - a negation, when the two texts are otherwise word for word the same.
+# Precision first: a missed change leaves a claim unlabelled, as before; a false
+# one dates a fact that never changed.
+
+_TIME_UNITS = {
+    "ms": 0.001, "msec": 0.001, "millisecond": 0.001, "milliseconds": 0.001,
+    "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+    "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+    "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+    "day": 86400, "days": 86400, "week": 604800, "weeks": 604800,
+}
+_SIZE_UNITS = {
+    "b": 1, "byte": 1, "bytes": 1, "kb": 1000, "kib": 1024,
+    "mb": 1000**2, "mib": 1024**2, "gb": 1000**3, "gib": 1024**3,
+}
+# Nouns a limit or setting is counted in. Not "tests", "files" or "questions":
+# those counts are status reports that move every session.
+_SETTING_COUNT_NOUNS = (
+    "attempt", "retry", "try", "worker", "connection", "deployment", "replica",
+    "instance", "shard", "partition", "char", "character", "digit", "slot",
+)
+_WORD_NUMBERS = {
+    word: n for n, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve".split())
+}
+_NUMBER = r"(\d[\d,]*(?:\.\d+)?|(?:" + "|".join(_WORD_NUMBERS) + r")\b)"
+_NUMBER_THEN_UNIT = re.compile(r"(?<![\w.#/–-])" + _NUMBER + r"(?![–-]\d)\s*([A-Za-z]+)\b", re.IGNORECASE)
+_UNIT_THEN_NUMBER = re.compile(r"\b([A-Za-z]+)\s*[:=]\s*" + _NUMBER + r"(?!\w|\.\d)", re.IGNORECASE)
+_SECTION_NUMBER_BEFORE = re.compile(
+    r"(?:sprint|wave|tier|phase|step|stage|finding|section|round|milestone|version|task|item|"
+    r"invariant|issue|pr|v)\s*#?\s*$", re.IGNORECASE)
+_ESTIMATE_BEFORE = re.compile(r"(?:~|≈|\babout|\baround|\broughly|\bapprox(?:imately|\.)?)\s*$", re.IGNORECASE)
+
+_CHOICES = {
+    "schedule": {"hourly": "hourly", "daily": "daily", "nightly": "nightly", "weekly": "weekly", "monthly": "monthly"},
+    "execution": {"sync": "sync", "synchronous": "sync", "async": "async", "asynchronous": "async"},
+    "password hash": {"bcrypt": "bcrypt", "scrypt": "scrypt", "argon2": "argon2", "argon2id": "argon2id",
+                      "pbkdf2": "pbkdf2"},
+    "database": {"postgres": "postgres", "postgresql": "postgres", "mysql": "mysql", "sqlite": "sqlite",
+                 "mongodb": "mongodb"},
+    "model tier": {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku"},
+}
+# A whole word, so a package ("argon2-cffi") or a path ("db/sqlite.db") is not a choice.
+_CHOICE_WORD = re.compile(r"(?<![\w./-])[A-Za-z][\w-]*[A-Za-z0-9](?![\w-]|\.\w)")
+_MODEL_ID = re.compile(r"^claude-|-\d[\d.-]*$")
+_REJECTED_BEFORE = re.compile(
+    r"(?:\bnot|\bno|\bnever|\binstead of|\brather than|\bover(?!\s+to\b)|\bvs\.?|\bversus|\bwithout)"
+    r"\s+(?:\w+\s+)?$", re.IGNORECASE)
+
+_NEGATION = re.compile(r"\b(?:not|never|no|don['’]t|doesn['’]t|cannot|can['’]t|won['’]t|mustn['’]t|avoid)\b",
+                       re.IGNORECASE)
+_AUXILIARIES = frozenset({"do", "does", "must", "should", "will", "shall"})
+
+
+def _count_noun(word: str) -> str | None:
+    for noun in _SETTING_COUNT_NOUNS:
+        if word in (noun, noun + "s", noun[:-1] + "ies"):
+            return noun
+    return None
+
+
+def claim_values(text: str) -> dict[str, frozenset]:
+    """The comparable values a claim states, by kind: "time", "size", "count:attempt", "choice:schedule"."""
+    text = text or ""
+    found: dict[str, set] = {}
+
+    def add_number(number: str, unit: str, start: int) -> None:
+        if _SECTION_NUMBER_BEFORE.search(text[:start]) or _ESTIMATE_BEFORE.search(text[:start]):
+            return
+        unit = unit.lower()
+        if unit in _TIME_UNITS:
+            kind, scale = "time", _TIME_UNITS[unit]
+        elif unit in _SIZE_UNITS:
+            kind, scale = "size", _SIZE_UNITS[unit]
+        elif noun := _count_noun(unit):
+            kind, scale = f"count:{noun}", 1
+        else:
+            return
+        number = number.lower()
+        value = _WORD_NUMBERS[number] if number in _WORD_NUMBERS else float(number.replace(",", ""))
+        found.setdefault(kind, set()).add(round(value * scale, 6))
+
+    for match in _NUMBER_THEN_UNIT.finditer(text):
+        add_number(match.group(1), match.group(2), match.start())
+    for match in _UNIT_THEN_NUMBER.finditer(text):
+        add_number(match.group(2), match.group(1), match.start())
+    for match in _CHOICE_WORD.finditer(text):
+        word = _MODEL_ID.sub("", match.group(0).lower())
+        for category, words in _CHOICES.items():
+            if word in words and not _REJECTED_BEFORE.search(text[:match.start()]):
+                found.setdefault(f"choice:{category}", set()).add(words[word])
+    return {kind: frozenset(values) for kind, values in found.items()}
+
+
+def _wording_without_negation(text: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z0-9]+", _NEGATION.sub(" ", (text or "").lower())) if w not in _AUXILIARIES]
+
+
+def values_differ(newer: str, older: str) -> bool:
+    """True when `newer` holds a value `older` did not, of a kind both claims state.
+
+    A newer claim that only repeats one of the older claim's values is not a
+    change: "3 attempts" after "changed from 2 attempts to 3 attempts".
+    """
+    new_values, old_values = claim_values(newer), claim_values(older)
+    if any(kind in old_values and values - old_values[kind] for kind, values in new_values.items()):
+        return True
+    if bool(_NEGATION.search(newer or "")) == bool(_NEGATION.search(older or "")):
+        return False
+    wording = _wording_without_negation(newer)
+    return bool(wording) and wording == _wording_without_negation(older)
+
+
+# A claim that names the value it replaced. The micro benchmark's retry change
+# ("MAX_ATTEMPTS raised from 4 to 6.") was stored as a new decision with no link
+# to the old policy, so no pair could show it. Measured 2026-09-13: 41 live
+# claims in the local stores, 16 distinct texts, 13 real changes; the others
+# quote a change inside test code or notes. Verb forms only: "migrations must
+# run from a sync fixture to avoid…" is a noun, not a migration.
+_CHANGE_VERB = (
+    r"\b(?:switch(?:es|ed|ing)?|(?:chang|mov|rais|increas|decreas|reduc|migrat|upgrad|downgrad)(?:e|es|ed|ing)|"
+    r"(?:bump|lower|tighten|loosen)(?:s|ed|ing)?|(?:swap|flip|drop)(?:s|ped|ping)?|cut|go|goes|going|went)\b"
+)
+_STATED_CHANGE = re.compile(
+    _CHANGE_VERB + r"[^.;:?!\n]{0,50}?\bfrom\s+(?P<old>[\w`'\"][\w.\-/`'\"+ ]{0,40}?)\s*(?:\bto\b|→|->)\s*"
+    r"(?P<new>[\w`'\"][\w.\-/`'\"+]*)",
+    re.IGNORECASE,
+)
+_HYPOTHETICAL_BEFORE = re.compile(r"\b(?:if|whether|would|could|might|suppose|imagine)\b[^.;]{0,30}$", re.IGNORECASE)
+_VAGUE_SIDE = frozenset({"earlier", "before", "there", "here", "now", "then", "scratch", "it", "this", "that"})
+_COMMIT = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+
+
+def states_value_change(text: str) -> bool:
+    """True when the text says a value moved from one setting to another."""
+    text = " ".join((text or "").split())
+    for match in _STATED_CHANGE.finditer(text):
+        old = match.group("old").strip(" `'\"")
+        new = match.group("new").strip(" `'\".,")
+        if _HYPOTHETICAL_BEFORE.search(text[:match.start()]):
+            continue
+        if old.lower() in _VAGUE_SIDE or new.lower() in _VAGUE_SIDE or old.lower() == new.lower():
+            continue
+        if _COMMIT.match(old) or _COMMIT.match(new) or len(old.split()) > 4:
+            continue
+        return True
+    return False
+
+
 # ── What a stored claim's markers cost it in the ranking ─────────────────────
 #
 # These demotes used to multiply only the stored weight. The composite ranking
