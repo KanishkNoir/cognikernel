@@ -139,6 +139,38 @@ class TestChangedClaims:
 
         assert changed_claim_ids(conn, P) == {raised}
 
+    def test_a_backfilled_claim_from_an_earlier_session_still_counts_as_earlier(self, conn) -> None:
+        """Review on #54: same-key claims are compared in session order, not in the order rows were written."""
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        store_evidence(conn, P, "s1", "transcript", b"a", captured_at=1000)
+        store_evidence(conn, P, "s2", "transcript", b"b", captured_at=2000)
+        nightly = insert_event(conn, Event(project_id=P, session_id="s2", event_type="DECISION",
+                                           payload={"description": "Back up the database nightly"},
+                                           content_hash="n", created_at=2500, decision_key="database backup"))
+        insert_event(conn, Event(project_id=P, session_id="s1", event_type="DECISION",
+                                 payload={"description": "Back up the database weekly"},
+                                 content_hash="w", created_at=3000, decision_key="database backup"))
+
+        assert changed_claim_ids(conn, P) == {nightly}
+
+    def test_each_claims_values_are_read_once(self, conn, monkeypatch) -> None:
+        """Review on #54: this runs on every render and recall, so a long-lived topic key
+        must not cost a comparison of every claim with every earlier one."""
+        import cognikernel.quality.detectors as detectors
+        from cognikernel.storage.provenance import changed_claim_ids
+
+        calls: list[str] = []
+        real = detectors.claim_values
+        monkeypatch.setattr(detectors, "claim_values", lambda text: calls.append(text) or real(text))
+        for n in range(40):
+            insert_event(conn, Event(project_id=P, session_id=f"s{n:02d}", event_type="DECISION",
+                                     payload={"description": f"Keep {n + 1} workers"},
+                                     content_hash=f"k{n}", created_at=1000 + n, decision_key="worker pool"))
+
+        assert len(changed_claim_ids(conn, P)) == 39
+        assert len(calls) <= 40
+
 
 class TestSessionOrder:
     def test_sessions_are_numbered_by_first_capture_not_by_id(self, conn) -> None:

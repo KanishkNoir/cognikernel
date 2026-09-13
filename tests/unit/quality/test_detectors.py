@@ -171,6 +171,7 @@ class TestValuesDiffer:
         ("We're switching from bcrypt to argon2id for password hashing.", "For password hashing, we'll use bcrypt."),
         ("The default alias resolves to claude-opus-4-8.", "The default alias resolves to claude-sonnet-4-6."),
         ("Never retry on a 429 response.", "Retry on a 429 response."),
+        ("Raise the limit from 4 to 6 attempts.", "The limit is 4 attempts."),
     ])
     def test_a_number_a_choice_or_a_negation_that_differs(self, newer: str, older: str) -> None:
         from cognikernel.quality.detectors import values_differ
@@ -188,6 +189,9 @@ class TestValuesDiffer:
         ("Retries: 3 attempts with full jitter.", "The policy changed from 2 attempts to 3 attempts."),
         ("Decisions around argon2id and JWT settings.", "Decisions around argon2-cffi and JWT settings."),
         ("Do not hand-tune fusion weights; no exceptions.", "Do not hand-tune fusion weights."),
+        # Review on #54: a range is not a setting, whatever its endpoints.
+        ("Retry budgets range from 1 to 12 attempts.", "Retry budgets range from 1 to 10 attempts."),
+        ("Run between 2 and 8 workers.", "Run between 2 and 4 workers."),
     ])
     def test_a_restatement_a_count_or_an_estimate_does_not(self, newer: str, older: str) -> None:
         from cognikernel.quality.detectors import values_differ

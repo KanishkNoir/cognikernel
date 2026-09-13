@@ -22,7 +22,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from cognikernel.quality.detectors import states_value_change, values_differ
+from cognikernel.quality.detectors import EarlierValues, ValueSignature, states_value_change, value_signature
 from cognikernel.storage.events import Event, _row_to_event
 
 _ID_SUBJECT = re.compile(r"^#?(\d+)$")
@@ -105,10 +105,13 @@ def changed_claim_ids(conn: sqlite3.Connection, project_id: str) -> set[int]:
       - a claim it is linked to — one it superseded, or an older one with the same
         decision key (folded at read time without a supersession link) — came from
         an earlier session and holds a different value: a number, a named choice
-        or a negation (quality.detectors.values_differ).
+        or a negation (quality.detectors.EarlierValues).
     A link alone is not a change. Measured on the local stores, supersession and
     shared keys mostly join rewordings of one fact, often from the same session
     (research/injection_format/session_labels_2026-09-13.md).
+
+    Runs on every render and recall, so each claim's values are read once and a
+    topic key is checked in one pass, in session order rather than row order.
     """
     positions = {sid: pos.position for sid, pos in session_order(conn, project_id).items()}
     rows = conn.execute(
@@ -122,23 +125,42 @@ def changed_claim_ids(conn: sqlite3.Connection, project_id: str) -> set[int]:
     sessions = {row["id"]: row["session_id"] for row in rows}
     descriptions = {row["id"]: str(json.loads(row["payload"]).get("description") or "") for row in rows}
 
-    def changed_from(newer: int, older: int) -> bool:
-        new_position, old_position = positions.get(sessions[newer]), positions.get(sessions[older])
-        return (new_position is not None and old_position is not None and old_position < new_position
-                and values_differ(descriptions[newer], descriptions[older]))
+    signatures: dict[int, ValueSignature] = {}
+
+    def signature(event_id: int) -> ValueSignature:
+        if event_id not in signatures:
+            signatures[event_id] = value_signature(descriptions[event_id])
+        return signatures[event_id]
+
+    def position(event_id: int) -> int | None:
+        return positions.get(sessions[event_id])
 
     changed = {row["id"] for row in rows if states_value_change(descriptions[row["id"]])}
     same_key: dict[str, list[int]] = {}
     for row in rows:
-        replacement = row["superseded_by"]
-        if replacement in sessions and replacement not in changed and changed_from(replacement, row["id"]):
-            changed.add(replacement)
-        if row["decision_key"]:
-            same_key.setdefault(row["decision_key"], []).append(row["id"])
+        older, replacement = row["id"], row["superseded_by"]
+        if replacement in sessions and replacement not in changed:
+            old_position, new_position = position(older), position(replacement)
+            if old_position is not None and new_position is not None and old_position < new_position:
+                earlier = EarlierValues()
+                earlier.add(signature(older))
+                if earlier.changed_by(signature(replacement)):
+                    changed.add(replacement)
+        if row["decision_key"] and position(older) is not None:
+            same_key.setdefault(row["decision_key"], []).append(older)
     for ids in same_key.values():
-        for index, newer in enumerate(ids):
-            if newer not in changed and any(changed_from(newer, older) for older in ids[:index]):
-                changed.add(newer)
+        # Stable sort: row order still breaks ties within one session.
+        ids.sort(key=position)
+        earlier = EarlierValues()
+        current_session: list[int] = []
+        for event_id in ids:
+            if current_session and position(current_session[0]) != position(event_id):
+                for done in current_session:
+                    earlier.add(signature(done))
+                current_session = []
+            if event_id not in changed and earlier.changed_by(signature(event_id)):
+                changed.add(event_id)
+            current_session.append(event_id)
     return changed
 
 

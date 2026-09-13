@@ -283,13 +283,20 @@ _WORD_NUMBERS = {
     word: n for n, word in enumerate(
         "zero one two three four five six seven eight nine ten eleven twelve".split())
 }
-_NUMBER = r"(\d[\d,]*(?:\.\d+)?|(?:" + "|".join(_WORD_NUMBERS) + r")\b)"
+_NUM_TOKEN = r"(?:\d[\d,]*(?:\.\d+)?|(?:" + "|".join(_WORD_NUMBERS) + r")\b)"
+_NUMBER = "(" + _NUM_TOKEN + ")"
 _NUMBER_THEN_UNIT = re.compile(r"(?<![\w.#/–-])" + _NUMBER + r"(?![–-]\d)\s*([A-Za-z]+)\b", re.IGNORECASE)
 _UNIT_THEN_NUMBER = re.compile(r"\b([A-Za-z]+)\s*[:=]\s*" + _NUMBER + r"(?!\w|\.\d)", re.IGNORECASE)
 _SECTION_NUMBER_BEFORE = re.compile(
     r"(?:sprint|wave|tier|phase|step|stage|finding|section|round|milestone|version|task|item|"
     r"invariant|issue|pr|v)\s*#?\s*$", re.IGNORECASE)
 _ESTIMATE_BEFORE = re.compile(r"(?:~|≈|\babout|\baround|\broughly|\bapprox(?:imately|\.)?)\s*$", re.IGNORECASE)
+# Bounds, not a setting: "range from 1 to 10 attempts", "between 2 and 8 workers".
+# "Raise the limit from 4 to 6 attempts" is a change and keeps both values (_CHANGE_BEFORE).
+_RANGE = re.compile(
+    r"\b(from|between)\s+" + _NUM_TOKEN + r"(?:\s*[A-Za-z]+)?\s+(?:to|and|through)\s+" + _NUM_TOKEN,
+    re.IGNORECASE,
+)
 
 _CHOICES = {
     "schedule": {"hourly": "hourly", "daily": "daily", "nightly": "nightly", "weekly": "weekly", "monthly": "monthly"},
@@ -323,8 +330,14 @@ def claim_values(text: str) -> dict[str, frozenset]:
     """The comparable values a claim states, by kind: "time", "size", "count:attempt", "choice:schedule"."""
     text = text or ""
     found: dict[str, set] = {}
+    ranges = [
+        match.span() for match in _RANGE.finditer(text)
+        if not (match.group(1).lower() == "from" and _CHANGE_BEFORE.search(text[:match.start()]))
+    ]
 
-    def add_number(number: str, unit: str, start: int) -> None:
+    def add_number(number: str, unit: str, start: int, at: int) -> None:
+        if any(low <= at < high for low, high in ranges):
+            return
         if _SECTION_NUMBER_BEFORE.search(text[:start]) or _ESTIMATE_BEFORE.search(text[:start]):
             return
         unit = unit.lower()
@@ -341,9 +354,9 @@ def claim_values(text: str) -> dict[str, frozenset]:
         found.setdefault(kind, set()).add(round(value * scale, 6))
 
     for match in _NUMBER_THEN_UNIT.finditer(text):
-        add_number(match.group(1), match.group(2), match.start())
+        add_number(match.group(1), match.group(2), match.start(), match.start(1))
     for match in _UNIT_THEN_NUMBER.finditer(text):
-        add_number(match.group(2), match.group(1), match.start())
+        add_number(match.group(2), match.group(1), match.start(), match.start(2))
     for match in _CHOICE_WORD.finditer(text):
         word = _MODEL_ID.sub("", match.group(0).lower())
         for category, words in _CHOICES.items():
@@ -352,8 +365,45 @@ def claim_values(text: str) -> dict[str, frozenset]:
     return {kind: frozenset(values) for kind, values in found.items()}
 
 
-def _wording_without_negation(text: str) -> list[str]:
-    return [w for w in re.findall(r"[a-z0-9]+", _NEGATION.sub(" ", (text or "").lower())) if w not in _AUXILIARIES]
+def _wording_without_negation(text: str) -> tuple[str, ...]:
+    return tuple(w for w in re.findall(r"[a-z0-9]+", _NEGATION.sub(" ", (text or "").lower())) if w not in _AUXILIARIES)
+
+
+@dataclass(frozen=True)
+class ValueSignature:
+    """What a claim states that a later claim can disagree with, read once per claim."""
+    values: dict[str, frozenset]
+    negated: bool
+    wording: tuple[str, ...]
+
+
+def value_signature(text: str) -> ValueSignature:
+    return ValueSignature(claim_values(text), bool(_NEGATION.search(text or "")), _wording_without_negation(text))
+
+
+class EarlierValues:
+    """Every value earlier claims on one topic stated, so a topic is checked in one pass.
+
+    The session block and recall ask this on every render: comparing each claim
+    with every earlier one costs k² parses on a long-lived topic key.
+    """
+
+    def __init__(self) -> None:
+        self._values: dict[str, set] = {}
+        self._wordings: set[tuple[bool, tuple[str, ...]]] = set()
+
+    def add(self, signature: ValueSignature) -> None:
+        for kind, values in signature.values.items():
+            self._values.setdefault(kind, set()).update(values)
+        if signature.wording:
+            self._wordings.add((signature.negated, signature.wording))
+
+    def changed_by(self, signature: ValueSignature) -> bool:
+        """True when `signature` states a value no earlier claim did, of a kind an earlier
+        claim stated, or negates an earlier claim's otherwise identical wording."""
+        if any(kind in self._values and values - self._values[kind] for kind, values in signature.values.items()):
+            return True
+        return bool(signature.wording) and (not signature.negated, signature.wording) in self._wordings
 
 
 def values_differ(newer: str, older: str) -> bool:
@@ -362,13 +412,9 @@ def values_differ(newer: str, older: str) -> bool:
     A newer claim that only repeats one of the older claim's values is not a
     change: "3 attempts" after "changed from 2 attempts to 3 attempts".
     """
-    new_values, old_values = claim_values(newer), claim_values(older)
-    if any(kind in old_values and values - old_values[kind] for kind, values in new_values.items()):
-        return True
-    if bool(_NEGATION.search(newer or "")) == bool(_NEGATION.search(older or "")):
-        return False
-    wording = _wording_without_negation(newer)
-    return bool(wording) and wording == _wording_without_negation(older)
+    earlier = EarlierValues()
+    earlier.add(value_signature(older))
+    return earlier.changed_by(value_signature(newer))
 
 
 # A claim that names the value it replaced. The micro benchmark's retry change
@@ -381,6 +427,7 @@ _CHANGE_VERB = (
     r"\b(?:switch(?:es|ed|ing)?|(?:chang|mov|rais|increas|decreas|reduc|migrat|upgrad|downgrad)(?:e|es|ed|ing)|"
     r"(?:bump|lower|tighten|loosen)(?:s|ed|ing)?|(?:swap|flip|drop)(?:s|ped|ping)?|cut|go|goes|going|went)\b"
 )
+_CHANGE_BEFORE = re.compile(_CHANGE_VERB + r"[^.;:?!\n]{0,50}$", re.IGNORECASE)
 _STATED_CHANGE = re.compile(
     _CHANGE_VERB + r"[^.;:?!\n]{0,50}?\bfrom\s+(?P<old>[\w`'\"][\w.\-/`'\"+ ]{0,40}?)\s*(?:\bto\b|→|->)\s*"
     r"(?P<new>[\w`'\"][\w.\-/`'\"+]*)",
