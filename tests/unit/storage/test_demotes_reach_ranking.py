@@ -1,10 +1,12 @@
 """Demotes reach the ranking.
 
-The quality gate's downgrade, the memory-narration demote and the fragment demote
-used to lower only the stored weight. The composite ranking recomputes every
-weight and never read that value, so a demoted claim ranked exactly like an
-admitted one — while the unit tests, which checked the stored value, all passed.
-These tests assert the ranking and the block, not the stored value.
+The memory-narration and step-narration demotes lower a claim's ranking weight,
+not only the stored weight, which the composite ranking never reads. These tests
+assert the ranking and the block, not the stored value.
+
+The fragment, context-dependent and unverified-path markers no longer demote:
+ablated on 59 real blocks, two changed nothing and the context-dependent demote
+kept mostly real facts out (research/fixes/heuristics_audit_2026-09-13.md).
 """
 from __future__ import annotations
 
@@ -42,14 +44,15 @@ def _weight(recs: list[dict], text: str) -> float:
 
 
 class TestDemotesReachTheRanking:
-    def test_a_quality_gate_downgrade_halves_the_ranking_weight(self, conn) -> None:
+    def test_a_subject_less_downgrade_leaves_the_ranking_weight(self, conn) -> None:
+        """The gate still marks the claim; the ranking no longer reads the mark."""
         downgraded = apply_verdict(_claim("It must not take down the pipeline."),
                                    Verdict("downgrade", "D7", "subject-less"))
 
         projection = _project(conn, _claim(CLEAN), downgraded)
 
-        clean = _weight(projection.ranked_decisions, CLEAN)
-        assert _weight(projection.ranked_decisions, "It must not take down the pipeline.") == pytest.approx(clean * 0.5)
+        assert _weight(projection.ranked_decisions, "It must not take down the pipeline.") == pytest.approx(
+            _weight(projection.ranked_decisions, CLEAN))
 
     def test_memory_narration_ranks_far_below_a_project_fact(self, conn) -> None:
         narration = "CogniKernel's Stop hook will persist the updated rationale."
@@ -60,13 +63,13 @@ class TestDemotesReachTheRanking:
         assert _weight(projection.ranked_decisions, narration) == pytest.approx(clean * 0.15)
         assert projection.ranked_decisions[0]["payload"]["description"] == CLEAN
 
-    def test_a_fragment_ranks_below_a_project_fact(self, conn) -> None:
+    def test_a_fragment_marker_leaves_the_ranking_weight(self, conn) -> None:
         fragment = "Use the same key for both."
 
         projection = _project(conn, _claim(CLEAN), _claim(fragment, provenance="salience_v2_broad+frag"))
 
         assert _weight(projection.ranked_decisions, fragment) == pytest.approx(
-            _weight(projection.ranked_decisions, CLEAN) * 0.4)
+            _weight(projection.ranked_decisions, CLEAN))
 
     def test_assistant_step_narration_ranks_below_a_project_fact(self, conn) -> None:
         from cognikernel.quality.detectors import STEP_NARRATION_DEMOTE

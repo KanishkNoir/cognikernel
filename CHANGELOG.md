@@ -39,20 +39,19 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   benchmark, where the top two decisions in one session were the agent's own
   answer lines.
 
-- **Claims CogniKernel marked as low quality still ranked like any other.**
-  Since 0.1.1 the quality gate has marked statements whose subject is missing
-  ("It must not take down the pipeline") and file paths that don't exist, and
-  extraction marks the assistant narrating CogniKernel itself ("CogniKernel's
-  Stop hook will persist this"). Each mark was meant to push the claim down so
-  it fell out of the session block while staying reachable through `recall`,
-  and the 0.1.1 notes said so. It never happened: the marks lowered a stored
-  number that the ranking doesn't read. They now lower the claim's rank
-  directly — to half, or to 0.15 for memory narration — and `cognikernel why`
-  shows it as a `quality` factor. Measured across 59 real project stores, the
-  session block changes in 20 projects: about 60 marked claims leave it and
-  other claims take their places. The memory-narration check was narrowed
-  first, so a project that discusses CogniKernel in its own design, or says
-  "from memory" or "graveyard" in its ordinary sense, is no longer marked.
+- **The assistant narrating CogniKernel itself still ranked like a project
+  fact.** Extraction marks lines like "CogniKernel's Stop hook will persist
+  this", and since 0.1.1 the quality gate has marked statements whose subject
+  is missing and file paths that don't exist. The 0.1.1 notes said marked
+  claims fall out of the session block. They never did: the marks lowered a
+  stored number the ranking doesn't read. Memory narration now lowers the
+  claim's rank directly, to 0.15, and `cognikernel why` shows it as a `quality`
+  factor. Measured on 59 real project stores, it keeps 28 lines out of 15
+  projects' blocks, mostly narration and pasted tool output. The check was
+  narrowed first, so a project that discusses CogniKernel in its own design, or
+  says "from memory" or "graveyard" in its ordinary sense, is no longer marked.
+  The gate's other marks still record what it noticed but don't change rank:
+  switched on, they changed nothing or pushed out more real facts than junk.
   Hard constraints, do-not-retry entries and anything you stated keep their
   place ahead of other claims.
 
