@@ -13,8 +13,10 @@ never crashes doctor).
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
 from cognikernel.config import EXPECTED_SCHEMA_VERSION, Config
 
@@ -133,6 +135,19 @@ def _encoder_engine_available() -> bool:
     )
 
 
+def _install_location(override_env: str, head: str) -> Path:
+    """Where a missing head should go: the explicit override, else where `install-heads` writes.
+
+    The loaders fall back to a repo-checkout path when nothing is installed. In a pip
+    install that path sits inside site-packages, so naming it sends users to the wrong
+    place.
+    """
+    override = os.environ.get(override_env)
+    if override:
+        return Path(override)
+    return Path(os.environ.get("COGNIKERNEL_DIR") or (Path.home() / ".cognikernel")) / "models" / head
+
+
 def check_salience_head(config: Config) -> HealthCheck:
     """Is the fine-tuned salience_v2 encoder actually loadable?
 
@@ -165,7 +180,8 @@ def check_salience_head(config: Config) -> HealthCheck:
         return HealthCheck(
             "salience_head", True,
             f"not installed — extraction falls back to legacy "
-            f"(run `cognikernel install-heads`; expected at {body_dir})",
+            f"(run `cognikernel install-heads`; expected at "
+            f"{_install_location('COGNIKERNEL_V2_BODY_DIR', 'salience_v2')})",
         )
     return HealthCheck(
         "salience_head", True,
@@ -200,7 +216,8 @@ def check_supersession_head(config: Config) -> HealthCheck:
         return HealthCheck(
             "supersession_head", True,
             f"not installed — supersession falls back to the lexical+cosine gate "
-            f"(run `cognikernel install-heads`; expected at {body_dir})",
+            f"(run `cognikernel install-heads`; expected at "
+            f"{_install_location('COGNIKERNEL_XENC_BODY_DIR', 'supersession_xenc')})",
         )
     return HealthCheck(
         "supersession_head", True,

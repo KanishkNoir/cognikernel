@@ -62,6 +62,7 @@ class TestHealthChecks:
         assert check.ok
         assert "not installed" in check.detail
         assert "install-heads" in check.detail
+        assert str(tmp_path / "nowhere") in check.detail  # an explicit override is what it names
 
     def test_supersession_head_requested_but_not_installed_is_still_healthy(
         self, tmp_path: Path, monkeypatch
@@ -71,6 +72,40 @@ class TestHealthChecks:
         assert check.ok
         assert "not installed" in check.detail
         assert "install-heads" in check.detail
+        assert str(tmp_path / "nowhere") in check.detail
+
+    def test_a_missing_salience_head_names_where_install_heads_puts_it(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A pip install has no repo checkout. The loader's last-resort path then sits
+        inside site-packages, and doctor printed it as "expected at", which is not
+        where `install-heads` writes (found checking the 0.1.3 wheel in a clean venv)."""
+        from cognikernel.extraction import salience_v2
+
+        monkeypatch.delenv("COGNIKERNEL_V2_BODY_DIR", raising=False)
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "ckhome"))
+        monkeypatch.setattr(salience_v2, "_body_dir", lambda: tmp_path / "site-packages-fallback")
+
+        check = check_salience_head(Config(extractor="v2-broad"))
+
+        assert "not installed" in check.detail
+        assert str(tmp_path / "ckhome" / "models" / "salience_v2") in check.detail
+        assert "site-packages-fallback" not in check.detail
+
+    def test_a_missing_supersession_head_names_where_install_heads_puts_it(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from cognikernel.delta import supersede_xenc
+
+        monkeypatch.delenv("COGNIKERNEL_XENC_BODY_DIR", raising=False)
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(tmp_path / "ckhome"))
+        monkeypatch.setattr(supersede_xenc, "_body_dir", lambda: tmp_path / "site-packages-fallback")
+
+        check = check_supersession_head(Config(cross_encoder_supersession=True))
+
+        assert "not installed" in check.detail
+        assert str(tmp_path / "ckhome" / "models" / "supersession_xenc") in check.detail
+        assert "site-packages-fallback" not in check.detail
 
     def test_salience_head_artifacts_present_reports_installed(
         self, tmp_path: Path, monkeypatch
