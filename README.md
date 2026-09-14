@@ -1,4 +1,15 @@
-# CogniKernel
+<div align="center">
+
+<pre>
+ ██████╗ ██████╗  ██████╗ ███╗   ██╗██╗██╗  ██╗███████╗██████╗ ███╗   ██╗███████╗██╗     
+██╔════╝██╔═══██╗██╔════╝ ████╗  ██║██║██║ ██╔╝██╔════╝██╔══██╗████╗  ██║██╔════╝██║     
+██║     ██║   ██║██║  ███╗██╔██╗ ██║██║█████╔╝ █████╗  ██████╔╝██╔██╗ ██║█████╗  ██║     
+██║     ██║   ██║██║   ██║██║╚██╗██║██║██╔═██╗ ██╔══╝  ██╔══██╗██║╚██╗██║██╔══╝  ██║     
+╚██████╗╚██████╔╝╚██████╔╝██║ ╚████║██║██║  ██╗███████╗██║  ██║██║ ╚████║███████╗███████╗
+ ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝
+</pre>
+
+# CogniKernel: persistent, structured project memory for Claude Code and Codex
 
 [![PyPI](https://img.shields.io/pypi/v/cognikernel.svg)](https://pypi.org/project/cognikernel/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/cognikernel?period=total&units=NONE&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cognikernel)
@@ -6,6 +17,13 @@
 [![License](https://img.shields.io/github/license/KanishkNoir/cognikernel.svg)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/KanishkNoir/cognikernel.svg)](https://github.com/KanishkNoir/cognikernel/commits/main)
 [![Stars](https://img.shields.io/github/stars/KanishkNoir/cognikernel.svg?style=flat)](https://github.com/KanishkNoir/cognikernel/stargazers)
+
+</div>
+
+> [!NOTE]
+> **Updates are paused.** CogniKernel updates are halted until further notice.
+> **[v0.1.3](https://pypi.org/project/cognikernel/0.1.3/)** is the current
+> version and will stay current until work resumes.
 
 **Your AI coding agent has amnesia by design.** Every session starts from zero —
 it re-reads the same files, re-derives the same architecture, and re-asks
@@ -91,9 +109,9 @@ recommended: without it, extraction falls back to a weaker lexical path, and
 - **Cheaper by default:** new projects start with the advisory read gate. Under
   the old strict default, 89% of refused first reads were retried at once.
   Existing projects keep their setting.
-- **Corrected numbers:** `cognikernel telemetry`, `doctor` and the published
-  benchmark counted token usage once per transcript line instead of once per
-  response.
+- **Corrected numbers:** `cognikernel telemetry` and the published benchmark
+  counted token usage once per transcript line instead of once per response, so
+  the figures `doctor` showed were inflated too.
 
 Details: [`CHANGELOG.md`](CHANGELOG.md) · [release notes](docs/release-notes-0.1.3.md).
 
