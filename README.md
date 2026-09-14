@@ -1,4 +1,15 @@
-# CogniKernel
+<div align="center">
+
+<pre>
+ ██████╗ ██████╗  ██████╗ ███╗   ██╗██╗██╗  ██╗███████╗██████╗ ███╗   ██╗███████╗██╗     
+██╔════╝██╔═══██╗██╔════╝ ████╗  ██║██║██║ ██╔╝██╔════╝██╔══██╗████╗  ██║██╔════╝██║     
+██║     ██║   ██║██║  ███╗██╔██╗ ██║██║█████╔╝ █████╗  ██████╔╝██╔██╗ ██║█████╗  ██║     
+██║     ██║   ██║██║   ██║██║╚██╗██║██║██╔═██╗ ██╔══╝  ██╔══██╗██║╚██╗██║██╔══╝  ██║     
+╚██████╗╚██████╔╝╚██████╔╝██║ ╚████║██║██║  ██╗███████╗██║  ██║██║ ╚████║███████╗███████╗
+ ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝
+</pre>
+
+**Persistent, structured project memory for Claude Code and Codex**
 
 [![PyPI](https://img.shields.io/pypi/v/cognikernel.svg)](https://pypi.org/project/cognikernel/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/cognikernel?period=total&units=NONE&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cognikernel)
@@ -6,6 +17,8 @@
 [![License](https://img.shields.io/github/license/KanishkNoir/cognikernel.svg)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/KanishkNoir/cognikernel.svg)](https://github.com/KanishkNoir/cognikernel/commits/main)
 [![Stars](https://img.shields.io/github/stars/KanishkNoir/cognikernel.svg?style=flat)](https://github.com/KanishkNoir/cognikernel/stargazers)
+
+</div>
 
 **Your AI coding agent has amnesia by design.** Every session starts from zero —
 it re-reads the same files, re-derives the same architecture, and re-asks
