@@ -14,6 +14,10 @@ scripts/_*.py
 # Local analysis workspaces and benchmark residue
 analysis_*/
 .pytmp/
+.pytest-tmp/
+# Local audit virtualenv; hatchling's sdist follows .gitignore, and the 0.1.3
+# build packed all 2,495 files of it before this line existed.
+.ck-audit-venv/
 .codex/
 .superpowers/
 .agents/
