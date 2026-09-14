@@ -9,6 +9,17 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.1.3] — 2026-09-14
+
+Memory that is more careful about what it keeps, and can explain itself. This
+release fixes a fresh-install break that left the memory tools missing, picks the
+right open work item for the session block, stops keeping the assistant's own
+narration as decisions, keeps memory together when a session changes into a
+subdirectory, and corrects the token figures CogniKernel and its benchmark
+reported. It adds three commands for asking memory why.
+
 ### Changed
 
 - **New projects no longer refuse the first read of every file in the
@@ -77,6 +88,56 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   figures; running `cognikernel telemetry <project_path>` again re-counts any
   session whose transcript still exists.
 
+- **The session block often showed the wrong open work item.** Several
+  defects compounded:
+  - Every "now doing X" line the assistant wrote during a session was stored as
+    a separate open work item, and nothing retired the earlier ones.
+  - An ordinary instruction from you ("Add the Pydantic response schema") sat on
+    the same top tier as work you had actually deferred, and could win.
+  - A sentence that only pointed at a work item ("This is the active work item
+    for the next session.") could replace the very item it pointed at.
+  - Enough decisions could crowd the work item out of the block entirely.
+
+  Now:
+  - A later "now doing X" retires the earlier ones from the same session.
+  - An explicit handoff to a later session ("Next session we will build the
+    replay command") survives that and ranks above narration.
+  - A plain instruction no longer outranks deferred work.
+  - A pointer no longer deletes what it points at.
+  - The chosen work item's space in the block is reserved before anything else
+    is packed.
+
+  Checked against all 133 work-item events from four real benchmark stores,
+  kept as a frozen held-out set.
+
+- **A replacement loop could silently delete claims.** If claims ended up each
+  marked as replaced by another in a loop, which concurrent captures could
+  cause, every claim in the loop dropped out of memory at once. Every
+  replacement now goes through one guarded write that refuses a link that
+  would close a loop, including under real concurrent writes.
+
+- **Changing into a subdirectory mid-session split memory into a second
+  project.** Memory was keyed on whichever directory a session ended in, so an
+  agent that ran `cd packages/core` wrote the rest of its decisions to a
+  separate, empty store; on one real project, 7 of 8 captures went there.
+  Captures from a subdirectory now go to the store that already exists for the
+  enclosing git repository. A store is never created automatically at the
+  repository root, so projects inside a larger repository (a dotfiles or
+  `~/code` repo) don't collapse into one store.
+
+- **Published benchmark costs were overstated.** The benchmark harness counted
+  token usage once per transcript line, the same bug as `cognikernel
+  telemetry` above. `docs/benchmark.md` and the README now use corrected
+  figures. Against native auto-memory, CogniKernel is cheaper on Relay (−25.0%)
+  and Toolbelt (−19.3%) and within a few percent on Conductor and Taskflow.
+  Against no memory at all, it costs 23% more on Relay.
+
+- **`cognikernel doctor` pointed at the wrong folder for missing models.** When
+  the fine-tuned models weren't installed, `doctor` said they were "expected
+  at" a path inside the Python install, which is not where `cognikernel
+  install-heads` puts them. It now names `~/.cognikernel/models/…` (or the
+  override you set). Loading was never affected.
+
 ### Added
 
 - **The session block says which session an unfinished work item came from.**
@@ -91,9 +152,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   happened, not as an opaque id — and the sentence in the conversation it was
   extracted from, and who said it. It also shows what the quality gate noted
   when the claim was admitted, why it ranks where it does — its weight in the
-  session block broken into the six factors that produce it (type, how
-  recently and how often it came up, how central and how active its files
-  are), or which claim it was folded into — and its history: the claims it
+  session block broken into the factors that produce it (type, how recently
+  and how often it came up, how central and how active its files are, and any
+  quality demote), or which claim it was folded into — and its history: the claims it
   replaced or was replaced by, when, and which rule decided it. Replaced claims can be looked
   up too, which is the point when you are asking why memory changed its mind.
   Anything the store did not record — the commit a claim was captured

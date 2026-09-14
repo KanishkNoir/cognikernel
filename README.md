@@ -68,6 +68,37 @@ recommended: without it, extraction falls back to a weaker lexical path, and
 
 ---
 
+## What's new in 0.1.3
+
+- **Fresh installs get the memory tools again.** 0.1.2 accepted `mcp` 2.x, which
+  removed a module the MCP server needs, so `recall`, `find_related`, `skeleton`
+  and `get_session_state` could be missing. 0.1.3 requires `mcp<2`. On 0.1.2, run
+  `pip install "mcp<2"`.
+- **The right open work item.** The block's "Working on" line is no longer taken
+  over by Claude's step narration, an ordinary instruction, or a sentence that only
+  points at a work item, and it keeps its place when decisions pile up. A work item
+  carried over from an earlier session says which one: `(S1 · 09-12)`.
+- **Less of Claude's own chatter kept as memory.** Step narration ("Now let's run
+  the full test suite."), answer lines ("Summary: …") and narration about
+  CogniKernel itself now rank below real decisions or are no longer stored.
+- **Memory follows you into subdirectories** of the same git repository instead of
+  starting a second, empty store.
+- **Ask memory why:**
+  - `cognikernel why`: where a claim came from, why it ranks where it does, and
+    what it replaced
+  - `cognikernel show --as-of`: what memory believed at a past date or commit
+  - `cognikernel explain-recall`: why recall found what it did
+- **Cheaper by default:** new projects start with the advisory read gate. Under
+  the old strict default, 89% of refused first reads were retried at once.
+  Existing projects keep their setting.
+- **Corrected numbers:** `cognikernel telemetry`, `doctor` and the published
+  benchmark counted token usage once per transcript line instead of once per
+  response.
+
+Details: [`CHANGELOG.md`](CHANGELOG.md) · [release notes](docs/release-notes-0.1.3.md).
+
+---
+
 ## What CogniKernel actually is
 
 AI coding agents don't remember anything between sessions by default — the
@@ -111,8 +142,8 @@ involved is the coding agent you already run — CogniKernel makes it remember.
   fewer files ([What it saves you](#what-it-saves-you)).
 - **MCP tools** for targeted use: `recall` · `find_related` · `skeleton` ·
   `get_session_state`.
-- **CLI**: `init` · `doctor` · `install-heads` · `codex-sync` · `show` · `reset`
-  (full list under [Interfaces](#interfaces)).
+- **CLI**: `init` · `doctor` · `install-heads` · `codex-sync` · `show` · `why` ·
+  `explain-recall` · `reset` (full list under [Interfaces](#interfaces)).
 - **No LLM, no cloud, no keys** — everything runs locally; nothing leaves your
   machine.
 
@@ -213,7 +244,7 @@ keyword list unless the fallback path is active.
 |---|---|---|---|---|
 | **Session block** | `SessionStart` | advisory | injects the canonical decisions/constraints/skeleton block | a new session already knows what the last one decided — no "let me re-read the codebase to remember where we were" |
 | **CK-1 recall** | `UserPromptSubmit` | advisory | surfaces prompt-relevant memory, dual-evidence gated, dedup'd via render ledger | ask about a subsystem and the relevant prior decision rides in with your prompt, unasked |
-| **Read/Edit gate** | `PreToolUse` | **hard / JIT** | read-efficiency gate on Read/Grep; **just-in-time prohibition surfacing** on Write/Edit (K2) | the agent gets warned *at the moment it's about to violate a past decision*, not three files later when you notice |
+| **Read/Edit gate** | `PreToolUse` | advisory (strict opt-in) / **JIT** | read efficiency on Read/Grep: refuses re-reading a file already read this session, and refuses first reads only under `hook_policy = "strict"`; **just-in-time prohibition surfacing** on Write/Edit (K2) | the agent gets warned *at the moment it's about to violate a past decision*, not three files later when you notice |
 | **Capture** | `Stop` | side-effect | extracts and persists decisions — you never write memory to CLAUDE.md by hand | you never write down what you decided; the next session already has it |
 
 ---
@@ -352,7 +383,10 @@ block + MCP recall.
 - `cognikernel doctor [--strict] <project>` — subsystem health report
 - `cognikernel codex-sync <project>` — capture Codex CLI sessions for this project
 - `cognikernel install-heads` — install the trained encoder artifacts (salience + cross-encoder ONNX bodies): downloaded from the [`heads-v1` release](https://github.com/KanishkNoir/cognikernel/releases/tag/heads-v1) and sha256-verified, or copied from a local `models/` export when present
-- `cognikernel show <project>` / `cognikernel reset <project>` — inspect / clear stored memory
+- `cognikernel show <project> [--as-of <date|commit>]` / `cognikernel reset <project>` — inspect stored memory (or what it believed at a past date or commit) / clear it
+- `cognikernel why <project> <#id or words>` — where a claim came from, why it ranks where it does, and what it replaced or was replaced by
+- `cognikernel explain-recall <project> <query> [--claim #id]` — why `recall` and the per-prompt push retrieved what they did, or didn't
+- `cognikernel telemetry <project>` — count Claude Code session usage (once per API response) for `doctor`'s cache and round-trip figures
 
 ---
 
@@ -406,6 +440,9 @@ src/cognikernel/
   symbols/       AST skeleton + PageRank graph
   compression/   authority-weighted drop-to-fit budget
   injection/     block template assembly
+  quality/       admission gate + defect detectors (a dependency-free leaf)
+  telemetry/     Claude Code usage ingest: cache and round-trip figures
+  utils/         shared helpers
   model.py       Event — the dependency-free domain primitive
 tests/
   unit/          per-subsystem
@@ -416,8 +453,8 @@ tests/
 
 ## Status
 
-Schema **v21** (adds supersession/archival timestamps and a commit anchor for
-belief-history replay, on top of the Codex cross-platform capture and
-per-session write tracking). Architecture contracts: 4 kept / 0 broken. CI
+Version **0.1.3**. Schema **v22** (adds per-response telemetry and round-trip
+counts, on top of the supersession/archival timestamps and commit anchor that
+`show --as-of` and `why` read). Architecture contracts: 4 kept / 0 broken. CI
 gate: lint + full suite on Ubuntu (3.11/3.12) and Windows. See
 `CONTRIBUTING.md` for the Definition of Done that gates every change.
