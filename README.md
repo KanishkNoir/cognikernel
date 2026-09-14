@@ -9,7 +9,7 @@
  ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝
 </pre>
 
-**Persistent, structured project memory for Claude Code and Codex**
+# CogniKernel: persistent, structured project memory for Claude Code and Codex
 
 [![PyPI](https://img.shields.io/pypi/v/cognikernel.svg)](https://pypi.org/project/cognikernel/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/cognikernel?period=total&units=NONE&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cognikernel)
@@ -109,9 +109,9 @@ recommended: without it, extraction falls back to a weaker lexical path, and
 - **Cheaper by default:** new projects start with the advisory read gate. Under
   the old strict default, 89% of refused first reads were retried at once.
   Existing projects keep their setting.
-- **Corrected numbers:** `cognikernel telemetry`, `doctor` and the published
-  benchmark counted token usage once per transcript line instead of once per
-  response.
+- **Corrected numbers:** `cognikernel telemetry` and the published benchmark
+  counted token usage once per transcript line instead of once per response, so
+  the figures `doctor` showed were inflated too.
 
 Details: [`CHANGELOG.md`](CHANGELOG.md) · [release notes](docs/release-notes-0.1.3.md).
 
