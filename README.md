@@ -20,6 +20,11 @@
 
 </div>
 
+> [!NOTE]
+> **Updates are paused.** CogniKernel updates are halted until further notice.
+> **[v0.1.3](https://pypi.org/project/cognikernel/0.1.3/)** is the current
+> version and will stay current until work resumes.
+
 **Your AI coding agent has amnesia by design.** Every session starts from zero —
 it re-reads the same files, re-derives the same architecture, and re-asks
 questions you already answered last week. CogniKernel gives the *project* a
