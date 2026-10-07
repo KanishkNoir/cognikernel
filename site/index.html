@@ -286,7 +286,7 @@
 
     <div class="grid g4 types">
       <div class="card reveal"><span class="type-tag t-dec">DECISION</span><p>A choice that was made.</p><div class="ex">"use Redis for the rate limiter"</div></div>
-      <div class="card reveal"><span class="type-tag t-hard">CONSTRAINT_HARD</span><p>A rule that must not be broken. Always kept when the block is trimmed to fit.</p><div class="ex">"never log webhook payloads in full"</div></div>
+      <div class="card reveal"><span class="type-tag t-hard">CONSTRAINT_HARD</span><p>A rule that must not be broken. Prioritized in the mandatory zone; if that zone overflows, lower-authority constraints can be omitted from the rendered block.</p><div class="ex">"never log webhook payloads in full"</div></div>
       <div class="card reveal"><span class="type-tag t-soft">CONSTRAINT_SOFT</span><p>A preference or convention, graded by how strongly it was stated.</p><div class="ex">"prefer dataclasses over dicts"</div></div>
       <div class="card reveal"><span class="type-tag t-dead">APPROACH_ABANDONED</span><p>A dead end, kept in the <b>graveyard</b> so it isn't re-attempted.</p><div class="ex">"in-process cache → counts drift"</div></div>
     </div>
