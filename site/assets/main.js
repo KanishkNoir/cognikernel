@@ -619,7 +619,7 @@
   var instCmd = $("#inst-cmd");
   function setInst(k) {
     instCmd.innerHTML = INSTALL[k];
-    $$("[data-inst]").forEach(function (b) { b.setAttribute("aria-selected", String(b.dataset.inst === k)); });
+    $$("[data-inst]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.inst === k)); });
     store.set("ck-inst", k);
   }
   if (instCmd) {
