@@ -625,7 +625,7 @@ status     : <span class="ok">OK</span></pre>
     <div class="faq reveal">
       <details>
         <summary><span>Does any of my code or conversation leave my machine?</span></summary>
-        <div class="a"><p>No. Extraction, consolidation, storage and retrieval all run locally against a SQLite database. The only network call CogniKernel makes is the optional one-time <code>install-heads</code> download of model weights from this repo's GitHub release, and you can skip it with <code>--no-download</code> or install from a local folder with <code>--source</code>.</p></div>
+        <div class="a"><p>No project code or conversation is uploaded. Extraction, consolidation, storage, retrieval and model inference run locally against a SQLite database. With the recommended <code>[embedding]</code> extra, CogniKernel may download the local embedding model during initialization, and <code>install-heads</code> can download the fine-tuned weights; both paths fail open to lexical operation when unavailable.</p></div>
       </details>
       <details>
         <summary><span>Is this another LLM summarizing my transcripts?</span></summary>
