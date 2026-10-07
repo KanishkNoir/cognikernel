@@ -63,6 +63,10 @@ cognikernel = "cognikernel.integration.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cognikernel"]
 
+# The project website (deployed to GitHub Pages) is not part of the package.
+[tool.hatch.build.targets.sdist]
+exclude = ["/site"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
