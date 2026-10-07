@@ -356,7 +356,7 @@ section { position: relative; padding: clamp(80px, 11vw, 144px) 0; }
 
 /* hero orbital field */
 .orbital { position: relative; max-width: 580px; margin: 0 auto; }
-.orbital svg { width: 100%; height: auto; overflow: visible; }
+.orbital > svg { width: 100%; height: auto; overflow: visible; }
 .o-ring { fill: none; stroke: var(--orbit); stroke-width: 1; }
 .o-ring.dash { stroke-dasharray: 2 7; }
 .o-faint { fill: none; stroke: var(--orbit-2); stroke-width: 1; }
