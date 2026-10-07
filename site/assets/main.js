@@ -614,7 +614,7 @@
     pip: '<span class="pr">$ </span>pip install "cognikernel[embedding]"',
     pipx: '<span class="pr">$ </span>pipx install "cognikernel[embedding]"',
     uv: '<span class="pr">$ </span>uv tool install "cognikernel[embedding]"',
-    src: '<span class="pr">$ </span>git clone https://github.com/KanishkNoir/cognikernel &amp;&amp; cd cognikernel &amp;&amp; uv sync --extra embedding'
+    src: '<span class="pr">$ </span>git clone https://github.com/KanishkNoir/cognikernel &amp;&amp; cd cognikernel &amp;&amp; uv tool install ".[embedding]"'
   };
   var instCmd = $("#inst-cmd");
   function setInst(k) {
