@@ -247,7 +247,7 @@
 
     var byId = {};
     var nodes = HERO.map(function (n, i) {
-      var g = svgEl("g", { class: "o-node", tabindex: "0", role: "button", "aria-label": TYPE_NAME[n.type] + ": " + n.label }, svg);
+      var g = svgEl("g", { class: "o-node", tabindex: "0", role: "img", "aria-label": TYPE_NAME[n.type] + ": " + n.label + ". " + n.meta }, svg);
       svgEl("circle", { r: 18, class: "hit" }, g);
       var halo = svgEl("circle", { r: 22, fill: "url(#halo-blue)", class: "halo", opacity: 0.22 }, g);
       var ring = svgEl("circle", { r: 12, class: "ring", stroke: "var(--blue)", "stroke-opacity": 0.22 }, g);
@@ -517,13 +517,16 @@
       var anchor = Math.abs(Math.cos(ang)) < 0.2 ? "middle" : Math.cos(ang) > 0 ? "start" : "end";
       var tx = svgEl("text", { x: lx, y: ly + 4 + (Math.sin(ang) < -0.9 ? -6 : Math.sin(ang) > 0.9 ? 8 : 0), "text-anchor": anchor }, g);
       tx.textContent = "0" + (i + 1) + " " + s.k;
-      var pick = function () { touched = true; stopCycle(); show(i); };
+      var pick = function () { touched = true; stopCycle(); show(i, true); };
       g.addEventListener("click", pick);
       g.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
       return g;
     });
-    function show(i) {
+    // Only a stage the visitor picked is announced; the timer-driven cycle
+    // changes the card silently.
+    function show(i, byUser) {
       idx = i;
+      card.setAttribute("aria-live", byUser ? "polite" : "off");
       nodes.forEach(function (g, j) { g.classList.toggle("on", j === i); });
       prog.setAttribute("stroke-dashoffset", circ * (1 - (i + 0.0001) / n));
       var s = STAGES[i];
@@ -532,10 +535,17 @@
         '<div class="mod"><span>source: <a href="https://github.com/KanishkNoir/cognikernel/tree/main/src/cognikernel/' + s.m + '">src/cognikernel/' + s.m + "</a></span>" +
         '<span class="nav2"><button class="linkbtn" type="button" data-d="-1">Prev</button><button class="linkbtn" type="button" data-d="1">Next</button></span></div>';
       $$(".nav2 button", card).forEach(function (b) {
-        b.addEventListener("click", function () { touched = true; stopCycle(); show((idx + +b.dataset.d + n) % n); });
+        b.addEventListener("click", function () { touched = true; stopCycle(); show((idx + +b.dataset.d + n) % n, true); });
       });
     }
     function stopCycle() { clearInterval(timer); timer = null; }
+    // Focus or a pointer anywhere in the diagram or card ends the cycle, so a
+    // tick can never replace the button that keyboard focus is on.
+    [svg, card].forEach(function (el) {
+      ["focusin", "pointerdown"].forEach(function (t) {
+        el.addEventListener(t, function () { touched = true; stopCycle(); });
+      });
+    });
     show(0);
     if (!reduced && hasIO) {
       new IntersectionObserver(function (e) {
@@ -578,7 +588,7 @@
   (function evolution() {
     var svg = $("#evo-svg"), list = $("#sessions"), state = $("#evo-state");
     if (!svg) return;
-    var C = 220, R = [62, 104, 146, 188], sel = 3, auto = null;
+    var C = 220, R = [62, 104, 146, 188], sel = 3, auto = null, picked = false;
     var kg = svgEl("radialGradient", { id: "evo-k" }, svgEl("defs", {}, svg));
     svgEl("stop", { offset: "0%", "stop-color": "var(--gold)", "stop-opacity": "0.75" }, kg);
     svgEl("stop", { offset: "100%", "stop-color": "var(--gold)", "stop-opacity": "0" }, kg);
@@ -605,8 +615,9 @@
       txt.textContent = m.label;
       return { m: m, g: g, gg: gg, halo: halo, trace: trace, txt: txt, parts: null, type: null };
     });
-    function draw(k) {
+    function draw(k, byUser) {
       sel = k;
+      state.setAttribute("aria-live", byUser ? "polite" : "off");
       rings.forEach(function (c, i) {
         c.classList.toggle("on", i === k);
         c.classList.toggle("gold", i === k && !!SESSIONS[i].gold);
@@ -639,13 +650,15 @@
     }).join("");
     $$("button", list).forEach(function (b) {
       var k = +b.dataset.k;
-      b.addEventListener("click", function () { clearInterval(auto); auto = null; draw(k); });
-      b.addEventListener("focus", function () { clearInterval(auto); auto = null; draw(k); });
+      var pick = function () { picked = true; clearInterval(auto); auto = null; draw(k, true); };
+      b.addEventListener("click", pick);
+      b.addEventListener("focus", pick);
     });
     draw(3);
     if (!reduced) {
       // Play the project's history once when it first scrolls into view.
       whenVisible(svg, function () {
+        if (picked) return;
         var k = 0; draw(0);
         auto = setInterval(function () { k++; draw(k); if (k >= 3) { clearInterval(auto); auto = null; } }, 2200);
       }, 0.45);

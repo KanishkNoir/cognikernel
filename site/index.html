@@ -134,7 +134,7 @@
     <div class="hero-viz reveal">
       <div class="orbital">
         <svg id="orbit-svg" viewBox="0 0 560 560" role="group" aria-label="Orbital map of an illustrative project's memory. The kernel sits at the centre; hard constraints orbit closest, decisions in the middle, abandoned approaches on the outer ring. Gold marks memories recalled for the current prompt."></svg>
-        <div class="panel readout" id="readout" aria-live="polite"></div>
+        <div class="panel readout" id="readout"></div>
       </div>
       <div class="key" aria-label="Key">
         <span><svg class="glyph"><use href="#g-hard"/></svg>Hard constraint</span>
@@ -283,7 +283,7 @@
         <svg class="loop-svg" id="loop-svg" viewBox="-40 0 600 520" role="group" aria-label="The memory loop, seven stages around the kernel"></svg>
         <p class="fig" style="text-align:center">Fig. 2 — The memory loop</p>
       </div>
-      <div class="panel stage reveal" id="stage-card" aria-live="polite"></div>
+      <div class="panel stage reveal" id="stage-card" aria-live="off"></div>
     </div>
 
     <div class="hooks reveal">
@@ -363,7 +363,7 @@
     </div>
     <div class="viz reveal">
       <svg class="evo-svg" id="evo-svg" viewBox="-72 0 584 440" role="img" aria-label="Four concentric rings, one per session, with the memories each session added."></svg>
-      <div class="panel evo-state" id="evo-state" aria-live="polite"></div>
+      <div class="panel evo-state" id="evo-state" aria-live="off"></div>
       <p class="fig" style="text-align:center">Fig. 5 — One project, four sessions, rewound with --as-of</p>
     </div>
   </div>
@@ -593,7 +593,7 @@
             <li><span class="m no">○</span><span>No per-prompt or per-tool hooks</span></li>
           </ul>
         </div>
-        <p class="note" style="margin:0">Paths are alias-aware: <code>C:\repo</code> and <code>/mnt/c/repo</code> resolve to the same store. <code>init</code> writes <code>.mcp.json</code>, <code>.codex/config.toml</code> and <code>AGENTS.md</code> without clobbering what's there.</p>
+        <p class="note" style="margin:0">Paths are alias-aware: <code>C:\repo</code> and <code>/mnt/c/repo</code> resolve to the same store. <code>init</code> merges its server into <code>.codex/config.toml</code> and its section into <code>AGENTS.md</code> without touching your other settings. It creates <code>.mcp.json</code> only when the project has none; an existing one is left as it is (see <a href="#get-started">Get started</a>).</p>
       </div>
     </div>
   </div>
@@ -628,9 +628,11 @@
           <span class="num">2</span>
           <div>
             <h3>Set up the project</h3>
-            <p>Registers the project and installs hooks and MCP for Claude Code and Codex.</p>
+            <p>Registers the project and installs the hooks and MCP servers for Claude Code and Codex.</p>
             <div class="cmd"><code><span class="pr">$ </span>cognikernel init .</code><button class="copy" type="button" data-copy="cognikernel init ." aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
             <div class="cmd"><code><span class="pr">$ </span>cognikernel install-heads <span class="cm"># ~270 MB, one-time, sha256-verified</span></code><button class="copy" type="button" data-copy="cognikernel install-heads" aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
+            <p class="note"><b>Already have a <code>.mcp.json</code>?</b> <code>init</code> leaves it untouched and doesn't add CogniKernel to it. The hooks still install, so the session block and capture work, but Claude Code won't see the memory tools until you add this entry under <code>"mcpServers"</code>, with <code>command</code> set to the Python that has CogniKernel installed:</p>
+            <div class="cmd"><code>"cognikernel": {"type": "stdio", "command": "python", "args": ["-m", "cognikernel", "mcp-serve"]}</code><button class="copy" type="button" data-copy="&quot;cognikernel&quot;: {&quot;type&quot;: &quot;stdio&quot;, &quot;command&quot;: &quot;python&quot;, &quot;args&quot;: [&quot;-m&quot;, &quot;cognikernel&quot;, &quot;mcp-serve&quot;]}" aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
           </div>
         </div>
         <div class="panel step reveal">
@@ -762,6 +764,14 @@ status     : <span class="ok">OK</span></pre>
         <a href="https://github.com/KanishkNoir/cognikernel/blob/main/LICENSE">License</a>
       </nav>
     </div>
+    <nav class="foot-more" aria-label="Project">
+      <a href="https://github.com/KanishkNoir/cognikernel#readme">README</a>
+      <a href="https://github.com/KanishkNoir/cognikernel/releases">Releases</a>
+      <a href="https://github.com/KanishkNoir/cognikernel/blob/main/docs/release-notes-0.1.3.md">0.1.3 release notes</a>
+      <a href="https://github.com/KanishkNoir/cognikernel/issues">Issues</a>
+      <a href="https://github.com/KanishkNoir/cognikernel/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a href="https://github.com/KanishkNoir/cognikernel/blob/main/SECURITY.md">Security policy</a>
+    </nav>
 <pre class="ascii" aria-hidden="true"> ██████╗ ██████╗  ██████╗ ███╗   ██╗██╗██╗  ██╗███████╗██████╗ ███╗   ██╗███████╗██╗
 ██╔════╝██╔═══██╗██╔════╝ ████╗  ██║██║██║ ██╔╝██╔════╝██╔══██╗████╗  ██║██╔════╝██║
 ██║     ██║   ██║██║  ███╗██╔██╗ ██║██║█████╔╝ █████╗  ██████╔╝██╔██╗ ██║█████╗  ██║

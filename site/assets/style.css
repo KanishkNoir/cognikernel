@@ -763,6 +763,11 @@ footer { border-top: 1px solid var(--hair); padding: 56px 0 44px; color: var(--i
 .foot nav { display: flex; flex-wrap: wrap; gap: 26px; }
 .foot nav a { color: var(--ink-2); font-size: 13.5px; }
 .foot nav a:hover { color: var(--ink); }
+.foot-more { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--hair); }
+.foot-more a { color: var(--ink-3); font-size: 13px; }
+.foot-more a:hover { color: var(--ink); }
+.step .note { margin: 14px 0 8px; }
+.step .note b { color: var(--ink-2); font-weight: 500; }
 .banner { width: min(100%, 680px); height: auto; margin: 56px auto 0; opacity: 0.45; }
 .ascii { display: none; }
 .foot-b { margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--hair); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font: 500 10.5px var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; }
