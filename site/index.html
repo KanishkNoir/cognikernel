@@ -551,11 +551,11 @@
         <div class="card step reveal">
           <h3>Install</h3>
           <p>The <code>[embedding]</code> extra adds dense retrieval and the runtime for the fine-tuned encoders. Recommended.</p>
-          <div class="tabs" role="tablist" aria-label="Installer">
-            <button role="tab" aria-selected="true" data-inst="pip">pip</button>
-            <button role="tab" aria-selected="false" data-inst="pipx">pipx</button>
-            <button role="tab" aria-selected="false" data-inst="uv">uv tool</button>
-            <button role="tab" aria-selected="false" data-inst="src">from source</button>
+          <div class="tabs" role="group" aria-label="Installer">
+            <button type="button" aria-pressed="true" data-inst="pip">pip</button>
+            <button type="button" aria-pressed="false" data-inst="pipx">pipx</button>
+            <button type="button" aria-pressed="false" data-inst="uv">uv tool</button>
+            <button type="button" aria-pressed="false" data-inst="src">from source</button>
           </div>
           <div class="cmd"><code id="inst-cmd"></code><button class="copy" type="button" data-copy-from="inst-cmd" aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
         </div>
