@@ -3,23 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CogniKernel — project memory for Claude Code and Codex</title>
-  <meta name="description" content="CogniKernel gives your project a memory that outlives any one AI coding session. Decisions, constraints and dead ends are captured locally by small fine-tuned encoders and injected at the next session start. No extra LLM, no API keys, nothing leaves your machine.">
-  <meta name="theme-color" content="#090c0b" media="(prefers-color-scheme: dark)">
-  <meta name="theme-color" content="#fbfaf6" media="(prefers-color-scheme: light)">
+  <title>CogniKernel — memory infrastructure for coding agents</title>
+  <meta name="description" content="CogniKernel is an event-sourced memory layer for Claude Code and Codex. It captures decisions, constraints and abandoned approaches with small local encoders, and injects the right context into the next session. No extra LLM, no API keys, nothing leaves your machine.">
+  <meta name="theme-color" content="#081020" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f4ee" media="(prefers-color-scheme: light)">
   <link rel="canonical" href="https://kanishknoir.github.io/cognikernel/">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 
   <meta property="og:type" content="website">
-  <meta property="og:title" content="CogniKernel — your AI coding agent, minus the amnesia">
-  <meta property="og:description" content="Persistent, structured project memory for Claude Code and Codex. Local, deterministic, no extra LLM.">
+  <meta property="og:title" content="CogniKernel — memory for coding agents">
+  <meta property="og:description" content="An event-sourced memory layer for Claude Code and Codex. Local, deterministic, no extra LLM.">
   <meta property="og:url" content="https://kanishknoir.github.io/cognikernel/">
   <meta property="og:image" content="https://kanishknoir.github.io/cognikernel/assets/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="CogniKernel — your AI coding agent, minus the amnesia">
-  <meta name="twitter:description" content="Persistent, structured project memory for Claude Code and Codex. Local, deterministic, no extra LLM.">
+  <meta name="twitter:title" content="CogniKernel — memory for coding agents">
+  <meta name="twitter:description" content="An event-sourced memory layer for Claude Code and Codex. Local, deterministic, no extra LLM.">
   <meta name="twitter:image" content="https://kanishknoir.github.io/cognikernel/assets/og.png">
 
   <script>
@@ -28,7 +28,7 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="assets/style.css">
 
   <script type="application/ld+json">
@@ -50,70 +50,53 @@
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<div class="bg-grid" aria-hidden="true"></div>
 
-<!-- SVG sprite: icons referenced with <use href="#i-..."> -->
+<!-- Symbols. The type glyphs are the site's star-map key: shape encodes the
+     memory type, gold encodes "recalled into the current session". -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
+    <symbol id="g-dec" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.2" fill="currentColor"/></symbol>
+    <symbol id="g-hard" viewBox="0 0 12 12"><path d="M6 1.2 10.8 6 6 10.8 1.2 6z" fill="currentColor"/></symbol>
+    <symbol id="g-soft" viewBox="0 0 12 12"><path d="M6 1.9 10.1 6 6 10.1 1.9 6z" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+    <symbol id="g-dead" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M3.2 8.8 8.8 3.2" stroke="currentColor" stroke-width="1.3"/></symbol>
+    <symbol id="g-gold" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.3" fill="none" stroke="currentColor" stroke-opacity=".5"/><circle cx="6" cy="6" r="3.2" fill="currentColor"/></symbol>
+    <symbol id="i-kernel" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="none" stroke="#2946ff" stroke-opacity=".55"/><ellipse cx="16" cy="16" rx="14" ry="6" fill="none" stroke="#2946ff" stroke-opacity=".4" transform="rotate(-28 16 16)"/><circle cx="16" cy="16" r="4.5" fill="#f2b544"/><circle cx="27.5" cy="10" r="2" fill="#5c73ff"/></symbol>
     <symbol id="i-github" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.38-5.26 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></symbol>
-    <symbol id="i-star" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="m12 2.8 2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z"/></symbol>
-    <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></symbol>
-    <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11Z"/></symbol>
-    <symbol id="i-menu" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/></symbol>
-    <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="8" y="8" width="13" height="13" rx="2.5"/><path d="M16 8V5.5A2.5 2.5 0 0 0 13.5 3h-8A2.5 2.5 0 0 0 3 5.5v8A2.5 2.5 0 0 0 5.5 16H8"/></g></symbol>
-    <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
-    <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></g></symbol>
-    <symbol id="i-key" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="15" r="4.5"/><path d="m11.2 11.8 8.3-8.3M16.5 6.5l2.5 2.5M14 9l2 2"/></g></symbol>
-    <symbol id="i-cpu" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></g></symbol>
-    <symbol id="i-swap" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 8h14l-4-4M20 16H6l4 4"/></symbol>
-    <symbol id="i-play" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M7 4.5v15l12.5-7.5z"/></symbol>
-    <symbol id="i-msg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M4 5h16v11H9l-5 4z"/></symbol>
-    <symbol id="i-shield" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2.5 4 5.5v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10v-6z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></g></symbol>
-    <symbol id="i-save" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 3h11l4 4v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M8 3v5h7V3M7 21v-7h10v7"/></g></symbol>
-    <symbol id="i-warn" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 2.4 17.5A2 2 0 0 0 4.1 20.5h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4.5M12 17h.01"/></g></symbol>
-    <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></g></symbol>
-    <symbol id="i-db" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></g></symbol>
-    <symbol id="i-layers" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></g></symbol>
-    <symbol id="i-graph" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7.5 6h9M6.3 8.2l4.4 7.6M17.7 8.2l-4.4 7.6"/></g></symbol>
-    <symbol id="i-ban" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/></g></symbol>
-    <symbol id="i-merge" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 7.5v9M6 8c0 3 3 4 9.5 4"/></g></symbol>
-    <symbol id="i-replay" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></g></symbol>
-    <symbol id="i-stetho" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 3v6a5 5 0 0 0 10 0V3"/><path d="M11 14v2a5 5 0 0 0 10 0v-1"/><circle cx="21" cy="13" r="2"/></g></symbol>
-    <symbol id="i-boundary" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" stroke-dasharray="3 3"/><rect x="8" y="8" width="8" height="8" rx="1.5"/></g></symbol>
-    <symbol id="i-gate" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 21V5M20 21V5M4 9h16M4 15h16"/></g></symbol>
-    <symbol id="i-arrow" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M13 6l6 6-6 6"/></symbol>
-    <symbol id="i-box" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 2.5 8.5 4.5v10L12 21.5 3.5 17V7z"/><path d="m3.5 7 8.5 4.5L20.5 7M12 11.5v10"/></g></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="m12 2.8 2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11Z"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="13" height="13" rx="2.5"/><path d="M16 8V5.5A2.5 2.5 0 0 0 13.5 3h-8A2.5 2.5 0 0 0 3 5.5v8A2.5 2.5 0 0 0 5.5 16H8"/></g></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></g></symbol>
   </defs>
 </svg>
 
 <div class="notice" role="note">
-  <strong>Updates are paused.</strong> CogniKernel
-  <a href="https://pypi.org/project/cognikernel/0.1.3/">v0.1.3</a> is the current release and stays current until work resumes.
+  <b>Updates are paused</b> · <a href="https://pypi.org/project/cognikernel/0.1.3/">v0.1.3</a> is the current release and stays current until work resumes
 </div>
 
 <header class="nav" id="nav">
-  <div class="wrap nav-inner">
+  <div class="shell nav-in">
     <a class="brand" href="#top" aria-label="CogniKernel home">
-      <img src="assets/favicon.svg" alt="" width="28" height="28">
-      CogniKernel <span class="ver" id="ver">v0.1.3</span>
+      <svg aria-hidden="true"><use href="#i-kernel"/></svg>CogniKernel <span class="ver" id="ver">v0.1.3</span>
     </a>
     <nav class="nav-links" id="nav-links" aria-label="Sections">
-      <a href="#why">Why</a>
-      <a href="#loop">How it works</a>
-      <a href="#memory">Memory</a>
-      <a href="#models">Models</a>
+      <a href="#features">Features</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#memory-model">Memory Model</a>
       <a href="#benchmarks">Benchmarks</a>
-      <a href="#quickstart">Quickstart</a>
-      <a href="#reference">Reference</a>
+      <a href="#docs">Docs</a>
     </nav>
-    <div class="nav-right">
+    <div class="nav-r">
       <button class="icon-btn theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme">
         <svg class="moon"><use href="#i-moon"/></svg><svg class="sun"><use href="#i-sun"/></svg>
       </button>
       <a class="icon-btn" href="https://github.com/KanishkNoir/cognikernel" aria-label="CogniKernel on GitHub">
-        <svg><use href="#i-github"/></svg><span class="gh-label">GitHub</span>
-        <svg style="width:13px;height:13px;color:var(--ink-3)"><use href="#i-star"/></svg><span class="count" id="stars"></span>
+        <svg><use href="#i-github"/></svg><span class="gh-label">GitHub</span><span class="count" id="stars"></span>
       </a>
+      <a class="btn btn-primary nav-cta" href="#get-started">Get Started</a>
       <button class="icon-btn menu-btn" id="menu-btn" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="nav-links">
         <svg><use href="#i-menu"/></svg>
       </button>
@@ -125,281 +108,375 @@
 
 <!-- ═══════════════════════════════ HERO ═══════════════════════════════ -->
 <div class="hero" id="top">
-  <div class="wrap">
-<pre class="ascii" aria-hidden="true"> ██████╗ ██████╗  ██████╗ ███╗   ██╗██╗██╗  ██╗███████╗██████╗ ███╗   ██╗███████╗██╗
-██╔════╝██╔═══██╗██╔════╝ ████╗  ██║██║██║ ██╔╝██╔════╝██╔══██╗████╗  ██║██╔════╝██║
-██║     ██║   ██║██║  ███╗██╔██╗ ██║██║█████╔╝ █████╗  ██████╔╝██╔██╗ ██║█████╗  ██║
-██║     ██║   ██║██║   ██║██║╚██╗██║██║██╔═██╗ ██╔══╝  ██╔══██╗██║╚██╗██║██╔══╝  ██║
-╚██████╗╚██████╔╝╚██████╔╝██║ ╚████║██║██║  ██╗███████╗██║  ██║██║ ╚████║███████╗███████╗
- ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝</pre>
-    <div class="eyebrow"><span class="dot"></span>Project memory for Claude Code &amp; Codex</div>
-    <h1>Your coding agent has <br><span class="strike">amnesia</span> <span class="glow">a memory</span>.</h1>
-    <p class="lede">Every session starts from zero: it re-reads the same files, re-derives the same architecture, re-asks what you settled last week. <em>CogniKernel gives the project a memory that outlives any one session</em>, so the agent stops paying the same cost twice.</p>
-    <div class="hero-cta">
-      <div class="install-pill">
-        <span class="pr">$</span><code id="hero-cmd">pip install "cognikernel[embedding]"</code>
+  <div class="starfield"></div>
+  <div class="blueprint"></div>
+  <div class="halo"></div>
+  <div class="shell hero-grid">
+    <div class="hero-copy reveal">
+      <div class="kick"><span class="dot"></span><span class="eyebrow">Open-source memory infrastructure</span></div>
+      <h1>Memory for coding agents.<span class="dim">Context for every decision.</span></h1>
+      <p class="lede">CogniKernel is an event-sourced memory layer for Claude Code and Codex. It captures <b>decisions, constraints, abandoned approaches and architectural knowledge</b>, then injects the right context back into every coding session. Small encoders do the work on your CPU: no extra LLM, no API keys, nothing leaves your machine.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#get-started">Get Started <svg><use href="#i-arrow"/></svg></a>
+        <a class="btn btn-ghost" href="https://github.com/KanishkNoir/cognikernel"><svg><use href="#i-github"/></svg>View on GitHub</a>
+      </div>
+      <div class="install">
+        <span class="pr">$</span><code>pip install "cognikernel[embedding]"</code>
         <button class="copy" type="button" data-copy="pip install &quot;cognikernel[embedding]&quot;" aria-label="Copy install command"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button>
       </div>
-      <a class="btn btn-primary" href="#quickstart">Get started <svg><use href="#i-arrow"/></svg></a>
-      <a class="btn btn-ghost" href="https://github.com/KanishkNoir/cognikernel"><svg><use href="#i-github"/></svg>Source</a>
-    </div>
-    <div class="chips">
-      <span class="chip"><svg><use href="#i-cpu"/></svg>No extra LLM in the loop</span>
-      <span class="chip"><svg><use href="#i-key"/></svg>No API keys</span>
-      <span class="chip"><svg><use href="#i-lock"/></svg>Nothing leaves your machine</span>
-      <span class="chip"><svg><use href="#i-swap"/></svg>One store, two agents</span>
+      <dl class="specs">
+        <div><dt class="eyebrow">License</dt><dd>Apache-2.0</dd></div>
+        <div><dt class="eyebrow">Runtime</dt><dd>Python 3.11+</dd></div>
+        <div><dt class="eyebrow">Storage</dt><dd>Local SQLite</dd></div>
+      </dl>
     </div>
 
-    <div class="term" role="group" aria-label="A Claude Code session starting with the CogniKernel memory block injected: hard constraints, abandoned approaches, key decisions and the active thread carried over from earlier sessions.">
-      <div class="term-bar"><i></i><i></i><i></i><span>~/code/relay — claude</span>
-        <button class="replay" id="term-replay" type="button"><svg style="width:12px;height:12px;display:inline;vertical-align:-1px"><use href="#i-replay"/></svg> replay</button>
+    <div class="hero-viz reveal">
+      <div class="orbital">
+        <svg id="orbit-svg" viewBox="0 0 560 560" role="group" aria-label="Orbital map of an illustrative project's memory. The kernel sits at the centre; hard constraints orbit closest, decisions in the middle, abandoned approaches on the outer ring. Gold marks memories recalled for the current prompt."></svg>
+        <div class="panel readout" id="readout" aria-live="polite"></div>
       </div>
-      <pre class="term-body" id="term" aria-hidden="true"></pre>
+      <div class="key" aria-label="Key">
+        <span><svg class="glyph"><use href="#g-hard"/></svg>Hard constraint</span>
+        <span><svg class="glyph"><use href="#g-dec"/></svg>Decision</span>
+        <span><svg class="glyph"><use href="#g-soft"/></svg>Soft constraint</span>
+        <span><svg class="glyph g-dead"><use href="#g-dead"/></svg>Abandoned</span>
+        <span><svg class="glyph g-gold"><use href="#g-gold"/></svg>Recalled</span>
+      </div>
+      <p class="fig" style="text-align:center">Fig. 1 — An illustrative project; gold marks recall for the current prompt</p>
     </div>
-    <p class="block-note" style="margin-top:14px">An illustrative session. The block follows the real template; the project is made up.</p>
   </div>
 </div>
 
-<!-- ═══════════════════════════════ WHY ═══════════════════════════════ -->
-<section id="why">
-  <div class="wrap">
-    <div class="sec-head center reveal">
-      <div class="kicker"><span class="n">01</span> The problem</div>
-      <h2>Amnesia by design</h2>
-      <p>The model's weights are frozen, so its only memory is the context window. When a session ends, everything it learned about your project goes with it. Step through three sessions on the same question.</p>
+<!-- ═══════════════════════════════ PROBLEM ═══════════════════════════════ -->
+<section id="problem" class="alt">
+  <div class="shell">
+    <div class="sec-head reveal">
+      <span class="eyebrow">Section 01 — <b>The problem</b></span>
+      <h2>Every session starts from zero.</h2>
+      <p class="lede">A model's weights are frozen, so its only memory is the context window. When a session ends, everything it learned about your project goes with it. Step through three sessions on the same question.</p>
     </div>
 
     <div class="stepper reveal">
-      <div class="seg" role="tablist" aria-label="Session">
-        <button role="tab" aria-selected="true" data-s="1">Session 1</button>
-        <button role="tab" aria-selected="false" data-s="2">Session 2</button>
-        <button role="tab" aria-selected="false" data-s="3">Session 3</button>
+      <div class="seg" role="group" aria-label="Session">
+        <button type="button" aria-pressed="true" data-s="1">Session 1</button>
+        <button type="button" aria-pressed="false" data-s="2">Session 2</button>
+        <button type="button" aria-pressed="false" data-s="3">Session 3</button>
       </div>
-      <button class="linkbtn" id="amnesia-play" type="button"><svg style="width:12px;height:12px;display:inline;vertical-align:-1px"><use href="#i-play"/></svg> auto-play</button>
+      <button class="linkbtn" id="amnesia-play" type="button">Auto-play</button>
     </div>
 
     <div class="vs reveal">
-      <div class="card bad">
-        <div class="vs-head"><h3>Without memory</h3><span class="meter">files read so far: <b id="m-bad">12</b></span></div>
-        <div class="vs-body" id="vs-bad"></div>
+      <div class="panel">
+        <div class="vs-h"><span class="eyebrow">Without memory</span><span class="meter">files read: <b id="m-bad">12</b></span></div>
+        <div class="vs-b" id="vs-bad"></div>
       </div>
-      <div class="card good">
-        <div class="vs-head"><h3>With CogniKernel</h3><span class="meter">files read so far: <b id="m-good">12</b></span></div>
-        <div class="vs-body" id="vs-good"></div>
+      <div class="panel good">
+        <div class="vs-h"><span class="eyebrow gold">With CogniKernel</span><span class="meter">files read: <b id="m-good">12</b></span></div>
+        <div class="vs-b" id="vs-good"></div>
       </div>
     </div>
-    <p class="vs-foot">Illustrative. The measured numbers, including where memory doesn't pay off, are in <a href="#benchmarks">Benchmarks</a>.</p>
+    <p class="vs-note">Illustrative. The measured numbers, including where memory doesn't pay off, are in <a href="#benchmarks">Benchmarks</a>.</p>
 
-    <div class="tally">
-      <div class="card reveal"><div class="big">Context rot</div><p>A long session's window fills with stale tool output and superseded instructions until quality degrades.</p></div>
-      <div class="card reveal"><div class="big">Cold starts</div><p>The moment a session ends, its understanding is gone. The next one pays the "getting up to speed" cost again.</p></div>
-      <div class="card reveal"><div class="big">Repeat mistakes</div><p>The approach you abandoned on Tuesday comes back on Thursday, because nothing recorded why it failed.</p></div>
+    <div class="costs reveal">
+      <div><span class="eyebrow">Within a session</span><h3 style="margin-top:12px">Context rot</h3><p>A long session's window fills with stale tool output and superseded instructions until quality degrades.</p></div>
+      <div><span class="eyebrow">Between sessions</span><h3 style="margin-top:12px">Cold starts</h3><p>The moment a session ends, its understanding is gone. The next one pays the "getting up to speed" cost again.</p></div>
+      <div><span class="eyebrow">Across weeks</span><h3 style="margin-top:12px">Repeated mistakes</h3><p>The approach abandoned on Tuesday returns on Thursday, because nothing recorded why it failed.</p></div>
     </div>
   </div>
 </section>
 
-<!-- ═══════════════════════════════ LOOP ═══════════════════════════════ -->
-<section id="loop">
-  <div class="wrap">
+<!-- ═══════════════════════════════ FEATURES ═══════════════════════════════ -->
+<section id="features">
+  <div class="shell feat-grid">
+    <div class="side sec-head reveal">
+      <span class="eyebrow">Section 02 — <b>Capabilities</b></span>
+      <h2>Five operations, one kernel.</h2>
+      <p class="lede">Each is a primitive of the memory system. They compose the way system calls compose: small, orthogonal, observable. Each card names where it lives in the code.</p>
+    </div>
+
+    <div class="ops">
+      <article class="panel lift op reveal">
+        <svg class="dia" viewBox="0 0 120 120" aria-hidden="true">
+          <g class="spin"><circle cx="60" cy="60" r="46" fill="none" stroke="var(--orbit-2)"/><circle cx="60" cy="60" r="30" fill="none" stroke="var(--orbit)"/></g>
+          <path d="M116 4 L81 39" stroke="var(--blue)" stroke-opacity=".55" stroke-dasharray="3 4"/>
+          <path d="M104 6h10M110 12h6M98 2h8" stroke="var(--ink-3)" stroke-opacity=".6"/>
+          <circle cx="81.2" cy="38.8" r="4.5" fill="var(--blue)"/><circle cx="81.2" cy="38.8" r="9" fill="none" stroke="var(--blue)" stroke-opacity=".35"/>
+          <circle cx="60" cy="60" r="7" fill="var(--gold)"/>
+        </svg>
+        <div class="t"><span class="n">01</span><h3>Capture</h3></div>
+        <p>An event becomes memory. When a session ends, the transcript is classified sentence by sentence and what matters is appended as typed events, with the evidence and the session it came from.</p>
+        <div class="src">Stop hook · <code>extraction/pipeline.py</code></div>
+      </article>
+
+      <article class="panel lift op reveal">
+        <svg class="dia" viewBox="0 0 120 120" aria-hidden="true">
+          <g class="spin"><circle cx="60" cy="60" r="46" fill="none" stroke="var(--orbit-2)"/><circle cx="60" cy="60" r="30" fill="none" stroke="var(--orbit)"/></g>
+          <path d="M18 76 Q60 104 102 76" fill="none" stroke="var(--blue)" stroke-opacity=".6"/>
+          <path d="M18 76 L60 14 L102 76" fill="none" stroke="var(--ink-3)" stroke-opacity=".5" stroke-dasharray="2 4"/>
+          <circle cx="18" cy="76" r="4.5" fill="var(--blue)"/><circle cx="102" cy="76" r="4.5" fill="var(--blue)"/><circle cx="60" cy="14" r="3.5" fill="var(--blue)" fill-opacity=".55"/>
+          <circle cx="60" cy="60" r="5" fill="var(--gold)" fill-opacity=".9"/>
+        </svg>
+        <div class="t"><span class="n">02</span><h3>Connect</h3></div>
+        <p>Link memories together. <code>find_related</code> unions semantic neighbours with import-graph neighbours, so a change surfaces what it touches. The codebase skeleton is ranked with PageRank.</p>
+        <div class="src">MCP <code>find_related</code> · <code>symbols/</code></div>
+      </article>
+
+      <article class="panel lift op reveal">
+        <svg class="dia" viewBox="0 0 120 120" aria-hidden="true">
+          <g class="spin"><circle cx="60" cy="60" r="46" fill="none" stroke="var(--orbit-2)"/><circle cx="60" cy="60" r="30" fill="none" stroke="var(--orbit)"/></g>
+          <line x1="103.2" y1="75.7" x2="60" y2="60" stroke="var(--blue)" stroke-opacity=".2" stroke-dasharray="2 5"/>
+          <line x1="24.8" y1="89.6" x2="60" y2="60" stroke="var(--gold)" stroke-opacity=".9"/>
+          <line x1="52" y1="14.7" x2="60" y2="60" stroke="var(--blue)" stroke-opacity=".2" stroke-dasharray="2 5"/>
+          <circle cx="103.2" cy="75.7" r="4" fill="var(--blue)" fill-opacity=".5"/>
+          <circle cx="52" cy="14.7" r="4" fill="var(--blue)" fill-opacity=".5"/>
+          <circle cx="24.8" cy="89.6" r="10" fill="var(--gold)" fill-opacity=".14"/><circle cx="24.8" cy="89.6" r="5.5" fill="var(--gold)"/>
+          <circle cx="60" cy="60" r="7" fill="var(--gold)"/>
+        </svg>
+        <div class="t"><span class="n">03</span><h3>Retrieve</h3></div>
+        <p>Surface only what's relevant. BM25 full-text search and dense embeddings are fused with Reciprocal Rank Fusion, then ranked by authority and fitted to the token budget.</p>
+        <div class="src">MCP <code>recall</code> · <code>retrieval/hybrid.py</code></div>
+      </article>
+
+      <article class="panel lift op reveal">
+        <svg class="dia" viewBox="0 0 120 120" aria-hidden="true">
+          <g class="spin"><circle cx="60" cy="60" r="46" fill="none" stroke="var(--orbit-2)"/></g>
+          <circle cx="48" cy="60" r="17" fill="none" stroke="var(--blue)" stroke-opacity=".5"/>
+          <circle cx="72" cy="60" r="17" fill="none" stroke="var(--blue)" stroke-opacity=".5"/>
+          <circle cx="60" cy="60" r="6" fill="var(--gold)"/>
+          <text x="60" y="98" text-anchor="middle" fill="var(--ink-3)" style="font:500 9px var(--font-mono);letter-spacing:.12em">×2</text>
+        </svg>
+        <div class="t"><span class="n">04</span><h3>Consolidate</h3></div>
+        <p>Merge duplicate knowledge. Each claim has a decision key, and the latest wins. A fine-tuned cross-encoder catches paraphrased reversals. Superseded claims are marked, never deleted.</p>
+        <div class="src"><code>delta/supersede.py</code> · <code>supersession_xenc</code></div>
+      </article>
+
+      <article class="panel lift op wide reveal">
+        <svg class="dia" viewBox="0 0 120 120" aria-hidden="true">
+          <g class="spin"><path d="M14 60 A46 46 0 0 1 106 60" fill="none" stroke="var(--blue)" stroke-opacity=".45"/><path d="M30 60 A30 30 0 0 1 90 60" fill="none" stroke="var(--blue)" stroke-opacity=".25"/></g>
+          <circle cx="17.8" cy="41.6" r="4" fill="var(--blue)"/><circle cx="40.3" cy="18.4" r="4" fill="var(--blue)"/><circle cx="79.7" cy="18.4" r="4" fill="var(--blue)"/><circle cx="102.2" cy="41.6" r="4" fill="var(--gold)"/>
+          <path d="M70 84 A14 14 0 1 1 52 90" fill="none" stroke="var(--ink-3)" stroke-opacity=".7"/><path d="M50 85 52 90 57 88" fill="none" stroke="var(--ink-3)" stroke-opacity=".7"/>
+          <circle cx="60" cy="60" r="5" fill="var(--gold)" fill-opacity=".75"/>
+        </svg>
+        <div>
+          <div class="t"><span class="n">05</span><h3>Timeline</h3></div>
+          <p>Replay project evolution. <code>show --as-of</code> rewinds memory to any date or commit and shows exactly what it believed then. <code>why</code> traces a claim to its source, its rank, and what it replaced.</p>
+          <div class="src"><code>cognikernel show --as-of</code> · <code>cognikernel why</code></div>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ ARCHITECTURE ═══════════════════════════════ -->
+<section id="architecture" class="alt">
+  <div class="starfield" style="opacity:.5"></div>
+  <div class="shell" style="position:relative">
     <div class="sec-head reveal">
-      <div class="kicker"><span class="n">02</span> How it works</div>
-      <h2>One loop: observe, remember, recall</h2>
-      <p>One side of the ring captures, the other recalls, and the event-sourced store at the centre holds it all. Click a stage, or let it cycle.</p>
+      <span class="eyebrow">Section 03 — <b>Architecture</b></span>
+      <h2>One loop around one kernel.</h2>
+      <p class="lede">Observe, extract, consolidate, store, retrieve, assemble, inject. One side of the orbit captures, the other recalls, and the event-sourced store sits at the centre. Select a stage, or let it cycle.</p>
     </div>
 
     <div class="loop">
-      <div class="reveal">
-        <svg class="loop-svg" id="loop-svg" viewBox="-44 0 608 520" role="group" aria-label="The memory loop, seven stages"></svg>
+      <div class="dia-wrap reveal">
+        <svg class="loop-svg" id="loop-svg" viewBox="-40 0 600 520" role="group" aria-label="The memory loop, seven stages around the kernel"></svg>
+        <p class="fig" style="text-align:center">Fig. 2 — The memory loop</p>
       </div>
-      <div class="card stage-card reveal" id="stage-card" aria-live="polite"></div>
+      <div class="panel stage reveal" id="stage-card" aria-live="polite"></div>
     </div>
+
+    <div class="hooks reveal">
+      <div class="hook">
+        <svg class="pos" viewBox="0 0 56 56" aria-hidden="true"><circle cx="28" cy="28" r="22" fill="none" stroke="var(--orbit)"/><circle cx="28" cy="28" r="3" fill="var(--gold)"/><circle cx="28" cy="6" r="4.5" fill="var(--blue)"/></svg>
+        <div class="eyebrow evt">SessionStart</div>
+        <h3>Session block</h3>
+        <p>Injects the canonical block: constraints, decisions, dead ends, the open work item and an AST skeleton of the codebase.</p>
+        <span class="tg">advisory</span>
+        <div class="why"><b>Why it matters:</b> no "let me re-read the codebase to remember where we were."</div>
+      </div>
+      <div class="hook">
+        <svg class="pos" viewBox="0 0 56 56" aria-hidden="true"><circle cx="28" cy="28" r="22" fill="none" stroke="var(--orbit)"/><path d="M28 6 A22 22 0 0 1 50 28" fill="none" stroke="var(--blue)" stroke-opacity=".5"/><circle cx="28" cy="28" r="3" fill="var(--gold)"/><circle cx="50" cy="28" r="4.5" fill="var(--blue)"/></svg>
+        <div class="eyebrow evt">UserPromptSubmit</div>
+        <h3>CK-1 recall</h3>
+        <p>Surfaces memory relevant to what you just typed. It needs two kinds of evidence, and skips anything already in context.</p>
+        <span class="tg">advisory</span>
+        <div class="why"><b>Why it matters:</b> ask about a subsystem and the prior decision rides in with your prompt, unasked.</div>
+      </div>
+      <div class="hook">
+        <svg class="pos" viewBox="0 0 56 56" aria-hidden="true"><circle cx="28" cy="28" r="22" fill="none" stroke="var(--orbit)"/><path d="M28 6 A22 22 0 0 1 28 50" fill="none" stroke="var(--blue)" stroke-opacity=".5"/><circle cx="28" cy="28" r="3" fill="var(--gold)"/><circle cx="28" cy="50" r="4.5" fill="var(--blue)"/></svg>
+        <div class="eyebrow evt">PreToolUse</div>
+        <h3>Read/Edit gate</h3>
+        <p>Refuses re-reading a file already read this session. On Write and Edit it surfaces a past "don't do X" just in time.</p>
+        <span class="tg">just-in-time</span> <span class="tg">strict opt-in</span>
+        <div class="why"><b>Why it matters:</b> the warning lands as an edit is about to break a past decision, not three files later.</div>
+      </div>
+      <div class="hook">
+        <svg class="pos" viewBox="0 0 56 56" aria-hidden="true"><circle cx="28" cy="28" r="22" fill="none" stroke="var(--orbit)"/><path d="M28 6 A22 22 0 1 1 6 28" fill="none" stroke="var(--blue)" stroke-opacity=".5"/><circle cx="28" cy="28" r="3" fill="var(--gold)"/><circle cx="6" cy="28" r="4.5" fill="var(--blue)"/></svg>
+        <div class="eyebrow evt">Stop</div>
+        <h3>Capture</h3>
+        <p>Extracts and persists what this session decided, tried and ruled out, through the deterministic pipeline.</p>
+        <span class="tg">side-effect</span>
+        <div class="why"><b>Why it matters:</b> you never hand-write memory into <code>CLAUDE.md</code> again.</div>
+      </div>
+    </div>
+    <p class="fig reveal">Fig. 3 — Four points of contact, in session order</p>
+    <div class="note-line reveal"><span class="eyebrow">Fail-open</span><span>If memory is unavailable or errors, each hook logs at <code>WARNING</code>, returns cleanly, and the session continues. Silence never reads as success: <code>cognikernel doctor</code> names any degraded subsystem.</span></div>
   </div>
 </section>
 
-<!-- ═══════════════════════════════ HOOKS ═══════════════════════════════ -->
-<section id="hooks">
-  <div class="wrap">
+<!-- ═══════════════════════════════ MEMORY MODEL ═══════════════════════════════ -->
+<section id="memory-model">
+  <div class="shell">
     <div class="sec-head reveal">
-      <div class="kicker"><span class="n">03</span> Four hook surfaces</div>
-      <h2>It shows up at the moment it matters</h2>
-      <p>CogniKernel attaches to a Claude Code session at four points, from the first prompt to the last turn. You never call it by hand.</p>
+      <span class="eyebrow">Section 04 — <b>Memory model</b></span>
+      <h2>How a decision becomes durable knowledge.</h2>
+      <p class="lede">Deterministic and inspectable at every stage. Memory is typed, not loose text, and nothing is stored that can't be traced back to the session it came from.</p>
     </div>
 
-    <div class="timeline">
-      <div class="hook reveal">
-        <div class="pin"><svg><use href="#i-play"/></svg></div>
-        <div class="card">
-          <div class="evt">SessionStart</div>
-          <h3>Session block</h3>
-          <p>Injects the canonical block of decisions, constraints, dead ends and an AST skeleton of the codebase.</p>
-          <span class="badge adv">advisory</span>
-          <div class="why"><b>Why you care:</b> no "let me re-read the codebase to remember where we were."</div>
-        </div>
-      </div>
-      <div class="hook reveal">
-        <div class="pin"><svg><use href="#i-msg"/></svg></div>
-        <div class="card">
-          <div class="evt">UserPromptSubmit</div>
-          <h3>CK-1 recall</h3>
-          <p>Surfaces memory relevant to what you just typed. Dual-evidence gated, and deduplicated against what's already in context.</p>
-          <span class="badge adv">advisory</span>
-          <div class="why"><b>Why you care:</b> ask about a subsystem and the prior decision rides in with your prompt, unasked.</div>
-        </div>
-      </div>
-      <div class="hook reveal">
-        <div class="pin"><svg><use href="#i-shield"/></svg></div>
-        <div class="card">
-          <div class="evt">PreToolUse</div>
-          <h3>Read/Edit gate</h3>
-          <p>Refuses re-reading a file already read this session. On Write/Edit, surfaces a past "don't do X" just in time.</p>
-          <span class="badge jit">just-in-time</span> <span class="badge">strict opt-in</span>
-          <div class="why"><b>Why you care:</b> the warning lands as it's about to break a past decision, not three files later.</div>
-        </div>
-      </div>
-      <div class="hook reveal">
-        <div class="pin"><svg><use href="#i-save"/></svg></div>
-        <div class="card">
-          <div class="evt">Stop</div>
-          <h3>Capture</h3>
-          <p>Extracts and persists what this session decided, tried and ruled out, through the deterministic pipeline.</p>
-          <span class="badge side">side-effect</span>
-          <div class="why"><b>Why you care:</b> you never hand-write memory into <code>CLAUDE.md</code> again.</div>
-        </div>
-      </div>
-    </div>
+    <ol class="chain reveal" id="chain">
+      <li><svg viewBox="0 0 72 72" data-i="0" aria-hidden="true"></svg><div class="t"><span>I</span><h3>Decision</h3></div><p>A choice is made in a session, with its reason: "use Redis, the counts must be shared across workers."</p></li>
+      <li><svg viewBox="0 0 72 72" data-i="1" aria-hidden="true"></svg><div class="t"><span>II</span><h3>Event</h3></div><p>At session end, <code>salience_v2</code> types the sentence and it's appended as a typed event, with evidence and provenance.</p></li>
+      <li><svg viewBox="0 0 72 72" data-i="2" aria-hidden="true"></svg><div class="t"><span>III</span><h3>Consolidation</h3></div><p>Same decision key, latest wins. Restatements merge into one record (×N). Superseded claims are marked, never deleted.</p></li>
+      <li><svg viewBox="0 0 72 72" data-i="3" aria-hidden="true"></svg><div class="t"><span>IV</span><h3>Kernel</h3></div><p>One SQLite store per project, shared by Claude Code and Codex. The single source of truth about what the project knows.</p></li>
+      <li><svg viewBox="0 0 72 72" data-i="4" aria-hidden="true"></svg><div class="t"><span>V</span><h3>Retrieval</h3></div><p>Ranked by authority, fitted to the token budget and injected into the next session, closing the loop.</p></li>
+    </ol>
+    <p class="fig reveal">Fig. 4 — Event-sourced memory pipeline</p>
 
-    <div class="failopen reveal">
-      <svg><use href="#i-shield"/></svg>
-      <div><b style="color:var(--ink)">Every surface fails open.</b> If memory is unavailable or errors, the hook logs at <code>WARNING</code>, returns cleanly, and your session continues. Silence never reads as success: <code>cognikernel doctor</code> names any degraded subsystem.</div>
+    <div class="types">
+      <div class="panel lift reveal"><span class="tg"><svg class="glyph"><use href="#g-dec"/></svg>Decision</span><p>A choice that was made. A later restatement with the same key supersedes it.</p><div class="ex">"use Redis for the rate limiter"</div></div>
+      <div class="panel lift reveal"><span class="tg"><svg class="glyph"><use href="#g-hard"/></svg>Constraint · hard</span><p>A rule that must not be broken. Ranked ahead of everything else when the block is fitted to its budget.</p><div class="ex">"never log webhook payloads in full"</div></div>
+      <div class="panel lift reveal"><span class="tg"><svg class="glyph"><use href="#g-soft"/></svg>Constraint · soft</span><p>A preference or convention, graded by how strongly it was stated.</p><div class="ex">"prefer dataclasses over dicts"</div></div>
+      <div class="panel lift reveal"><span class="tg"><svg class="glyph g-dead"><use href="#g-dead"/></svg>Abandoned</span><p>A dead end, kept in the graveyard with the reason it failed, so it isn't tried again.</p><div class="ex">"in-process cache → counts drift"</div></div>
     </div>
   </div>
 </section>
 
-<!-- ═══════════════════════════════ MEMORY ═══════════════════════════════ -->
-<section id="memory">
-  <div class="wrap">
-    <div class="sec-head reveal">
-      <div class="kicker"><span class="n">04</span> What gets remembered</div>
-      <h2>Typed memory, not text chunks</h2>
-      <p>Every claim has a type, and the type drives how it's ranked, rendered and replaced. A dead end is stored differently from a decision because the agent should treat it differently.</p>
+<!-- ═══════════════════════════════ EVOLUTION ═══════════════════════════════ -->
+<section id="evolution" class="alt">
+  <div class="shell evo">
+    <div class="side reveal">
+      <span class="eyebrow">Section 05 — <b>Project evolution</b></span>
+      <h2 style="margin-top:20px">Time is an orbit, not a line.</h2>
+      <p class="lede" style="margin-top:24px">Each ring is a session. Select one to see what memory believed at that point, the way <code>cognikernel show --as-of</code> does. One key, <code>ratelimit.backend</code>, changes its mind once and is never confused about it again.</p>
+      <div class="sessions" id="sessions"></div>
     </div>
-
-    <div class="grid g4 types">
-      <div class="card reveal"><span class="type-tag t-dec">DECISION</span><p>A choice that was made.</p><div class="ex">"use Redis for the rate limiter"</div></div>
-      <div class="card reveal"><span class="type-tag t-hard">CONSTRAINT_HARD</span><p>A rule that must not be broken. Prioritized in the mandatory zone; if that zone overflows, lower-authority constraints can be omitted from the rendered block.</p><div class="ex">"never log webhook payloads in full"</div></div>
-      <div class="card reveal"><span class="type-tag t-soft">CONSTRAINT_SOFT</span><p>A preference or convention, graded by how strongly it was stated.</p><div class="ex">"prefer dataclasses over dicts"</div></div>
-      <div class="card reveal"><span class="type-tag t-dead">APPROACH_ABANDONED</span><p>A dead end, kept in the <b>graveyard</b> so it isn't re-attempted.</p><div class="ex">"in-process cache → counts drift"</div></div>
-    </div>
-
-    <div class="super">
-      <div class="super-copy reveal">
-        <h3 style="font-size:26px;margin-bottom:12px">Latest wins. The store fixes itself.</h3>
-        <p>Each claim gets a <b>decision key</b>. When a later session restates or reverses a decision with the same key, the new claim <em>supersedes</em> the old one instead of piling up beside it. Recall returns one coherent answer, not a pile of revisions.</p>
-        <p>A fine-tuned cross-encoder catches the paraphrased cases a lexical key would miss ("swap the LRU for Redis" vs. "use Redis for rate limits"). And the old claim isn't lost: <code>cognikernel why</code> shows what replaced what, and <code>show --as-of</code> rewinds to what memory believed at any date or commit.</p>
-      </div>
-      <div class="card super-stage reveal">
-        <div class="lane-h">
-          <span>key <span class="key-chip" style="text-transform:none;letter-spacing:0">ratelimit.backend</span></span>
-          <div class="seg" role="group" aria-label="Supersession demo">
-            <button type="button" id="sup-play" aria-pressed="false"><svg style="width:12px;height:12px;display:inline;vertical-align:-1px"><use href="#i-play"/></svg> run sessions 1→3</button>
-          </div>
-        </div>
-        <div id="sup-lane"></div>
-        <div class="super-log" id="sup-log">Press run to watch three sessions write to the same key.</div>
-      </div>
+    <div class="viz reveal">
+      <svg class="evo-svg" id="evo-svg" viewBox="-72 0 584 440" role="img" aria-label="Four concentric rings, one per session, with the memories each session added."></svg>
+      <div class="panel evo-state" id="evo-state" aria-live="polite"></div>
+      <p class="fig" style="text-align:center">Fig. 5 — One project, four sessions, rewound with --as-of</p>
     </div>
   </div>
 </section>
 
-<!-- ═══════════════════════════════ BLOCK ═══════════════════════════════ -->
+<!-- ═══════════════════════════════ THE BLOCK ═══════════════════════════════ -->
 <section id="block">
-  <div class="wrap">
+  <div class="shell">
     <div class="sec-head reveal">
-      <div class="kicker"><span class="n">05</span> The injected block</div>
-      <h2>What the agent sees at session start</h2>
-      <p>A compact, budgeted Markdown block. Hard constraints receive priority over lower-value content, and ordering is deterministic so the prompt cache keeps hitting. Hover a note to find its section.</p>
+      <span class="eyebrow">Section 06 — <b>The injected block</b></span>
+      <h2>What the agent sees at session start.</h2>
+      <p class="lede">A compact, budgeted Markdown block. Hard constraints are ranked ahead of everything else, and the order is deterministic so the prompt cache keeps hitting. Hover a note to find its section.</p>
     </div>
 
-    <div class="block-wrap">
-      <div class="codeblock reveal">
-        <div class="term-bar"><i></i><i></i><i></i><span style="margin-left:10px">SessionStart · additionalContext</span></div>
+    <div class="block-grid">
+      <div class="editor reveal">
+        <div class="bar"><i></i><i></i><i></i><span>SessionStart · additionalContext</span></div>
         <pre id="block-pre"></pre>
       </div>
       <div class="annots reveal" id="annots">
-        <div class="annot" data-sec="hdr"><h4><span class="k">header</span>Where you are</h4><p>Project, session number and a state version, so the agent knows how much history sits behind this block.</p></div>
-        <div class="annot" data-sec="hard"><h4><span class="k">hard</span>Never violate</h4><p>Hard constraints are prioritized ahead of lower-value content. <code>(×3)</code> means three sessions stated the same rule and it was consolidated into one golden record.</p></div>
-        <div class="annot" data-sec="thread"><h4><span class="k">thread</span>Active thread</h4><p>The open work item, carried over with its origin: <code>(S3 · 09-12)</code> means session 3, September 12.</p></div>
-        <div class="annot" data-sec="files"><h4><span class="k">skeleton</span>Where to look</h4><p>The hottest files, backed by an AST skeleton of classes, methods and imports, so orientation costs fewer reads.</p></div>
-        <div class="annot" data-sec="dead"><h4><span class="k">graveyard</span>Do not retry</h4><p>Abandoned approaches with the reason they failed, so the agent doesn't burn a session rediscovering it.</p></div>
-        <div class="annot" data-sec="dec"><h4><span class="k">decisions</span>Key decisions</h4><p>Ranked by authority, recency and centrality, each tagged with the session that made it.</p></div>
+        <div class="panel annot" data-sec="hdr"><h4><span class="eyebrow">Header</span>Where you are</h4><p>Project, session number and a state version, so the agent knows how much history sits behind the block.</p></div>
+        <div class="panel annot" data-sec="hard"><h4><span class="eyebrow">Hard</span>Never violate</h4><p>Ranked ahead of everything else. <code>(×3)</code> means three sessions stated the same rule and it was consolidated into one record.</p></div>
+        <div class="panel annot" data-sec="thread"><h4><span class="eyebrow">Thread</span>Active thread</h4><p>The open work item, carried over with its origin: <code>(S3 · 09-12)</code> means session 3, September 12.</p></div>
+        <div class="panel annot" data-sec="files"><h4><span class="eyebrow">Skeleton</span>Where to look</h4><p>The hottest files, backed by an AST skeleton of classes, methods and imports, so getting oriented costs fewer reads.</p></div>
+        <div class="panel annot" data-sec="dead"><h4><span class="eyebrow">Graveyard</span>Do not retry</h4><p>Abandoned approaches with the reason they failed, so the agent doesn't spend a session rediscovering it.</p></div>
+        <div class="panel annot" data-sec="dec"><h4><span class="eyebrow">Decisions</span>Key decisions</h4><p>Ranked by authority, recency and centrality, each tagged with the session that made it.</p></div>
       </div>
     </div>
-    <p class="block-note">Example rendered from the block template in <a href="https://github.com/KanishkNoir/cognikernel/blob/main/src/cognikernel/injection/template.py"><code>injection/template.py</code></a>. Project and contents are illustrative; the skeleton itself is truncated here.</p>
+    <p class="note">Rendered from the block template in <a href="https://github.com/KanishkNoir/cognikernel/blob/main/src/cognikernel/injection/template.py"><code>injection/template.py</code></a>. The project is illustrative and the skeleton is truncated.</p>
+
+    <div class="session-demo">
+      <div class="copy-side reveal">
+        <span class="eyebrow">In a session</span>
+        <h3>Picks up where the last one stopped.</h3>
+        <p class="lede">The block arrives before your first prompt. The agent starts from the open work item and the decisions already made, instead of re-reading the codebase to find out where it was.</p>
+      </div>
+      <div class="editor reveal" role="group" aria-label="An illustrative Claude Code session that starts with the memory block injected and continues the open work item.">
+        <div class="bar"><i></i><i></i><i></i><span>~/code/relay — claude</span><button class="replay" id="term-replay" type="button">Replay</button></div>
+        <pre class="term-body" id="term" aria-hidden="true"></pre>
+      </div>
+    </div>
   </div>
 </section>
 
 <!-- ═══════════════════════════════ MODELS ═══════════════════════════════ -->
-<section id="models">
-  <div class="wrap">
+<section id="models" class="alt">
+  <div class="shell">
     <div class="sec-head reveal">
-      <div class="kicker"><span class="n">06</span> The fine-tuned models</div>
-      <h2>Classification, not generation</h2>
-      <p>Most memory tools ship your transcript to another LLM and ask it to "summarize what mattered." CogniKernel treats extraction as a classification problem, so two small encoders run on your CPU in milliseconds.</p>
+      <span class="eyebrow">Section 07 — <b>The fine-tuned models</b></span>
+      <h2>Classification, not generation.</h2>
+      <p class="lede">Most memory tools send your transcript to another LLM and ask it to "summarize what mattered." CogniKernel treats extraction as classification, so two small encoders run on your CPU in milliseconds.</p>
     </div>
 
-    <div class="grid g2">
-      <div class="card model reveal">
+    <div class="models">
+      <div class="panel model reveal">
         <div class="mname">salience_v2</div>
-        <div class="mrole">decides what gets remembered</div>
+        <div class="eyebrow mrole">Decides what gets remembered</div>
         <p>For every sentence in the transcript: is this worth keeping, and what type is it? A fine-tuned SetFit classifier on a bge-small backbone, exported to ONNX.</p>
         <div class="labels">
-          <span class="t-dec">DECISION</span><span class="t-hard">CONSTRAINT_HARD</span><span class="t-soft">CONSTRAINT_SOFT</span><span class="t-dead">APPROACH_ABANDONED</span><span class="t-noise">noise</span>
+          <span class="tg"><svg class="glyph"><use href="#g-dec"/></svg>Decision</span>
+          <span class="tg"><svg class="glyph"><use href="#g-hard"/></svg>Hard</span>
+          <span class="tg"><svg class="glyph"><use href="#g-soft"/></svg>Soft</span>
+          <span class="tg"><svg class="glyph g-dead"><use href="#g-dead"/></svg>Abandoned</span>
+          <span class="tg">Noise</span>
         </div>
-        <dl class="specs"><div><dt>Kind</dt><dd>SetFit classifier</dd></div><div><dt>Runtime</dt><dd>ONNX, CPU</dd></div><div><dt>Latency</dt><dd>milliseconds</dd></div></dl>
+        <dl class="dl"><div><dt class="eyebrow">Kind</dt><dd>SetFit classifier</dd></div><div><dt class="eyebrow">Runtime</dt><dd>ONNX on CPU</dd></div><div><dt class="eyebrow">Latency</dt><dd>Milliseconds</dd></div></dl>
       </div>
-      <div class="card model reveal">
+      <div class="panel model reveal">
         <div class="mname">supersession_xenc</div>
-        <div class="mrole">decides what gets replaced</div>
-        <p>Does this new fact <em>replace</em> a stored one (a decision changed, a constraint was relaxed), or is it a different decision in the same area? It reads both claims jointly and scores the probability that one supersedes the other.</p>
-        <div class="labels"><span class="t-dec">P(supersede) ≥ threshold → mark superseded</span><span class="t-noise">below → keep both</span></div>
-        <dl class="specs"><div><dt>Kind</dt><dd>Cross-encoder</dd></div><div><dt>Threshold</dt><dd>precision-calibrated</dd></div><div><dt>Deletes?</dt><dd>never</dd></div></dl>
+        <div class="eyebrow mrole">Decides what gets replaced</div>
+        <p>Does a new fact replace a stored one (a decision changed, a constraint relaxed), or is it a different decision in the same area? It reads both claims together and scores the probability that one supersedes the other.</p>
+        <div class="labels">
+          <span class="tg is-gold">P(supersede) ≥ threshold → mark superseded</span>
+          <span class="tg">Below → keep both</span>
+        </div>
+        <dl class="dl"><div><dt class="eyebrow">Kind</dt><dd>Cross-encoder</dd></div><div><dt class="eyebrow">Threshold</dt><dd>Precision-calibrated</dd></div><div><dt class="eyebrow">Deletes</dt><dd>Never</dd></div></dl>
       </div>
     </div>
 
-    <div class="card classify-demo reveal" aria-label="Example sentence classifications">
-      <div class="lane-h" style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px">
-        <span style="font:600 12px var(--font-mono);color:var(--ink-3);letter-spacing:.06em;text-transform:uppercase">salience_v2 on a transcript (illustrative)</span>
-      </div>
-      <div class="row"><span class="sent">"Let's go with Redis for the limiter, since the counts have to be shared across workers."</span><span class="out t-dec">DECISION</span></div>
-      <div class="row"><span class="sent">"Never write the raw webhook body to the logs, it carries customer PII."</span><span class="out t-hard">CONSTRAINT_HARD</span></div>
-      <div class="row"><span class="sent">"The in-process cache didn't work: each worker kept its own count."</span><span class="out t-dead">APPROACH_ABANDONED</span></div>
-      <div class="row"><span class="sent">"Now let's run the full test suite."</span><span class="out t-noise">noise · step narration</span></div>
-      <div class="row"><span class="sent">"Summary: 13/13 tests pass."</span><span class="out t-noise">noise · answer line</span></div>
+    <div class="panel classify reveal" aria-label="Example sentence classifications">
+      <div class="row"><span class="eyebrow">salience_v2 on a transcript · illustrative</span></div>
+      <div class="row"><span class="s">"Let's go with Redis for the limiter, since the counts have to be shared across workers."</span><span class="tg"><svg class="glyph"><use href="#g-dec"/></svg>Decision</span></div>
+      <div class="row"><span class="s">"Never write the raw webhook body to the logs, it carries customer PII."</span><span class="tg"><svg class="glyph"><use href="#g-hard"/></svg>Hard</span></div>
+      <div class="row"><span class="s">"The in-process cache didn't work: each worker kept its own count."</span><span class="tg"><svg class="glyph g-dead"><use href="#g-dead"/></svg>Abandoned</span></div>
+      <div class="row"><span class="s">"Now let's run the full test suite."</span><span class="tg">Noise · narration</span></div>
+      <div class="row"><span class="s">"Summary: 13/13 tests pass."</span><span class="tg">Noise · answer line</span></div>
     </div>
 
-    <div class="table-scroll reveal">
-      <table class="compare">
-        <thead><tr><th></th><th class="us">CogniKernel</th><th>LLM-summarizer memory</th><th>Hand-written CLAUDE.md</th></tr></thead>
+    <div class="cmp-wrap reveal">
+      <table class="cmp">
+        <thead><tr><th></th><th class="us"><span class="eyebrow">CogniKernel</span></th><th><span class="eyebrow">LLM-summarizer memory</span></th><th><span class="eyebrow">Hand-written CLAUDE.md</span></th></tr></thead>
         <tbody>
           <tr><td>Extra model API calls</td><td class="us"><span class="y">None</span>, encoders run locally</td><td><span class="n">One or more per session</span></td><td><span class="y">None</span></td></tr>
           <tr><td>API keys</td><td class="us"><span class="y">None</span></td><td><span class="n">Required</span></td><td><span class="y">None</span></td></tr>
           <tr><td>Session content leaves the machine</td><td class="us"><span class="y">No</span></td><td><span class="n">Yes</span></td><td><span class="y">No</span></td></tr>
           <tr><td>Captured automatically</td><td class="us"><span class="y">Yes</span>, at session end</td><td><span class="y">Yes</span></td><td><span class="n">No</span>, you write it</td></tr>
-          <tr><td>Contradictions resolved</td><td class="us"><span class="y">Latest-wins</span> by decision key</td><td><span class="m">Depends on the prompt</span></td><td><span class="m">Only if you edit it</span></td></tr>
-          <tr><td>Read by Codex too</td><td class="us"><span class="y">Yes</span>, shared store over MCP</td><td><span class="m">Varies</span></td><td><span class="n">No</span>, Codex doesn't load it</td></tr>
+          <tr><td>Contradictions resolved</td><td class="us"><span class="y">Latest wins</span> by decision key</td><td><span class="n">Depends on the prompt</span></td><td><span class="n">Only if you edit it</span></td></tr>
+          <tr><td>Read by Codex too</td><td class="us"><span class="y">Yes</span>, shared store over MCP</td><td><span class="n">Varies</span></td><td><span class="n">No</span>, Codex doesn't load it</td></tr>
           <tr><td>Deterministic</td><td class="us"><span class="y">Yes</span>, same input, same block</td><td><span class="n">No</span></td><td><span class="y">Yes</span></td></tr>
         </tbody>
       </table>
     </div>
 
-    <div class="grid g2" style="margin-top:18px">
-      <div class="card reveal">
-        <h3 style="font-size:17px;margin-bottom:8px">Validated on held-out data, not vibes</h3>
-        <p style="margin:0;color:var(--ink-2);font-size:15px">Each model is scored against a frozen evaluation set mined from real project stores that training never sees. Because "is this a decision?" is genuinely ambiguous at the margin, the bar is how well two independent human labelers agree with each other, not a naive 100%.</p>
+    <div class="pair">
+      <div class="panel reveal">
+        <span class="eyebrow">Evaluation</span>
+        <h3 style="margin-top:10px">Held-out data, not vibes.</h3>
+        <p>Each model is scored against a frozen evaluation set mined from real project stores that training never sees. Because "is this a decision?" is genuinely ambiguous at the margin, the bar is how well two independent human labelers agree with each other, not a naive 100%.</p>
       </div>
-      <div class="card reveal">
-        <h3 style="font-size:17px;margin-bottom:8px">Optional, on by default, fail-open</h3>
-        <p style="margin:0;color:var(--ink-2);font-size:15px"><code>init</code> configures the fine-tuned path; <code>install-heads</code> fetches the ~270 MB of sha256-verified weights. Skip it and CogniKernel still works on a deterministic lexical fallback, and <code>doctor</code> tells you which path is active.</p>
+      <div class="panel reveal">
+        <span class="eyebrow">Fail-open</span>
+        <h3 style="margin-top:10px">Optional, on by default.</h3>
+        <p><code>init</code> configures the fine-tuned path; <code>install-heads</code> fetches the ~270 MB of sha256-verified weights. Skip it and CogniKernel still works on a deterministic lexical fallback, and <code>doctor</code> tells you which path is active.</p>
       </div>
     </div>
   </div>
@@ -407,91 +484,78 @@
 
 <!-- ═══════════════════════════════ BENCHMARKS ═══════════════════════════════ -->
 <section id="benchmarks">
-  <div class="wrap">
+  <div class="shell">
     <div class="sec-head reveal">
-      <div class="kicker"><span class="n">07</span> Benchmarks</div>
-      <h2>What it saves you, and where it doesn't</h2>
-      <p>A three-arm comparison: CogniKernel vs. Claude Code's native auto-memory vs. no memory, with real agent sessions on four multi-session projects. Same prompts, same order, same model. The losses are published next to the wins.</p>
+      <span class="eyebrow">Section 08 — <b>Benchmarks</b></span>
+      <h2>Measured, including where it loses.</h2>
+      <p class="lede">A three-arm comparison: CogniKernel, Claude Code's native auto-memory, and no memory, with real agent sessions on four multi-session projects. Same prompts, same order, same model.</p>
     </div>
 
     <div class="caveat reveal">
-      <svg><use href="#i-warn"/></svg>
+      <span class="eyebrow">Read this first</span>
       <div><b>Internal, directional, single-evaluator.</b> Four projects, one agent model, one run per arm, no confidence intervals. Built to resist self-flattery, but not an independent study. Full method in <a href="https://github.com/KanishkNoir/cognikernel/blob/main/docs/benchmark.md"><code>docs/benchmark.md</code></a>.</div>
     </div>
 
-    <div class="grid g3 stats">
-      <div class="card stat reveal"><div class="v">4<small>/ 4</small></div><div class="l">projects where the agent needed <b>fewer orientation reads</b> than with native auto-memory.</div><div class="src">§3 · passive effects</div></div>
-      <div class="card stat reveal"><div class="v">0.90</div><div class="l">recall score when <b>Codex</b> read a store that Claude Code built. Flat memory scores 0 here: Codex can't read it.</div><div class="src">§1 · 13.5 of 15 probes</div></div>
-      <div class="card stat reveal"><div class="v">100<small>% vs 33%</small></div><div class="l">of abandoned approaches recalled on Relay. Auto-memory re-proposed dead ends the project had ruled out.</div><div class="src">§2 · graveyard probes</div></div>
+    <div class="stats reveal">
+      <div class="stat"><div class="v is-gold">4<small>of 4</small></div><div class="l">projects needed fewer orientation reads than with native auto-memory.</div><span class="eyebrow">§3 · passive effects</span></div>
+      <div class="stat"><div class="v is-gold">0.90</div><div class="l">recall score when Codex read a store that Claude Code built. Flat memory scores 0: Codex can't read it.</div><span class="eyebrow">§1 · 13.5 of 15 probes</span></div>
+      <div class="stat"><div class="v is-gold">100%<small>vs 33%</small></div><div class="l">of abandoned approaches recalled on Relay. Auto-memory re-proposed dead ends the project had ruled out.</div><span class="eyebrow">§2 · graveyard probes</span></div>
+      <div class="stat"><div class="v" id="stat-ver">0.1.3</div><div class="l">the current release on PyPI. Apache-2.0, tested in CI on Linux and Windows.</div><span class="eyebrow" id="stat-stars">Open source</span></div>
     </div>
 
-    <div class="grid g2">
-      <div class="card chart-card reveal">
-        <div class="chart-head">
-          <div><h3>Orientation reads</h3></div>
-          <div class="chart-tools"><button class="linkbtn" type="button" data-table-toggle="t-orient">Table</button></div>
-        </div>
+    <div class="charts">
+      <div class="panel chart-card reveal">
+        <div class="chart-head"><h3>Orientation reads</h3><button class="linkbtn" type="button" data-table-toggle="t-orient">Table</button></div>
         <p class="chart-sub">Reads before the first line of code: the cost of working out where you are. Fewer is better.</p>
         <div class="legend"><span><i style="background:var(--s-ck)"></i>CogniKernel</span><span><i style="background:var(--s-auto)"></i>Native auto-memory</span></div>
         <div class="chart" id="c-orient"></div>
-        <table class="data-table" id="t-orient" hidden>
-          <thead><tr><th>Project</th><th>CK</th><th>Auto</th><th>Δ</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <table class="data-table" id="t-orient" hidden><thead><tr><th>Project</th><th>CK</th><th>Auto</th><th>Δ</th></tr></thead><tbody></tbody></table>
       </div>
-      <div class="card chart-card reveal">
-        <div class="chart-head">
-          <div><h3>Price-weighted cost vs. auto-memory</h3></div>
-          <div class="chart-tools"><button class="linkbtn" type="button" data-table-toggle="t-cost">Table</button></div>
-        </div>
-        <p class="chart-sub">CogniKernel's total session cost relative to auto-memory. Left of zero is cheaper.</p>
-        <div class="legend"><span><i style="background:var(--s-ck)"></i>Cheaper</span><span><i style="background:var(--s-worse)"></i>More expensive</span></div>
+      <div class="panel chart-card reveal">
+        <div class="chart-head"><h3>Weighted cost vs. auto-memory</h3><button class="linkbtn" type="button" data-table-toggle="t-cost">Table</button></div>
+        <p class="chart-sub">CogniKernel's price-weighted session cost relative to auto-memory. Left of zero is cheaper.</p>
         <div class="chart" id="c-cost"></div>
-        <table class="data-table" id="t-cost" hidden>
-          <thead><tr><th>Project</th><th>Reads Δ</th><th>Raw tokens Δ</th><th>Weighted cost Δ</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <table class="data-table" id="t-cost" hidden><thead><tr><th>Project</th><th>Reads Δ</th><th>Raw tokens Δ</th><th>Weighted Δ</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
 
-    <div class="card loses reveal">
-      <h3><svg style="width:18px;height:18px;color:var(--warn)"><use href="#i-warn"/></svg>Where it doesn't win</h3>
+    <div class="panel loses reveal">
+      <span class="eyebrow">Adverse findings</span>
+      <h3>Where it doesn't win.</h3>
       <ul>
-        <li><b>Small, re-readable projects.</b> On Taskflow and Toolbelt, auto-memory scored higher on cross-session recall. When a project is cheap to re-read, structured memory adds little.</li>
-        <li><b>Against no memory at all, it's not always cheaper.</b> On Relay, the project where it beats auto-memory by the widest margin, CogniKernel cost 23% more than the no-memory arm, from the round trips its own tools add.</li>
-        <li><b>Where it repays its overhead:</b> projects that pile up several evolving decisions and several abandoned approaches. Relay had three supersession chains and three graveyard entries, and it's the only project where CogniKernel leads on every dimension.</li>
+        <li><span><b>Small, re-readable projects.</b> On Taskflow and Toolbelt, auto-memory scored higher on cross-session recall. When a project is cheap to re-read, structured memory adds little.</span></li>
+        <li><span><b>Against no memory at all, it isn't always cheaper.</b> On Relay, the project where it beats auto-memory by the widest margin, CogniKernel cost 23% more than the no-memory arm, from the round trips its own tools add.</span></li>
+        <li><span><b>Where it repays its overhead:</b> projects that pile up several evolving decisions and several abandoned approaches. Relay had three supersession chains and three graveyard entries, and it's the only project where CogniKernel leads on every dimension.</span></li>
       </ul>
-      <p style="color:var(--ink-3);font-size:13.5px;margin:14px 0 0">Token figures corrected 2026-09-10: an earlier version counted usage once per transcript line instead of once per API response. Reads and recall scores were unaffected.</p>
+      <p class="fine">Token figures corrected 2026-09-10: an earlier version counted usage once per transcript line instead of once per API response. Reads and recall scores were unaffected.</p>
     </div>
   </div>
 </section>
 
-<!-- ═══════════════════════════════ RETRIEVAL + RELIABILITY ═══════════════════════════════ -->
-<section id="internals">
-  <div class="wrap">
-    <div class="duo">
-      <div>
-        <div class="kicker reveal"><span class="n">08</span> Retrieval</div>
-        <h3 class="col reveal">Lexical first, dense as a signal</h3>
-        <p class="col-sub reveal">Never pure vector search. Exact terms matter in code, so BM25 leads and embeddings vote.</p>
-        <div class="list-rows reveal">
-          <div><svg><use href="#i-merge"/></svg><div><b>Hybrid core</b><span>SQLite FTS5 BM25 ∪ optional dense embeddings, fused with Reciprocal Rank Fusion.</span></div></div>
-          <div><svg><use href="#i-ban"/></svg><div><b>prohibition_search</b><span>A type-restricted pool so a "do not do X" rule can't be crowded out by similar-sounding prose.</span></div></div>
-          <div><svg><use href="#i-graph"/></svg><div><b>Skeleton graph</b><span>An AST symbol graph ranked by PageRank. <code>find_related</code> unions semantic neighbours with import-graph neighbours.</span></div></div>
-          <div><svg><use href="#i-layers"/></svg><div><b>Golden records at read</b><span>Latest-wins reconciliation at query time, so recall returns one answer per key.</span></div></div>
-        </div>
+<!-- ═══════════════════════════════ INTERNALS ═══════════════════════════════ -->
+<section id="internals" class="alt">
+  <div class="shell duo">
+    <div class="reveal">
+      <span class="eyebrow">Section 09 — <b>Retrieval</b></span>
+      <h2>Lexical first, dense as a signal.</h2>
+      <p class="lede">Never pure vector search. Exact terms matter in code, so BM25 leads and embeddings vote.</p>
+      <div class="rows">
+        <div><span class="i">01</span><div><b>Hybrid core</b><span>SQLite FTS5 BM25 ∪ optional dense embeddings, fused with Reciprocal Rank Fusion.</span></div></div>
+        <div><span class="i">02</span><div><b>prohibition_search</b><span>A type-restricted pool, so a "do not do X" rule can't be crowded out by similar-sounding prose.</span></div></div>
+        <div><span class="i">03</span><div><b>Skeleton graph</b><span>An AST symbol graph ranked by PageRank. <code>find_related</code> unions semantic neighbours with import-graph neighbours.</span></div></div>
+        <div><span class="i">04</span><div><b>Golden records at read</b><span>Latest-wins reconciliation at query time, so recall returns one answer per key.</span></div></div>
       </div>
-      <div>
-        <div class="kicker reveal"><span class="n">09</span> Reliability</div>
-        <h3 class="col reveal">Degrades legibly, never silently</h3>
-        <p class="col-sub reveal">A memory layer that fails quietly is worse than none. Every failure path is tested and visible.</p>
-        <div class="list-rows reveal">
-          <div><svg><use href="#i-db"/></svg><div><b>Atomic migrations</b><span>Each numbered migration applies its body and version bump in one transaction. Safe to crash mid-script.</span></div></div>
-          <div><svg><use href="#i-replay"/></svg><div><b>Idempotent replay</b><span>A re-run worker job can't double-count evidence or drift decay.</span></div></div>
-          <div><svg><use href="#i-stetho"/></svg><div><b><code>doctor --strict</code></b><span>Per-subsystem health (schema, FTS5, embeddings, symbols, worker queue) with a non-zero exit when degraded.</span></div></div>
-          <div><svg><use href="#i-boundary"/></svg><div><b>Enforced architecture</b><span><code>import-linter</code> layer contracts, guarded by a meta-test so a typo can't silently switch them off.</span></div></div>
-          <div><svg><use href="#i-gate"/></svg><div><b>CI promotion gate</b><span>Lint plus the full suite, including failure-injection tests, on Ubuntu (3.11, 3.12) and Windows.</span></div></div>
-        </div>
+    </div>
+    <div class="reveal">
+      <span class="eyebrow">Section 10 — <b>Reliability</b></span>
+      <h2>Degrades legibly, never silently.</h2>
+      <p class="lede">A memory layer that fails quietly is worse than none. Every failure path is tested and visible.</p>
+      <div class="rows">
+        <div><span class="i">01</span><div><b>Atomic migrations</b><span>Each numbered migration applies its body and version bump in one transaction. Safe to crash mid-script.</span></div></div>
+        <div><span class="i">02</span><div><b>Idempotent replay</b><span>A re-run worker job can't double-count evidence or drift decay.</span></div></div>
+        <div><span class="i">03</span><div><b><code>doctor --strict</code></b><span>Per-subsystem health (schema, FTS5, embeddings, symbols, worker queue) with a non-zero exit when degraded.</span></div></div>
+        <div><span class="i">04</span><div><b>Enforced architecture</b><span><code>import-linter</code> layer contracts, guarded by a meta-test so a typo can't silently switch them off.</span></div></div>
+        <div><span class="i">05</span><div><b>CI promotion gate</b><span>Lint plus the full suite, including failure-injection tests, on Ubuntu (3.11, 3.12) and Windows.</span></div></div>
       </div>
     </div>
   </div>
@@ -499,81 +563,88 @@
 
 <!-- ═══════════════════════════════ CROSS-PLATFORM ═══════════════════════════════ -->
 <section id="codex">
-  <div class="wrap">
-    <div class="sec-head center reveal">
-      <div class="kicker"><span class="n">10</span> Cross-platform</div>
-      <h2>One memory, two agents</h2>
-      <p>The store is keyed on the project, not the tool. A decision made in Codex reaches the next Claude Code session's block, and the other way round.</p>
+  <div class="shell">
+    <div class="sec-head reveal">
+      <span class="eyebrow">Section 11 — <b>Cross-platform</b></span>
+      <h2>Two agents, one kernel.</h2>
+      <p class="lede">The store is keyed on the project, not the tool. A decision made in Codex reaches the next Claude Code session's block, and the other way round.</p>
     </div>
-
-    <div class="xp-row reveal">
-      <div class="card xp agent claude">
-        <h3><span class="glyph">C</span>Claude Code</h3>
-        <ul>
-          <li><span class="y">✓</span>Session block at start</li>
-          <li><span class="y">✓</span>Per-prompt recall (CK-1)</li>
-          <li><span class="y">✓</span>PreToolUse guardrails</li>
-          <li><span class="y">✓</span>Capture on <code>Stop</code></li>
-        </ul>
+    <div class="xp">
+      <div class="viz reveal">
+        <svg class="xp-svg" id="xp-svg" viewBox="0 0 640 400" role="img" aria-label="Claude Code and Codex orbit the same kernel. Claude Code connects through four hooks; Codex through MCP and codex-sync."></svg>
+        <p class="fig" style="text-align:center">Fig. 6 — Shared kernel, two orbits</p>
       </div>
-      <div class="wire" aria-hidden="true"><svg viewBox="0 0 70 24" preserveAspectRatio="none"><path d="M0 12 H70"/></svg></div>
-      <div class="db">
-        <svg><use href="#i-db"/></svg>
-        <b>One SQLite store</b>
-        <span>per project · WAL · event-sourced</span>
-      </div>
-      <div class="wire" aria-hidden="true"><svg viewBox="0 0 70 24" preserveAspectRatio="none"><path d="M70 12 H0"/></svg></div>
-      <div class="card xp agent codex">
-        <h3><span class="glyph">&gt;_</span>Codex</h3>
-        <ul>
-          <li><span class="y">✓</span>Block + <code>recall</code> over MCP</li>
-          <li><span class="y">✓</span>Pull capture via <code>codex-sync</code></li>
-          <li><span class="y">✓</span>Auto-drained at Claude's session start</li>
-          <li><span class="p">–</span>No per-prompt or per-tool hooks</li>
-        </ul>
+      <div class="lists">
+        <div class="panel xp-card reveal">
+          <h3>Claude Code</h3>
+          <ul>
+            <li><span class="m">●</span><span>Session block at start</span></li>
+            <li><span class="m">●</span><span>Per-prompt recall (CK-1)</span></li>
+            <li><span class="m">●</span><span>PreToolUse guardrails</span></li>
+            <li><span class="m">●</span><span>Capture on <code>Stop</code></span></li>
+          </ul>
+        </div>
+        <div class="panel xp-card reveal">
+          <h3>Codex</h3>
+          <ul>
+            <li><span class="m">●</span><span>Block and <code>recall</code> over MCP</span></li>
+            <li><span class="m">●</span><span>Pull capture with <code>codex-sync</code></span></li>
+            <li><span class="m">●</span><span>Drained automatically at Claude's session start</span></li>
+            <li><span class="m no">○</span><span>No per-prompt or per-tool hooks</span></li>
+          </ul>
+        </div>
+        <p class="note" style="margin:0">Paths are alias-aware: <code>C:\repo</code> and <code>/mnt/c/repo</code> resolve to the same store. <code>init</code> writes <code>.mcp.json</code>, <code>.codex/config.toml</code> and <code>AGENTS.md</code> without clobbering what's there.</p>
       </div>
     </div>
-    <p class="xp-note">Paths are alias-aware: <code>C:\repo</code> and <code>/mnt/c/repo</code> resolve to the same store across Windows, WSL and native mounts. <code>init</code> writes <code>.mcp.json</code>, <code>.codex/config.toml</code> and <code>AGENTS.md</code> without clobbering what's there.</p>
   </div>
 </section>
 
-<!-- ═══════════════════════════════ QUICKSTART ═══════════════════════════════ -->
-<section id="quickstart">
-  <div class="wrap">
+<!-- ═══════════════════════════════ GET STARTED ═══════════════════════════════ -->
+<section id="get-started" class="alt">
+  <div class="shell">
     <div class="sec-head reveal">
-      <div class="kicker"><span class="n">11</span> Quickstart</div>
-      <h2>Three commands. Then just work.</h2>
-      <p>Python 3.11 or newer. Run the setup once per project, from its root.</p>
+      <span class="eyebrow">Section 12 — <b>Get started</b></span>
+      <h2>One install. Then it remembers.</h2>
+      <p class="lede">Python 3.11 or newer. Run the setup once per project, from its root. No service to provision, no vendor between you and your project's history.</p>
     </div>
 
-    <div class="qs">
+    <div class="gs">
       <div class="steps">
-        <div class="card step reveal">
-          <h3>Install</h3>
-          <p>The <code>[embedding]</code> extra adds dense retrieval and the runtime for the fine-tuned encoders. Recommended.</p>
-          <div class="tabs" role="group" aria-label="Installer">
-            <button type="button" aria-pressed="true" data-inst="pip">pip</button>
-            <button type="button" aria-pressed="false" data-inst="pipx">pipx</button>
-            <button type="button" aria-pressed="false" data-inst="uv">uv tool</button>
-            <button type="button" aria-pressed="false" data-inst="src">from source</button>
+        <div class="panel step reveal">
+          <span class="num">1</span>
+          <div>
+            <h3>Install</h3>
+            <p>The <code>[embedding]</code> extra adds dense retrieval and the runtime for the fine-tuned encoders. Recommended.</p>
+            <div class="seg inst-seg" role="group" aria-label="Installer">
+              <button type="button" aria-pressed="true" data-inst="pip">pip</button>
+              <button type="button" aria-pressed="false" data-inst="pipx">pipx</button>
+              <button type="button" aria-pressed="false" data-inst="uv">uv tool</button>
+              <button type="button" aria-pressed="false" data-inst="src">From source</button>
+            </div>
+            <div class="cmd"><code id="inst-cmd"></code><button class="copy" type="button" data-copy-from="inst-cmd" aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
           </div>
-          <div class="cmd"><code id="inst-cmd"></code><button class="copy" type="button" data-copy-from="inst-cmd" aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
         </div>
-        <div class="card step reveal">
-          <h3>Set up the project</h3>
-          <p>Registers the project and installs hooks and MCP for Claude Code and Codex.</p>
-          <div class="cmd"><code><span class="pr">$ </span>cognikernel init .</code><button class="copy" type="button" data-copy="cognikernel init ." aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
-          <div class="cmd"><code><span class="pr">$ </span>cognikernel install-heads <span class="cm"># ~270 MB, one-time, sha256-verified</span></code><button class="copy" type="button" data-copy="cognikernel install-heads" aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
+        <div class="panel step reveal">
+          <span class="num">2</span>
+          <div>
+            <h3>Set up the project</h3>
+            <p>Registers the project and installs hooks and MCP for Claude Code and Codex.</p>
+            <div class="cmd"><code><span class="pr">$ </span>cognikernel init .</code><button class="copy" type="button" data-copy="cognikernel init ." aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
+            <div class="cmd"><code><span class="pr">$ </span>cognikernel install-heads <span class="cm"># ~270 MB, one-time, sha256-verified</span></code><button class="copy" type="button" data-copy="cognikernel install-heads" aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
+          </div>
         </div>
-        <div class="card step reveal">
-          <h3>Verify</h3>
-          <p>Confirms every subsystem is wired up and names the fix for anything that isn't.</p>
-          <div class="cmd"><code><span class="pr">$ </span>cognikernel doctor .</code><button class="copy" type="button" data-copy="cognikernel doctor ." aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
+        <div class="panel step reveal">
+          <span class="num">3</span>
+          <div>
+            <h3>Verify</h3>
+            <p>Confirms every subsystem is wired up, and names the fix for anything that isn't.</p>
+            <div class="cmd"><code><span class="pr">$ </span>cognikernel doctor .</code><button class="copy" type="button" data-copy="cognikernel doctor ." aria-label="Copy"><svg class="cp"><use href="#i-copy"/></svg><svg class="ok"><use href="#i-check"/></svg></button></div>
+          </div>
         </div>
       </div>
-      <div class="reveal">
-        <div class="codeblock doctor">
-          <div class="term-bar"><i></i><i></i><i></i><span style="margin-left:10px">cognikernel doctor .</span></div>
+      <div class="out reveal">
+        <div class="editor doctor">
+          <div class="bar"><i></i><i></i><i></i><span>cognikernel doctor .</span></div>
 <pre><span class="dim">-- subsystem health -----------------------------------------</span>
   <span class="ok">[OK]</span> config           : global + project config parse clean
   <span class="ok">[OK]</span> schema           : v22 (current)
@@ -587,23 +658,23 @@
 
 status     : <span class="ok">OK</span></pre>
         </div>
-        <p class="block-note">Line formats match <code>doctor</code>; the counts are illustrative. Skipped <code>install-heads</code>? Those lines say <code>not installed</code> and name the command, informational only, never a <code>--strict</code> failure.</p>
-        <div class="done-note"><b>That's it.</b> Start a Claude Code session in the project. Decisions are captured when it ends and injected as a compact block the next time you start.</div>
+        <p class="note">Line formats match <code>doctor</code>; the counts are illustrative. Skipped <code>install-heads</code>? Those lines say <code>not installed</code> and name the command. That's informational, never a <code>--strict</code> failure.</p>
+        <div class="panel done"><b>That's it.</b> Start a Claude Code session in the project. Decisions are captured when it ends and injected as a compact block the next time you start.</div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ═══════════════════════════════ REFERENCE ═══════════════════════════════ -->
-<section id="reference">
-  <div class="wrap">
+<!-- ═══════════════════════════════ DOCS ═══════════════════════════════ -->
+<section id="docs">
+  <div class="shell">
     <div class="sec-head reveal">
-      <div class="kicker"><span class="n">12</span> Reference</div>
-      <h2>CLI and MCP tools</h2>
-      <p>The block arrives on its own. These are for when you want to look inside, ask why, or target recall yourself.</p>
+      <span class="eyebrow">Section 13 — <b>Reference</b></span>
+      <h2>CLI and MCP tools.</h2>
+      <p class="lede">The block arrives on its own. These are for looking inside, asking why, or targeting recall yourself.</p>
     </div>
     <div class="ref-tools reveal">
-      <label class="search"><svg><use href="#i-search"/></svg><span class="sr-only">Filter commands</span><input id="ref-q" type="search" placeholder="Filter commands… (e.g. why, codex, reset)" autocomplete="off"><kbd>/</kbd></label>
+      <label class="search"><svg><use href="#i-search"/></svg><span class="sr-only">Filter commands</span><input id="ref-q" type="search" placeholder="Filter commands… (why, codex, reset)" autocomplete="off"><kbd>/</kbd></label>
       <div class="seg" role="group" aria-label="Kind">
         <button type="button" aria-pressed="true" data-kind="all">All</button>
         <button type="button" aria-pressed="false" data-kind="cli">CLI</button>
@@ -612,62 +683,66 @@ status     : <span class="ok">OK</span></pre>
     </div>
     <div class="ref reveal" id="ref"></div>
     <div class="ref-empty" id="ref-empty" hidden>No command matches that filter.</div>
-  </div>
-</section>
 
-<!-- ═══════════════════════════════ FAQ ═══════════════════════════════ -->
-<section id="faq">
-  <div class="wrap">
-    <div class="sec-head center reveal">
-      <div class="kicker"><span class="n">13</span> FAQ</div>
-      <h2>Questions, answered</h2>
-    </div>
-    <div class="faq reveal">
-      <details>
-        <summary><span>Does any of my code or conversation leave my machine?</span></summary>
-        <div class="a"><p>No project code or conversation is uploaded. Extraction, consolidation, storage, retrieval and model inference run locally against a SQLite database. With the recommended <code>[embedding]</code> extra, CogniKernel may download the local embedding model during initialization, and <code>install-heads</code> can download the fine-tuned weights; both paths fail open to lexical operation when unavailable.</p></div>
-      </details>
-      <details>
-        <summary><span>Is this another LLM summarizing my transcripts?</span></summary>
-        <div class="a"><p>No. It's a deterministic sanitize → classify → consolidate pipeline. Two small fine-tuned encoders (~130 MB ONNX each, milliseconds on CPU) score salience and detect supersession. The only LLM involved is the coding agent you already run.</p></div>
-      </details>
-      <details>
-        <summary><span>Is it a vector database wrapper?</span></summary>
-        <div class="a"><p>No. Retrieval is lexical-first (SQLite FTS5 BM25) with optional dense embeddings fused in via Reciprocal Rank Fusion. Memory is stored as typed events with provenance, not as loose text chunks.</p></div>
-      </details>
-      <details>
-        <summary><span>What happens if I skip <code>install-heads</code>?</span></summary>
-        <div class="a"><p>Everything still works on a deterministic keyword/lexical fallback. It's weaker: it can miss decisions phrased outside its trigger vocabulary and paraphrased corrections. <code>cognikernel doctor</code> tells you which path is active.</p></div>
-      </details>
-      <details>
-        <summary><span>Which agents and platforms are supported?</span></summary>
-        <div class="a"><p>Claude Code gets the full loop: session block, per-prompt recall, PreToolUse guardrails and capture on <code>Stop</code>. Codex gets the shared block and MCP recall, with capture pulled by <code>codex-sync</code>. CI runs on Ubuntu (Python 3.11 and 3.12) and Windows; WSL paths resolve to the same store as their Windows equivalents.</p></div>
-      </details>
-      <details>
-        <summary><span>Will it slow my sessions down or block my edits?</span></summary>
-        <div class="a"><p>Hooks are fail-open and advisory by default. New projects start with the advisory read gate, which only refuses re-reading a file already read in the same session. Strict mode, which also refuses first reads of files in the skeleton, is opt-in via <code>hook_policy = "strict"</code>.</p></div>
-      </details>
-      <details>
-        <summary><span>How do I see what it remembered, or why?</span></summary>
-        <div class="a"><p><code>cognikernel show</code> prints the store. <code>cognikernel why &lt;#id or words&gt;</code> explains where a claim came from, why it ranks where it does, and what it replaced. <code>show --as-of &lt;date|commit&gt;</code> shows what memory believed at that point. <code>cognikernel reset</code> clears it.</p></div>
-      </details>
-      <details>
-        <summary><span>What does "updates are paused" mean for me?</span></summary>
-        <div class="a"><p>Development is on hold until further notice. v0.1.3 is the current release and stays current. It's stable, tested in CI, and Apache-2.0 licensed, so you can use it, fork it, or build on it.</p></div>
-      </details>
+    <div class="faq-wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Section 14 — <b>Questions</b></span>
+        <h2>Answered plainly.</h2>
+      </div>
+      <div class="faq reveal">
+        <details>
+          <summary><span>Does any of my code or conversation leave my machine?</span></summary>
+          <div class="a"><p>No project code or conversation is uploaded. Extraction, consolidation, storage, retrieval and model inference run locally against a SQLite database. With the recommended <code>[embedding]</code> extra, CogniKernel may download the local embedding model during initialization, and <code>install-heads</code> can download the fine-tuned weights; both paths fail open to lexical operation when unavailable.</p></div>
+        </details>
+        <details>
+          <summary><span>Is this another LLM summarizing my transcripts?</span></summary>
+          <div class="a"><p>No. It's a deterministic sanitize → classify → consolidate pipeline. Two small fine-tuned encoders (~130 MB ONNX each, milliseconds on CPU) score salience and detect supersession. The only LLM involved is the coding agent you already run.</p></div>
+        </details>
+        <details>
+          <summary><span>Is it a vector database wrapper?</span></summary>
+          <div class="a"><p>No. Retrieval is lexical-first (SQLite FTS5 BM25) with optional dense embeddings fused in through Reciprocal Rank Fusion. Memory is stored as typed events with provenance, not as loose text chunks.</p></div>
+        </details>
+        <details>
+          <summary><span>What happens if I skip <code>install-heads</code>?</span></summary>
+          <div class="a"><p>Everything still works on a deterministic keyword and lexical fallback. It's weaker: it can miss decisions phrased outside its trigger vocabulary, and paraphrased corrections. <code>cognikernel doctor</code> tells you which path is active.</p></div>
+        </details>
+        <details>
+          <summary><span>Which agents and platforms are supported?</span></summary>
+          <div class="a"><p>Claude Code gets the full loop: session block, per-prompt recall, PreToolUse guardrails and capture on <code>Stop</code>. Codex gets the shared block and MCP recall, with capture pulled by <code>codex-sync</code>. CI runs on Ubuntu (Python 3.11 and 3.12) and Windows; WSL paths resolve to the same store as their Windows equivalents.</p></div>
+        </details>
+        <details>
+          <summary><span>Will it slow my sessions down or block my edits?</span></summary>
+          <div class="a"><p>Hooks are fail-open and advisory by default. New projects start with the advisory read gate, which only refuses re-reading a file already read in the same session. Strict mode, which also refuses first reads of files in the skeleton, is opt-in with <code>hook_policy = "strict"</code>.</p></div>
+        </details>
+        <details>
+          <summary><span>How do I see what it remembered, or why?</span></summary>
+          <div class="a"><p><code>cognikernel show</code> prints the store. <code>cognikernel why &lt;#id or words&gt;</code> explains where a claim came from, why it ranks where it does, and what it replaced. <code>show --as-of &lt;date|commit&gt;</code> shows what memory believed at that point. <code>cognikernel reset</code> clears it.</p></div>
+        </details>
+        <details>
+          <summary><span>What does "updates are paused" mean for me?</span></summary>
+          <div class="a"><p>Development is on hold until further notice. v0.1.3 is the current release and stays current. It's stable, tested in CI and Apache-2.0 licensed, so you can use it, fork it or build on it.</p></div>
+        </details>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- ═══════════════════════════════ FINAL CTA ═══════════════════════════════ -->
-<section class="final">
-  <div class="wrap reveal">
+<!-- ═══════════════════════════════ FINAL ═══════════════════════════════ -->
+<section class="final alt">
+  <div class="starfield"></div>
+  <div class="shell reveal" style="position:relative">
+    <svg class="kernel-big" viewBox="0 0 140 140" aria-hidden="true">
+      <circle cx="70" cy="70" r="66" fill="none" stroke="var(--orbit-2)"/>
+      <circle cx="70" cy="70" r="46" fill="none" stroke="var(--orbit)" stroke-dasharray="2 7"/>
+      <circle class="k-glow" cx="70" cy="70" r="28" fill="var(--gold)" fill-opacity=".18"/>
+      <circle cx="70" cy="70" r="9" fill="var(--gold)"/>
+      <circle cx="116" cy="70" r="4" fill="var(--blue)"/><circle cx="37.5" cy="37.5" r="4" fill="var(--blue)"/><circle cx="70" cy="136" r="3.5" fill="var(--gold)"/>
+    </svg>
     <h2>Stop paying for the same context twice.</h2>
-    <p>Install it once, keep working the way you already do, and let the next session start where this one left off.</p>
+    <p class="lede">Install it once, keep working the way you already do, and let the next session start where this one left off.</p>
     <div class="hero-cta">
-      <a class="btn btn-primary" href="#quickstart">Get started <svg><use href="#i-arrow"/></svg></a>
-      <a class="btn btn-ghost" href="https://github.com/KanishkNoir/cognikernel"><svg><use href="#i-star"/></svg>Star on GitHub</a>
-      <a class="btn btn-ghost" href="https://pypi.org/project/cognikernel/"><svg><use href="#i-box"/></svg>PyPI</a>
+      <a class="btn btn-primary" href="#get-started">Get Started <svg><use href="#i-arrow"/></svg></a>
+      <a class="btn btn-ghost" href="https://github.com/KanishkNoir/cognikernel"><svg><use href="#i-github"/></svg>View on GitHub</a>
     </div>
   </div>
 </section>
@@ -675,42 +750,27 @@ status     : <span class="ok">OK</span></pre>
 </main>
 
 <footer>
-  <div class="wrap">
+  <div class="shell">
     <div class="foot">
-      <div>
-        <a class="brand" href="#top"><img src="assets/favicon.svg" alt="" width="28" height="28">CogniKernel</a>
-        <p>Persistent, structured project memory for Claude Code and Codex. Local, deterministic, open source.</p>
-      </div>
-      <div>
-        <h4>Project</h4>
-        <ul>
-          <li><a href="https://github.com/KanishkNoir/cognikernel">Source code</a></li>
-          <li><a href="https://pypi.org/project/cognikernel/">PyPI package</a></li>
-          <li><a href="https://github.com/KanishkNoir/cognikernel/releases">Releases</a></li>
-          <li><a href="https://github.com/KanishkNoir/cognikernel/issues">Issues</a></li>
-        </ul>
-      </div>
-      <div>
-        <h4>Docs</h4>
-        <ul>
-          <li><a href="https://github.com/KanishkNoir/cognikernel#readme">README</a></li>
-          <li><a href="https://github.com/KanishkNoir/cognikernel/blob/main/docs/benchmark.md">Benchmark method</a></li>
-          <li><a href="https://github.com/KanishkNoir/cognikernel/blob/main/CHANGELOG.md">Changelog</a></li>
-          <li><a href="https://github.com/KanishkNoir/cognikernel/blob/main/docs/release-notes-0.1.3.md">0.1.3 release notes</a></li>
-        </ul>
-      </div>
-      <div>
-        <h4>Community</h4>
-        <ul>
-          <li><a href="https://github.com/KanishkNoir/cognikernel/blob/main/CONTRIBUTING.md">Contributing</a></li>
-          <li><a href="https://github.com/KanishkNoir/cognikernel/blob/main/SECURITY.md">Security policy</a></li>
-          <li><a href="https://github.com/KanishkNoir/cognikernel/blob/main/LICENSE">Apache-2.0 license</a></li>
-        </ul>
-      </div>
+      <a class="brand" href="#top"><svg aria-hidden="true"><use href="#i-kernel"/></svg>CogniKernel</a>
+      <nav aria-label="Footer">
+        <a href="#docs">Docs</a>
+        <a href="https://github.com/KanishkNoir/cognikernel">GitHub</a>
+        <a href="https://pypi.org/project/cognikernel/">PyPI</a>
+        <a href="https://github.com/KanishkNoir/cognikernel/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/KanishkNoir/cognikernel/blob/main/docs/benchmark.md">Benchmark method</a>
+        <a href="https://github.com/KanishkNoir/cognikernel/blob/main/LICENSE">License</a>
+      </nav>
     </div>
-    <div class="foot-bottom">
+<pre class="ascii" aria-hidden="true"> ██████╗ ██████╗  ██████╗ ███╗   ██╗██╗██╗  ██╗███████╗██████╗ ███╗   ██╗███████╗██╗
+██╔════╝██╔═══██╗██╔════╝ ████╗  ██║██║██║ ██╔╝██╔════╝██╔══██╗████╗  ██║██╔════╝██║
+██║     ██║   ██║██║  ███╗██╔██╗ ██║██║█████╔╝ █████╗  ██████╔╝██╔██╗ ██║█████╗  ██║
+██║     ██║   ██║██║   ██║██║╚██╗██║██║██╔═██╗ ██╔══╝  ██╔══██╗██║╚██╗██║██╔══╝  ██║
+╚██████╗╚██████╔╝╚██████╔╝██║ ╚████║██║██║  ██╗███████╗██║  ██║██║ ╚████║███████╗███████╗
+ ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝</pre>
+    <div class="foot-b">
       <span>© 2026 Kanishk Singh · Apache-2.0</span>
-      <span>Built with plain HTML, CSS and a little JavaScript. No trackers.</span>
+      <span>Plain HTML, CSS and a little JavaScript · No trackers</span>
     </div>
   </div>
 </footer>

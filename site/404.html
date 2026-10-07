@@ -8,31 +8,41 @@
   <link rel="icon" href="/cognikernel/assets/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script>try { var t = localStorage.getItem("ck-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}</script>
   <!-- 404 pages are served from any path, so assets are root-absolute. -->
   <link rel="stylesheet" href="/cognikernel/assets/style.css">
   <style>
-    .nf { min-height: 100vh; display: grid; place-items: center; padding: 40px 16px; text-align: center; }
-    .nf .term { max-width: 640px; margin: 0 auto 32px; }
-    .nf .term-body { min-height: 0; }
-    .nf h1 { font-size: clamp(30px, 6vw, 52px); margin-bottom: 12px; }
-    .nf p { color: var(--ink-2); max-width: 46ch; margin: 0 auto 28px; }
+    .nf { position: relative; min-height: 100vh; display: grid; place-items: center; padding: 48px 16px; text-align: center; overflow: hidden; }
+    .nf svg.lost { width: 220px; height: 220px; margin: 0 auto 36px; }
+    .nf h1 { font-size: clamp(36px, 6vw, 60px); }
+    .nf .lede { max-width: 30rem; margin: 18px auto 32px; }
+    .nf .editor { max-width: 520px; margin: 0 auto 36px; text-align: left; }
   </style>
 </head>
 <body>
-<div class="bg-grid" aria-hidden="true"></div>
 <main class="nf">
-  <div>
-    <div class="term" aria-hidden="true">
-      <div class="term-bar"><i></i><i></i><i></i><span>cognikernel recall</span></div>
-<pre class="term-body"><span class="p">$ </span>cognikernel why . "this page"
-<span class="m">no claim matches — nothing was ever stored at this path.</span>
-<span class="hc">### Do not retry — confirmed failures</span>
-- Following this link -> 404</pre>
+  <div class="starfield"></div>
+  <div style="position:relative">
+    <svg class="lost" viewBox="0 0 220 220" aria-hidden="true">
+      <circle cx="110" cy="110" r="100" fill="none" stroke="var(--orbit-2)"/>
+      <circle cx="110" cy="110" r="70" fill="none" stroke="var(--orbit)" stroke-dasharray="2 7"/>
+      <circle cx="110" cy="110" r="40" fill="none" stroke="var(--orbit)"/>
+      <circle class="k-glow" cx="110" cy="110" r="26" fill="var(--gold)" fill-opacity=".2"/>
+      <circle cx="110" cy="110" r="8" fill="var(--gold)"/>
+      <circle cx="180" cy="110" r="4.5" fill="var(--blue)"/>
+      <circle cx="82" cy="73" r="4.5" fill="var(--blue)"/>
+      <circle cx="205" cy="34" r="5" fill="none" stroke="var(--ink-3)" stroke-width="1.4"/>
+      <path d="M201.5 37.5l7-7" stroke="var(--ink-3)" stroke-width="1.4"/>
+    </svg>
+    <span class="eyebrow">Error 404 — <b>no record</b></span>
+    <h1 style="margin-top:18px">Memory has no record of this page.</h1>
+    <p class="lede">Either it never existed, or it drifted out of orbit. The rest of the site is right where you left it.</p>
+    <div class="editor">
+      <div class="bar"><i></i><i></i><i></i><span>cognikernel why</span></div>
+<pre><span class="c-m">$</span> cognikernel why . "this page"
+<span class="c-m">no claim matches — nothing was ever stored at this path</span></pre>
     </div>
-    <h1>Memory has no record of this page.</h1>
-    <p>Either it never existed, or it was superseded. The rest of the site is still here.</p>
     <a class="btn btn-primary" href="/cognikernel/">Back to CogniKernel</a>
   </div>
 </main>
