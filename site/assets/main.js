@@ -336,7 +336,7 @@
       b: ["FTS5 BM25 ∪ dense embeddings → Reciprocal Rank Fusion", "prohibition_search keeps \"don't do X\" rules from being crowded out", "AST skeleton graph ranked by PageRank"],
       m: "retrieval/hybrid.py" },
     { k: "assemble", t: "Assemble", d: "Ranked claims are packed into a fixed token budget, weighted by authority.",
-      b: ["Authority-weighted drop-to-fit", "Hard constraints are never dropped to make room", "Deterministic order so the prompt cache keeps hitting"],
+      b: ["Authority-weighted drop-to-fit", "Hard constraints are prioritized ahead of lower-value content", "Deterministic order so the prompt cache keeps hitting"],
       m: "compression/greedy.py" },
     { k: "inject", t: "Inject", d: "The block lands in the agent's context at the moments it can change what happens next.",
       b: ["SessionStart: the full session block", "UserPromptSubmit: prompt-relevant recall", "PreToolUse: a past prohibition, just before an edit breaks it"],
