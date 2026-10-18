@@ -293,12 +293,11 @@ def threads_resource(project_id: str) -> str:
 def _start_queue_drainer() -> None:
     """Background thread: drain queued extraction jobs for this project (I4/I7).
 
-    The MCP server is the only long-lived CogniKernel process in a Claude Code
-    session, which makes it the one reliable host for queue processing: hook
-    subprocesses are killed with their Job Object on hook exit (Windows), so a
-    worker detached from a hook may die at birth. This thread polls the
-    project's queue and runs process_jobs in-process; the worker single-flight
-    lock makes it safe alongside any CLI/hook-spawned workers.
+    The MCP server is the long-lived CogniKernel process in a Claude Code
+    session, so this thread is the warm host for extraction. Stop hooks only
+    enqueue work; this thread polls the project's queue and runs process_jobs
+    in-process. The worker single-flight lock also keeps it safe alongside an
+    explicitly invoked CLI worker.
     """
     import os
     import threading
@@ -327,10 +326,10 @@ def _start_queue_drainer() -> None:
                 db_path = get_db_path(config, project_id)
                 if db_path.exists():
                     with get_connection(db_path) as conn:
-                        # Requeue jobs whose claimant died (hook drains are
-                        # killed at the hook ceiling); otherwise they'd be
-                        # invisible to the queued-count below for the whole
-                        # 10-min stuck-grace window (GAMMA_CK_TEST lag bug).
+                        # Requeue jobs whose claimant died (for example, an
+                        # explicitly invoked worker killed at its time budget);
+                        # otherwise they'd be invisible to the queued-count
+                        # below for the whole 10-min stuck-grace window.
                         from cognikernel.integration.session import _pid_alive
                         from cognikernel.storage.jobs import recover_orphaned_jobs
                         recover_orphaned_jobs(conn, _pid_alive)

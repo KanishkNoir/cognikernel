@@ -117,7 +117,7 @@ def main() -> None:
     # ── capture ───────────────────────────────────────────────────────────────
     p_capture = sub.add_parser(
         "capture",
-        help="Store evidence + enqueue job, then spawn background worker (I4 fast path)",
+        help="Store transcript evidence and enqueue extraction (I4 fast path)",
     )
     p_capture.add_argument("project_path", help="Path to the project root")
     p_capture.add_argument("transcript_file", help="Path to the JSONL session file")
@@ -134,7 +134,7 @@ def main() -> None:
                                 "captured_at_sha at merge time. Omit outside a git work "
                                 "tree; never guessed.")
     p_capture.add_argument("--no-spawn", action="store_true",
-                           help="Store evidence + enqueue only; do not spawn the worker subprocess")
+                           help="Legacy compatibility flag; capture always enqueues only")
 
     # ── process-jobs ──────────────────────────────────────────────────────────
     p_pjobs = sub.add_parser(
@@ -146,7 +146,7 @@ def main() -> None:
                          help="Max jobs to process in one run (default 50)")
     p_pjobs.add_argument("--time-budget", type=float, default=None, metavar="S",
                          dest="time_budget",
-                         help="Stop claiming new jobs after S seconds (hook-safe drains)")
+                         help="Stop claiming new jobs after S seconds; remaining jobs stay queued")
 
     # ── show ──────────────────────────────────────────────────────────────────
     p_show = sub.add_parser("show", help="Display current project state")
@@ -784,10 +784,9 @@ def _cmd_init(args: argparse.Namespace) -> None:
         "Stop": [
             {
                 "hooks": [
-                    # timeout 300s: covers capture (15s) + the sync drain
-                    # (180s kill ceiling) with margin. Claude Code's default
-                    # hook timeout (60s) killed drains mid-job (I7d).
-                    {"type": "command", "command": _hook_cmd("hook-stop"), "timeout": 300}
+                    # Capture is enqueue-only now; allow margin over its bounded
+                    # git/capture subprocesses without waiting for model inference.
+                    {"type": "command", "command": _hook_cmd("hook-stop"), "timeout": 90}
                 ]
             }
         ],
@@ -1090,7 +1089,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
 
 
 def _cmd_capture(args: argparse.Namespace) -> None:
-    """Store evidence + enqueue, then spawn detached worker (I4 fast path)."""
+    """Store evidence and enqueue extraction (I4 fast path)."""
     session_id: str | None = getattr(args, "session_id", None)
     auto = getattr(args, "auto_session_id", False)
     if auto:
@@ -1117,10 +1116,7 @@ def _cmd_capture(args: argparse.Namespace) -> None:
     )
     print(json.dumps(result))
 
-    # I7c: no spawn — a worker detached from a Claude Code hook is killed with
-    # the hook's Job Object at hook exit (and a doomed worker can orphan the
-    # single-flight lock). The Stop hook runs a sync time-budgeted drain after
-    # capture instead; --no-spawn is kept for CLI back-compat and is a no-op.
+    # The long-lived MCP worker owns queue draining so model sessions stay warm.
 
 
 def _cmd_codex_sync(args: argparse.Namespace) -> None:
@@ -1139,7 +1135,7 @@ def _cmd_codex_sync(args: argparse.Namespace) -> None:
 
 
 def _cmd_process_jobs(args: argparse.Namespace) -> None:
-    """Claim and process queued extraction jobs (worker / hook-drain entry point)."""
+    """Claim and process queued extraction jobs (worker / CLI entry point)."""
     from cognikernel.integration.session import process_jobs
     summary = process_jobs(
         args.project_path,

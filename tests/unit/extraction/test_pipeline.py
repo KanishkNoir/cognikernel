@@ -8,6 +8,7 @@ from cognikernel.extraction.pipeline import (
     SessionMetadata,
     _FOREGROUND_BYTES,
     _HARD_CAP_BYTES,
+    _classify_head_batch,
     extract_session,
     persist_events,
 )
@@ -84,6 +85,21 @@ class TestExtractSession:
     def test_session_id_propagated(self, meta: SessionMetadata) -> None:
         events = extract_session("Human: We decided to use SQLite.", meta)
         assert all(e.session_id == "sess1" for e in events)
+
+    def test_head_batch_classifier_is_used_when_available(self) -> None:
+        class BatchHead:
+            def classify_scored_batch(self, texts):
+                self.seen = texts
+                return [("DECISION", 0.9) for _ in texts]
+
+            def classify_scored(self, _text):
+                raise AssertionError("scalar classifier should not be called")
+
+        head = BatchHead()
+        result = _classify_head_batch(head, ["first sentence", "second sentence"])
+
+        assert head.seen == ["first sentence", "second sentence"]
+        assert result == [("DECISION", 0.9), ("DECISION", 0.9)]
 
     def test_multiple_signals_produce_multiple_events(self, meta: SessionMetadata) -> None:
         transcript = "Assistant: We decided to use SQLite. We cannot use Redis."

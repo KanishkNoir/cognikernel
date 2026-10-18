@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 _MAX_TOKENS = 256
+_BATCH_SIZE = 16
 _DEFAULT_THRESHOLD = 0.9  # conservative fallback if threshold.json is absent
 
 _lock = threading.Lock()
@@ -62,6 +63,8 @@ def _load() -> bool:
                 return False
             _sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
             _tok = Tokenizer.from_file(str(tok_path))
+            # The exported graph is parity-safe for equal-length, unpadded pairs.
+            _tok.no_padding()
             for cand in (bd / "threshold.json", bd.parent / "threshold.json"):
                 if cand.exists():
                     data = json.loads(cand.read_text())
@@ -98,29 +101,61 @@ def deployed_min() -> Optional[float]:
     return _deployed_min
 
 
+def prob_supersedes_batch(
+    pairs: list[tuple[str, str]],
+) -> list[Optional[float]]:
+    """Score pairs together when token lengths match (the ONNX graph's safe batch shape).
+
+    The exported graph has known padded-batch parity issues, so batches contain
+    only unpadded sequences of equal length. A failed batch degrades to None for
+    that batch, matching the single-pair fail-open behavior.
+    """
+    results: list[Optional[float]] = [None] * len(pairs)
+    active = [i for i, (new, old) in enumerate(pairs) if new and old]
+    if not active or not _load():
+        return results
+
+    import numpy as np
+
+    groups: dict[int, list[tuple[int, list[int], list[int]]]] = {}
+    try:
+        encoded = _tok.encode_batch([pairs[i] for i in active])
+        for i, enc in zip(active, encoded):
+            ids = enc.ids[:_MAX_TOKENS]
+            type_ids = enc.type_ids[:_MAX_TOKENS] if enc.type_ids else [0] * len(ids)
+            groups.setdefault(len(ids), []).append((i, ids, type_ids))
+    except Exception:
+        return results
+
+    for group in groups.values():
+        for start in range(0, len(group), _BATCH_SIZE):
+            batch = group[start:start + _BATCH_SIZE]
+            try:
+                input_ids = np.asarray([item[1] for item in batch], dtype="int64")
+                token_type = np.asarray([item[2] for item in batch], dtype="int64")
+                attn = np.ones_like(input_ids)
+                logits = _sess.run(["logits"], {
+                    "input_ids": input_ids,
+                    "attention_mask": attn,
+                    "token_type_ids": token_type,
+                })[0].reshape(len(batch), -1)
+                if logits.shape[1] == 1:
+                    scores = 1.0 / (1.0 + np.exp(-logits[:, 0]))
+                else:
+                    shifted = logits - logits.max(axis=1, keepdims=True)
+                    probs = np.exp(shifted)
+                    probs /= probs.sum(axis=1, keepdims=True)
+                    scores = probs[:, 1]
+                for item, score in zip(batch, scores):
+                    results[item[0]] = float(score)
+            except Exception:
+                continue
+    return results
+
+
 def prob_supersedes(new_desc: str, old_desc: str) -> Optional[float]:
     """P(new_desc supersedes old_desc) in [0,1], or None if the model is unavailable."""
-    if not new_desc or not old_desc or not _load():
-        return None
-    try:
-        import numpy as np
-
-        enc = _tok.encode(new_desc, old_desc)
-        ids = enc.ids[:_MAX_TOKENS]
-        tti = (enc.type_ids[:_MAX_TOKENS] if enc.type_ids else [0] * len(ids))
-        input_ids = np.asarray([ids], dtype="int64")
-        attn = np.ones_like(input_ids)
-        token_type = np.asarray([tti], dtype="int64")
-        logits = _sess.run(["logits"], {
-            "input_ids": input_ids, "attention_mask": attn, "token_type_ids": token_type,
-        })[0].reshape(-1)
-        if logits.size == 1:
-            return float(1.0 / (1.0 + np.exp(-logits[0])))
-        z = logits - logits.max()
-        p = np.exp(z) / np.exp(z).sum()
-        return float(p[1])
-    except Exception:
-        return None
+    return prob_supersedes_batch([(new_desc, old_desc)])[0]
 
 
 def supersedes(new_desc: str, old_desc: str) -> bool:

@@ -156,8 +156,8 @@ def subagent_stop_main() -> None:
       the Stop hook owns that transcript. Processing it here under the agent id
       double-extracts the whole session under a wrong session id and (pre-I4)
       held the write lock for the entire merge, starving every other writer.
-    - Use the async capture+queue path (session_capture + detached worker), never
-      the synchronous session_end — a hook must not run a multi-minute merge.
+    - Use the async capture+queue path (session_capture), never the synchronous
+      session_end — a hook must not run a multi-minute merge.
     - source_type must be one of migration 005's CHECK values. The old value
       'subagent_transcript' violated the CHECK and was silently dropped by
       INSERT OR IGNORE, breaking CK-4 storage from day one.
@@ -195,9 +195,7 @@ def subagent_stop_main() -> None:
             evidence_source_type="jsonl_transcript",
             evidence_source_path=transcript_path,
         )
-        # No spawn: detached workers die with the hook's Job Object (I7c).
-        # The job drains at the next Stop firing's sync drain or via the MCP
-        # server's background drainer.
+        # No spawn: the long-lived MCP server drains the queued job.
     except Exception as exc:
         _log_swallowed("subagent_stop", exc)  # never block subagent teardown
 
@@ -672,14 +670,9 @@ def stop_main() -> None:
 
     head_sha = _capture_head_sha(project_dir)
 
-    # I4/I7c: capture (fast, evidence+enqueue) then a SYNCHRONOUS time-budgeted
-    # drain. Detached workers are useless under Claude Code on Windows — the
-    # hook's Job Object kills the whole tree at hook exit (after any liveness
-    # probe passes), so the only drain that reliably happens during a session
-    # is the one this hook runs itself. The worker single-flight lock makes the
-    # sync drain a no-op when the MCP server's background drainer is already
-    # working the queue. Per-turn cost with a warm cursor: one delta job,
-    # ~2-15s; budget-capped so the hook always fits its 60s ceiling.
+    # I4/I7c: capture only stores evidence and enqueues work. Extraction runs in
+    # the long-lived MCP server's background drainer, which retains the ONNX
+    # encoders between jobs; a Stop-hook drain would cold-load them on every turn.
     cmd = [
         sys.executable, "-m", "cognikernel", "capture",
         str(project_path), str(jsonl_path), "--auto-session-id", "--no-spawn",
@@ -714,19 +707,5 @@ def stop_main() -> None:
             except Exception:
                 pass
 
-    # Drain the queue inside the hook's own lifetime (survives the Job Object).
-    # 150s budget / 180s kill: each drain subprocess pays a cold model load
-    # (~20s) before its first job; the old 40s ceiling killed nearly every
-    # drain mid-job (GAMMA_CK_TEST: 30+ min queue lag). Requires the Stop hook
-    # timeout in settings.json to be >= 200s (init now writes 300).
-    try:
-        drain = subprocess.run(
-            [sys.executable, "-m", "cognikernel", "process-jobs", str(project_path),
-             "--time-budget", "150"],
-            capture_output=True, text=True, timeout=180,
-        )
-        _warn(f"cognikernel hook-stop: drain → {drain.stdout.strip()[:160]}")
-    except subprocess.TimeoutExpired:
-        _warn("cognikernel hook-stop: drain hit the 180s ceiling — remaining jobs stay queued")
-    except Exception as exc:
-        _warn(f"cognikernel hook-stop: drain error: {exc}")
+    # No synchronous drain here: it would start a fresh process and cold-load
+    # the extraction models. The long-lived MCP drainer processes queued work.

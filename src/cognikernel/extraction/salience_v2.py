@@ -29,6 +29,7 @@ LABELS: tuple[str, ...] = (
 
 _HEAD_PATH = Path(__file__).resolve().parent / "heads" / "salience_v2.npz"
 _MAX_TOKENS = 512
+_BATCH_SIZE = 32
 
 # R2 (LOSSLESS reframe): the head does NOT drop low-confidence predictions. Confidence
 # rides along as the event weight (set in pipeline._extract_via_head), so the RENDER path
@@ -80,6 +81,9 @@ def _load() -> bool:
             _context_input = bool(data["context_input"][0]) if "context_input" in data else False
             _sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
             _tok = Tokenizer.from_file(str(tok_path))
+            # The shipped tokenizer serializes padding; disable it so encode_batch
+            # produces the same unpadded inputs as the established scalar path.
+            _tok.no_padding()
             return True
         except Exception:
             _sess = None
@@ -98,43 +102,65 @@ def expects_context() -> bool:
     return _context_input
 
 
-def _embed(text: str):
+def _embed_batch(texts: list[str]):
     import numpy as np
 
-    enc = _tok.encode(text)
-    ids = enc.ids[:_MAX_TOKENS]
-    input_ids = np.asarray([ids], dtype="int64")
-    attn = np.ones_like(input_ids)
-    tti = np.zeros_like(input_ids)
-    out = _sess.run(["embedding"], {
-        "input_ids": input_ids, "attention_mask": attn, "token_type_ids": tti,
-    })[0]
-    return out[0].astype("float32")  # (384,), already L2-normalized in-graph
+    encodings = _tok.encode_batch(texts)
+    groups: dict[int, list[tuple[int, list[int]]]] = {}
+    for index, enc in enumerate(encodings):
+        ids = enc.ids[:_MAX_TOKENS]
+        groups.setdefault(len(ids), []).append((index, ids))
+
+    # The exported graph's outputs can shift on mixed-length padded batches.
+    embeddings = [None] * len(texts)
+    for group in groups.values():
+        for start in range(0, len(group), _BATCH_SIZE):
+            batch = group[start:start + _BATCH_SIZE]
+            input_ids = np.asarray([item[1] for item in batch], dtype="int64")
+            attn = np.ones_like(input_ids)
+            tti = np.zeros_like(input_ids)
+            out = _sess.run(["embedding"], {
+                "input_ids": input_ids, "attention_mask": attn, "token_type_ids": tti,
+            })[0]
+            for item, vector in zip(batch, out):
+                embeddings[item[0]] = vector.astype("float32")
+    return np.asarray(embeddings, dtype="float32")
 
 
-def classify_scored(text: str) -> Optional[tuple[str, float]]:
-    """Return (label, confidence) or None if the v2 artifacts are unavailable.
+def classify_scored_batch(texts: list[str]) -> list[Optional[tuple[str, float]]]:
+    """Classify texts in bounded ONNX batches; unavailable artifacts yield None per item.
 
     None => caller falls back (never an implicit drop). ("NOISE", p) is an explicit drop.
     """
-    if not text or not text.strip():
-        return ("NOISE", 1.0)
+    results: list[Optional[tuple[str, float]]] = [
+        ("NOISE", 1.0) if not text or not text.strip() else None for text in texts
+    ]
+    active = [i for i, text in enumerate(texts) if text and text.strip()]
+    if not active:
+        return results
     if not _load():
-        return None
+        return results
 
     import numpy as np
 
-    v = _embed(text)
-    xb = np.concatenate([v, np.ones(1, dtype="float32")])
+    vectors = _embed_batch([texts[i] for i in active])
+    xb = np.concatenate(
+        [vectors, np.ones((len(vectors), 1), dtype="float32")], axis=1
+    )
     logits = xb @ _W
-    z = logits - logits.max()
-    p = np.exp(z)
-    p = p / p.sum()
-    top = int(np.argmax(p))
-    # LOSSLESS: return the head's actual call (no confidence DROP here). Low-confidence
-    # facts are kept and DOWN-SAMPLED at render via weight (= conf, set by the pipeline),
-    # never deleted at write — the events store stays lossless and re-tunable.
-    return ((_labels or LABELS)[top], float(p[top]))
+    logits -= logits.max(axis=1, keepdims=True)
+    probabilities = np.exp(logits)
+    probabilities /= probabilities.sum(axis=1, keepdims=True)
+    for index, probs in zip(active, probabilities):
+        top = int(np.argmax(probs))
+        # LOSSLESS: low-confidence facts are kept and down-sampled at render.
+        results[index] = ((_labels or LABELS)[top], float(probs[top]))
+    return results
+
+
+def classify_scored(text: str) -> Optional[tuple[str, float]]:
+    """Return (label, confidence) or None if the v2 artifacts are unavailable."""
+    return classify_scored_batch([text])[0]
 
 
 def classify(text: str) -> Optional[str]:

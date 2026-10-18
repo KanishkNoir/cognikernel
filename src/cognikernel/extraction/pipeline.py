@@ -307,6 +307,16 @@ def is_label_value_fact(desc: str) -> bool:
     return desc.split(":", 1)[0].strip().lower() not in _FRAMING_LABELS
 
 
+def _classify_head_batch(head, texts: list[str]):
+    batch_classifier = getattr(head, "classify_scored_batch", None)
+    scores = batch_classifier(texts) if callable(batch_classifier) else [
+        head.classify_scored(text) for text in texts
+    ]
+    if len(scores) != len(texts):
+        raise RuntimeError("salience head returned a different number of scores than inputs")
+    return scores
+
+
 def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None) -> list[Event] | None:
     """Broad mode: classify every prose sentence; keep non-NOISE as typed events.
 
@@ -331,6 +341,8 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
     events: list[Event] = []
     seen: set[str] = set()
     prev_desc = ""  # previous prose sentence, for context composition
+    candidates: list[tuple[object, str]] = []
+    head_inputs: list[str] = []
     for s in sentences:
         if s.is_code_block:
             continue
@@ -344,7 +356,11 @@ def _extract_via_head(sentences: list, session_meta: SessionMetadata, head=None)
         # CLASSIFICATION input is composed, so event identity is unchanged.
         head_input = compose_head_input(desc, s.role, prev_desc) if use_context else desc
         prev_desc = desc  # for the next sentence
-        scored = head.classify_scored(head_input)
+        candidates.append((s, desc))
+        head_inputs.append(head_input)
+
+    scores = _classify_head_batch(head, head_inputs)
+    for (s, desc), scored in zip(candidates, scores):
         if scored is None:
             return None
         label, conf = scored
@@ -410,10 +426,15 @@ def _filter_and_retype_with_head(events: list[Event], head=None) -> list[Event] 
     use_context = getattr(head, "expects_context", lambda: False)()
 
     kept: list[Event] = []
+    head_inputs: list[str] = []
     for e in events:
         desc = e.payload.get("description", "")
         head_input = compose_head_input(desc, e.payload.get("source_role", ""), "") if use_context else desc
-        scored = head.classify_scored(head_input)
+        head_inputs.append(head_input)
+
+    scores = _classify_head_batch(head, head_inputs)
+    for e, scored in zip(events, scores):
+        desc = e.payload.get("description", "")
         if scored is None:
             return None  # model dropped out — signal legacy fallback
         label, conf = scored

@@ -12,9 +12,9 @@ things in.
 
 In production this exact race is narrowed by the per-project worker
 single-flight lock (integration/session.py:_acquire_worker_lock) — but that
-lock protects the two known worker entry points (the Stop hook's sync drain
-and the MCP server's background drainer), not every caller of the storage
-layer (a manual repair pass, a future CLI command, a test). The guard is the
+lock protects job processors such as the MCP server's background drainer and
+explicit CLI workers, not every caller of the storage layer (a manual repair
+pass, a future CLI command, a test). The guard is the
 correctness boundary of last resort; this test holds it to that job
 directly, without going through the worker machinery the lock also covers.
 

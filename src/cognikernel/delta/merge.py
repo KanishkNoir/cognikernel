@@ -121,8 +121,8 @@ def execute_merge(
     stats = {"inserted": 0, "updated": 0, "superseded": 0, "cascaded": 0,
              "archived": 0, "rejected": 0}
 
-    # Idempotency guard (audit P1). A worker can be killed (the Job Object tears
-    # down hook-spawned drains at hook exit) AFTER this merge commits but BEFORE
+    # Idempotency guard (audit P1). A worker can be killed AFTER this merge
+    # commits but BEFORE
     # the ingest cursor advances; the job is then recovered and the SAME evidence
     # slice is replayed. _insert_or_update is hash-idempotent, but the echo
     # mention_count bump and the ×0.92 decay tick are NOT — a replay double-applies

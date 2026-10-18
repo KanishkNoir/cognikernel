@@ -298,7 +298,7 @@ class TestOrphanRecovery:
     def test_dead_claimant_job_requeued_immediately(self, tmp_path):
         """I7d: a claimed/running job whose claimant pid is dead must requeue
         with NO grace period — time-graced recovery left the queue invisible
-        to the MCP drainer for 10 minutes per killed hook-drain."""
+        to the MCP drainer for 10 minutes per interrupted worker."""
         db = tmp_path / "test.db"
         conn = sqlite3.connect(str(db)); conn.row_factory = sqlite3.Row
         run_migrations(conn)

@@ -42,6 +42,8 @@ def test_init_writes_claude_settings_with_posttool_read_hook(
     for entry in settings["hooks"]["PostToolUse"]:
         cmd = entry["hooks"][0]["command"]
         assert "-m cognikernel hook-posttool" in cmd
+    stop = settings["hooks"]["Stop"][0]["hooks"][0]
+    assert stop["timeout"] == 90
 
 
 def test_init_pretool_matcher_routes_read_and_write_edit(
