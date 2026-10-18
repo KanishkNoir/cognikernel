@@ -423,6 +423,9 @@ def process_jobs(
     claimant = f"worker-{os.getpid()}"
     processed = failed = replayed = 0
 
+    from cognikernel.delta.supersede_xenc import set_diagnostics_dir
+    set_diagnostics_dir(config.cognikernel_dir)
+
     lock_path = _acquire_worker_lock(project_id, cognikernel_dir=config.cognikernel_dir)
     if lock_path is None:
         _worker_log(project_id, f"{claimant} exit: another worker holds the lock")

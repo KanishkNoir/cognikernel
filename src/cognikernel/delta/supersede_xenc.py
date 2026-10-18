@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,8 @@ _deployed_min: Optional[float] = None
 _inference_error: str | None = None
 _inference_error_lock = threading.Lock()
 _log = logging.getLogger("cognikernel.delta.supersede_xenc")
+_diagnostics_dir: Path | None = None
+_diagnostics_dir_lock = threading.Lock()
 
 
 def _body_dir() -> Path:
@@ -105,10 +108,78 @@ def deployed_min() -> Optional[float]:
     return _deployed_min
 
 
-def last_inference_error() -> str | None:
-    """Latest batched inference failure, if one occurred since the last successful batch."""
+def set_diagnostics_dir(path: Path) -> None:
+    """Use the project's CogniKernel directory for persistent inference diagnostics."""
+    global _diagnostics_dir
+    with _diagnostics_dir_lock:
+        _diagnostics_dir = path
+
+
+def _diagnostic_path(diagnostics_dir: Path | None = None) -> Path:
+    if diagnostics_dir is not None:
+        root = diagnostics_dir
+    else:
+        with _diagnostics_dir_lock:
+            root = _diagnostics_dir
+        if root is None:
+            root = Path(
+                os.environ.get("COGNIKERNEL_DIR") or (Path.home() / ".cognikernel")
+            )
+    return root / "diagnostics" / "supersession_xenc.json"
+
+
+def last_inference_error(diagnostics_dir: Path | None = None) -> str | None:
+    """Latest persisted batch failure for the active model, if any."""
+    try:
+        record = json.loads(_diagnostic_path(diagnostics_dir).read_text(encoding="utf-8"))
+        if Path(record["body_dir"]).resolve() == _body_dir().resolve():
+            error = record.get("error")
+            return error if isinstance(error, str) else None
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        _log.warning("supersession_xenc.diagnostic_read_failed: %s", exc, exc_info=True)
+
+    # Retain an in-process copy for diagnostics when the persistent directory is
+    # unavailable, but never let that mask an on-disk record in another process.
     with _inference_error_lock:
         return _inference_error
+
+
+def _write_inference_diagnostic(error: str | None) -> None:
+    path = _diagnostic_path()
+    temp_path: Path | None = None
+    try:
+        if error is None:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+            json.dump({
+                "body_dir": str(_body_dir().resolve()),
+                "error": error,
+            }, temp_file)
+        os.replace(temp_path, path)
+    except Exception as exc:
+        _log.warning(
+            "supersession_xenc.diagnostic_write_failed: %s",
+            exc,
+            exc_info=True,
+        )
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _record_inference_error(batch_size: int, exc: Exception) -> None:
@@ -116,6 +187,7 @@ def _record_inference_error(batch_size: int, exc: Exception) -> None:
     detail = f"batch_size={batch_size}: {exc}"
     with _inference_error_lock:
         _inference_error = detail
+    _write_inference_diagnostic(detail)
     _log.warning(
         "supersession_xenc.inference_failed: %s",
         detail,
@@ -127,6 +199,7 @@ def _clear_inference_error() -> None:
     global _inference_error
     with _inference_error_lock:
         _inference_error = None
+    _write_inference_diagnostic(None)
 
 
 def prob_supersedes_batch(
