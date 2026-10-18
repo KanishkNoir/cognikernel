@@ -312,7 +312,7 @@ def _git(args: list[str], cwd: str) -> subprocess.CompletedProcess:
 class TestCaptureHeadSha:
     """`_capture_head_sha` is the whole of T-103's git-anchoring logic,
     extracted from stop_main so it's testable without spawning the
-    capture/process-jobs subprocess chain stop_main itself spawns. Three
+    capture subprocess chain stop_main itself spawns. Three
     acceptance criteria from #13 map directly to the three tests here."""
 
     def test_real_repo_with_a_commit_returns_the_sha(self, tmp_path) -> None:
@@ -438,6 +438,7 @@ class TestStopMainPassesHeadSha:
         assert "--head-sha" in capture_cmds[0]
         idx = capture_cmds[0].index("--head-sha")
         assert capture_cmds[0][idx + 1] == "deadbeef" * 5
+        assert not any("process-jobs" in c for c in captured_cmds)
 
     def test_stop_main_omits_head_sha_flag_when_unavailable(
         self, monkeypatch, tmp_path
@@ -477,3 +478,4 @@ class TestStopMainPassesHeadSha:
         capture_cmds = [c for c in captured_cmds if "capture" in c]
         assert capture_cmds, f"no capture subprocess launched: {captured_cmds}"
         assert "--head-sha" not in capture_cmds[0]
+        assert not any("process-jobs" in c for c in captured_cmds)

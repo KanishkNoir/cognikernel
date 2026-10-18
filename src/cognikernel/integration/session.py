@@ -74,6 +74,8 @@ def session_end(
     from cognikernel.storage.jobs import ack_stage, enqueue_extraction, fail_job, recover_stuck_running_jobs
 
     config = config or Config.load(project_path=project_path)
+    from cognikernel.delta.supersede_xenc import set_diagnostics_dir
+    set_diagnostics_dir(config.cognikernel_dir)
     project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 
@@ -209,8 +211,8 @@ def session_capture(
 
     This is the capture half of the I4 decoupled pipeline. It performs the fast,
     I/O-only work: delta evidence storage (I3 chain) + job enqueue. The slow work
-    (extract_session + execute_merge + symbol graph) is handled by process_jobs(),
-    which runs as a detached worker subprocess so the Stop hook returns in <500ms.
+    (extract_session + execute_merge + symbol graph) is handled by process_jobs()
+    in the long-lived MCP worker or an explicitly invoked CLI worker.
 
     When the transcript has no new lines since the cursor, returns
     {"job_id": None, ...} and stores nothing — re-storing identical content
@@ -349,9 +351,9 @@ def _acquire_worker_lock(
     only when no dir is supplied (back-compat for direct callers/tests).
 
     Takeover rules (I7c): the lock file stores the holder's pid. If that
-    process is dead — e.g. a hook-spawned worker killed by the Job Object at
-    hook exit — the lock is orphaned and taken over IMMEDIATELY (waiting the
-    15-min age-out would block every per-turn drain in the meantime). The
+    process is dead — e.g. a worker killed by its caller — the lock is orphaned
+    and taken over IMMEDIATELY (waiting the 15-min age-out would block every
+    subsequent drain in the meantime). The
     age-out remains as the fallback when pid liveness can't be determined.
     """
     import os
@@ -388,9 +390,10 @@ def process_jobs(
 ) -> dict[str, Any]:
     """Claim and process all queued extraction jobs for a project.
 
-    This is the processing half of the I4 decoupled pipeline. Runs as a detached
-    subprocess spawned by `cognikernel capture`. Processes jobs in oldest-first order,
-    advances the ingest cursor after each successful merge, then exits.
+    This is the processing half of the I4 decoupled pipeline. It runs either in
+    the long-lived MCP server's queue-drainer thread or as an explicit CLI worker.
+    Processes jobs in oldest-first order and advances the ingest cursor after
+    each successful merge.
 
     Hardened after the gamma post-mortem:
     - single-flight lock (one worker per project; extra spawns exit immediately)
@@ -413,10 +416,12 @@ def process_jobs(
     from cognikernel.storage.jobs import (
         ack_stage, claim_next_job, fail_job, list_jobs,
         reclaim_stale_jobs, recover_orphaned_jobs, recover_stuck_running_jobs,
-        replay_dead_letter,
+        replay_dead_letter, WORKER_STALE_AFTER_MS,
     )
 
     config = config or Config.load(project_path=project_path)
+    from cognikernel.delta.supersede_xenc import set_diagnostics_dir
+    set_diagnostics_dir(config.cognikernel_dir)
     project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
     claimant = f"worker-{os.getpid()}"
@@ -437,8 +442,8 @@ def process_jobs(
                     run_migrations(conn)
                     # Grace-free: claimant pid dead => job orphaned, requeue now.
                     recover_orphaned_jobs(conn, _pid_alive)
-                    reclaim_stale_jobs(conn, stale_after_ms=10 * 60 * 1000)
-                    recover_stuck_running_jobs(conn, stale_after_ms=10 * 60 * 1000)
+                    reclaim_stale_jobs(conn, stale_after_ms=WORKER_STALE_AFTER_MS)
+                    recover_stuck_running_jobs(conn, stale_after_ms=WORKER_STALE_AFTER_MS)
                     # Auto-replay ONLY process-killed jobs (failure_class TIMEOUT).
                     # POISON_INPUT / EXTRACTOR_BUG dead-letters need a human or a
                     # code fix — resurrecting them forever masks real bugs.
@@ -842,6 +847,8 @@ def rebuild_from_raw(
     from cognikernel.delta.merge import execute_merge
 
     config = config or Config.load(project_path=project_path)
+    from cognikernel.delta.supersede_xenc import set_diagnostics_dir
+    set_diagnostics_dir(config.cognikernel_dir)
     project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 

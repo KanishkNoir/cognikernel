@@ -353,6 +353,9 @@ The system is designed to degrade *legibly*, never silently:
 - **Idempotent replay** — a re-run worker job can't double-count or drift decay (evidence-provenance guard)
 - **Fail-open hooks** — every surface swallows its own failure *and logs at WARNING*; silence never reads as success
 - **`cognikernel doctor --strict`** — per-subsystem health (schema, FTS5, embeddings, symbols, worker queue); non-zero exit when degraded
+- **Enqueue-only Stop hook** — captures evidence and queues extraction; the
+  long-lived MCP server drains the queue and keeps its ONNX models warm between
+  jobs. If MCP is not running, jobs remain queued until the next worker/CLI drain.
 - **Architecture enforcement** — `import-linter` layered contracts, guarded by a meta-test so a typo can't silently disable them
 - **CI promotion gate** — lint + full suite (incl. `tests/reliability/` failure-injection) on every PR; see [`CONTRIBUTING.md`](CONTRIBUTING.md)
 

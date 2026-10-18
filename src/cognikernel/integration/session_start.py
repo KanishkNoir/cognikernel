@@ -38,8 +38,8 @@ block means no prior decisions exist.\
 def _pending_jobs_count(db_path) -> int:
     """ALL non-terminal extraction jobs — best-effort, never raises.
 
-    Includes claimed/running: a job stuck mid-flight (e.g. its hook-drain
-    worker was killed) is still pending memory the block doesn't contain yet —
+    Includes claimed/running: a job stuck mid-flight (e.g. its process worker
+    was interrupted) is still pending memory the block doesn't contain yet —
     counting only queued under-reported exactly when it mattered most.
     """
     try:

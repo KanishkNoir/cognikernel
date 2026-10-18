@@ -290,15 +290,61 @@ def threads_resource(project_id: str) -> str:
     return render_section(project_id, "threads")
 
 
+def _queue_needs_processing(
+    conn,
+    project_id: str,
+    now_ms: int | None = None,
+) -> bool:
+    """Whether the worker should inspect queued or recoverable extraction jobs."""
+    import time
+
+    from cognikernel.integration.session import _pid_alive
+    from cognikernel.storage.jobs import WORKER_STALE_AFTER_MS
+
+    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    cutoff = now - WORKER_STALE_AFTER_MS
+    rows = conn.execute(
+        """
+        SELECT state, failure_class, claimed_by, claimed_at, updated_at
+        FROM extraction_jobs
+        WHERE project_id = ?
+          AND job_category = 'extract.transcript'
+          AND state IN (
+              'queued', 'retryable_failure', 'dead_lettered', 'claimed', 'running'
+          )
+        """,
+        (project_id,),
+    ).fetchall()
+    for row in rows:
+        if row["state"] in ("queued", "retryable_failure"):
+            return True
+        if row["state"] == "dead_lettered" and row["failure_class"] == "TIMEOUT":
+            return True
+        if row["state"] == "claimed" and row["claimed_at"] is not None:
+            if row["claimed_at"] < cutoff:
+                return True
+        if row["state"] == "running" and row["updated_at"] < cutoff:
+            return True
+
+        claimant = row["claimed_by"] or ""
+        if row["state"] in ("claimed", "running") and claimant.startswith("worker-"):
+            try:
+                pid = int(claimant.split("-", 1)[1])
+            except (ValueError, IndexError):
+                continue
+            if not _pid_alive(pid):
+                return True
+    return False
+
+
 def _start_queue_drainer() -> None:
     """Background thread: drain queued extraction jobs for this project (I4/I7).
 
-    The MCP server is the only long-lived CogniKernel process in a Claude Code
-    session, which makes it the one reliable host for queue processing: hook
-    subprocesses are killed with their Job Object on hook exit (Windows), so a
-    worker detached from a hook may die at birth. This thread polls the
-    project's queue and runs process_jobs in-process; the worker single-flight
-    lock makes it safe alongside any CLI/hook-spawned workers.
+    The MCP server is the long-lived CogniKernel process in a Claude Code
+    session, so this thread is the warm host for extraction. Stop hooks only
+    enqueue work; this thread polls the project's queue and runs process_jobs
+    in-process. The worker single-flight lock also keeps it safe alongside an
+    explicitly invoked CLI worker.
     """
     import os
     import threading
@@ -327,19 +373,11 @@ def _start_queue_drainer() -> None:
                 db_path = get_db_path(config, project_id)
                 if db_path.exists():
                     with get_connection(db_path) as conn:
-                        # Requeue jobs whose claimant died (hook drains are
-                        # killed at the hook ceiling); otherwise they'd be
-                        # invisible to the queued-count below for the whole
-                        # 10-min stuck-grace window (GAMMA_CK_TEST lag bug).
-                        from cognikernel.integration.session import _pid_alive
-                        from cognikernel.storage.jobs import recover_orphaned_jobs
-                        recover_orphaned_jobs(conn, _pid_alive)
-                        n = conn.execute(
-                            "SELECT COUNT(*) FROM extraction_jobs "
-                            "WHERE state IN ('queued','retryable_failure')"
-                        ).fetchone()[0]
-                    if n > 0:
-                        _worker_log(project_id, f"mcp-drainer: {n} queued — draining")
+                        should_process = _queue_needs_processing(conn, project_id)
+                    if should_process:
+                        _worker_log(project_id, "mcp-drainer: queued or recoverable jobs — draining")
+                        # Recovery and processing both occur inside process_jobs'
+                        # single-flight lock; the poll above is read-only.
                         process_jobs(project_path, config=config)
             except Exception as exc:
                 _worker_log(project_id, f"mcp-drainer error: {exc}")

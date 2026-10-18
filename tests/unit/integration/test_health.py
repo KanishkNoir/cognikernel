@@ -7,7 +7,10 @@ exit for pre-flight/CI.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -106,6 +109,122 @@ class TestHealthChecks:
         assert "not installed" in check.detail
         assert str(tmp_path / "ckhome" / "models" / "supersession_xenc") in check.detail
         assert "site-packages-fallback" not in check.detail
+
+    def test_supersession_inference_failure_is_reported_across_processes(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from cognikernel.delta import supersede_xenc
+
+        body_dir = tmp_path / "supersession_xenc"
+        body_dir.mkdir()
+        (body_dir / "body.onnx").write_bytes(b"")
+        (body_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("COGNIKERNEL_XENC_BODY_DIR", str(body_dir))
+        monkeypatch.setattr("cognikernel.integration.health._encoder_engine_available", lambda: True)
+        diagnostics_dir = tmp_path / "ckhome"
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(diagnostics_dir))
+        monkeypatch.setattr(supersede_xenc, "_inference_error", None)
+
+        failed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from cognikernel.delta import supersede_xenc; "
+                "supersede_xenc._record_inference_error("
+                "2, RuntimeError('simulated ONNX failure'))",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=os.environ.copy(),
+        )
+        assert failed.returncode == 0, failed.stderr
+
+        config = Config(
+            cognikernel_dir=diagnostics_dir,
+            cross_encoder_supersession=True,
+        )
+        check = check_supersession_head(config)
+
+        assert not check.ok
+        assert "batch_size=2: simulated ONNX failure" in check.detail
+
+        cleared = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from cognikernel.delta import supersede_xenc; "
+                "supersede_xenc._clear_inference_error()",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=os.environ.copy(),
+        )
+        assert cleared.returncode == 0, cleared.stderr
+        healthy = check_supersession_head(config)
+        assert healthy.ok
+
+    @pytest.mark.parametrize("entrypoint", ["session_end", "rebuild_from_raw"])
+    def test_entrypoint_uses_toml_diagnostics_dir_across_processes(
+        self, entrypoint: str, tmp_path: Path, monkeypatch
+    ) -> None:
+        from cognikernel.delta import supersede_xenc
+
+        project = tmp_path / "project"
+        config_dir = project / ".cognikernel"
+        config_dir.mkdir(parents=True)
+        diagnostics_dir = tmp_path / "project_diagnostics"
+        fallback_dir = tmp_path / "environment_diagnostics"
+        (config_dir / "config.toml").write_text(
+            f'cognikernel_dir = "{diagnostics_dir.as_posix()}"\n'
+            "cross_encoder_supersession = true\n",
+            encoding="utf-8",
+        )
+        body_dir = tmp_path / "supersession_xenc"
+        body_dir.mkdir()
+        (body_dir / "body.onnx").write_bytes(b"")
+        (body_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("COGNIKERNEL_DIR", str(fallback_dir))
+        monkeypatch.setenv("COGNIKERNEL_XENC_BODY_DIR", str(body_dir))
+        monkeypatch.setattr(
+            "cognikernel.integration.health._encoder_engine_available",
+            lambda: True,
+        )
+        monkeypatch.setattr(supersede_xenc, "_inference_error", None)
+
+        script = """
+import sys
+from pathlib import Path
+from cognikernel.delta import supersede_xenc
+from cognikernel.integration.session import rebuild_from_raw, session_end
+
+project = Path(sys.argv[1])
+if sys.argv[2] == "session_end":
+    session_end(project, "diagnostic-test", "")
+else:
+    rebuild_from_raw(project, dry_run=True)
+supersede_xenc._record_inference_error(2, RuntimeError("TOML override failure"))
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(project), entrypoint],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=os.environ.copy(),
+        )
+        assert result.returncode == 0, result.stderr
+
+        config = Config.load(project_path=project)
+        check = check_supersession_head(config)
+        assert not check.ok
+        assert "batch_size=2: TOML override failure" in check.detail
+        assert (
+            diagnostics_dir / "diagnostics" / "supersession_xenc.json"
+        ).exists()
+        assert not (
+            fallback_dir / "diagnostics" / "supersession_xenc.json"
+        ).exists()
 
     def test_salience_head_artifacts_present_reports_installed(
         self, tmp_path: Path, monkeypatch

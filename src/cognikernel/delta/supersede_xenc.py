@@ -20,12 +20,15 @@ it is precision-safe by construction. It never deletes — supersession marks su
 from __future__ import annotations
 
 import json
+import logging
 import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Optional
 
 _MAX_TOKENS = 256
+_BATCH_SIZE = 16
 _DEFAULT_THRESHOLD = 0.9  # conservative fallback if threshold.json is absent
 
 _lock = threading.Lock()
@@ -34,6 +37,11 @@ _sess = None
 _tok = None
 _threshold = _DEFAULT_THRESHOLD
 _deployed_min: Optional[float] = None
+_inference_error: str | None = None
+_inference_error_lock = threading.Lock()
+_log = logging.getLogger("cognikernel.delta.supersede_xenc")
+_diagnostics_dir: Path | None = None
+_diagnostics_dir_lock = threading.Lock()
 
 
 def _body_dir() -> Path:
@@ -62,6 +70,8 @@ def _load() -> bool:
                 return False
             _sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
             _tok = Tokenizer.from_file(str(tok_path))
+            # The exported graph is parity-safe for equal-length, unpadded pairs.
+            _tok.no_padding()
             for cand in (bd / "threshold.json", bd.parent / "threshold.json"):
                 if cand.exists():
                     data = json.loads(cand.read_text())
@@ -98,29 +108,163 @@ def deployed_min() -> Optional[float]:
     return _deployed_min
 
 
+def set_diagnostics_dir(path: Path) -> None:
+    """Use the project's CogniKernel directory for persistent inference diagnostics."""
+    global _diagnostics_dir
+    with _diagnostics_dir_lock:
+        _diagnostics_dir = path
+
+
+def _diagnostic_path(diagnostics_dir: Path | None = None) -> Path:
+    if diagnostics_dir is not None:
+        root = diagnostics_dir
+    else:
+        with _diagnostics_dir_lock:
+            root = _diagnostics_dir
+        if root is None:
+            root = Path(
+                os.environ.get("COGNIKERNEL_DIR") or (Path.home() / ".cognikernel")
+            )
+    return root / "diagnostics" / "supersession_xenc.json"
+
+
+def last_inference_error(diagnostics_dir: Path | None = None) -> str | None:
+    """Latest persisted batch failure for the active model, if any."""
+    try:
+        record = json.loads(_diagnostic_path(diagnostics_dir).read_text(encoding="utf-8"))
+        if Path(record["body_dir"]).resolve() == _body_dir().resolve():
+            error = record.get("error")
+            return error if isinstance(error, str) else None
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        _log.warning("supersession_xenc.diagnostic_read_failed: %s", exc, exc_info=True)
+
+    # Retain an in-process copy for diagnostics when the persistent directory is
+    # unavailable, but never let that mask an on-disk record in another process.
+    with _inference_error_lock:
+        return _inference_error
+
+
+def _write_inference_diagnostic(error: str | None) -> None:
+    path = _diagnostic_path()
+    temp_path: Path | None = None
+    try:
+        if error is None:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+            json.dump({
+                "body_dir": str(_body_dir().resolve()),
+                "error": error,
+            }, temp_file)
+        os.replace(temp_path, path)
+    except Exception as exc:
+        _log.warning(
+            "supersession_xenc.diagnostic_write_failed: %s",
+            exc,
+            exc_info=True,
+        )
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _record_inference_error(batch_size: int, exc: Exception) -> None:
+    global _inference_error
+    detail = f"batch_size={batch_size}: {exc}"
+    with _inference_error_lock:
+        _inference_error = detail
+    _write_inference_diagnostic(detail)
+    _log.warning(
+        "supersession_xenc.inference_failed: %s",
+        detail,
+        exc_info=True,
+    )
+
+
+def _clear_inference_error() -> None:
+    global _inference_error
+    with _inference_error_lock:
+        _inference_error = None
+    _write_inference_diagnostic(None)
+
+
+def prob_supersedes_batch(
+    pairs: list[tuple[str, str]],
+) -> list[Optional[float]]:
+    """Score pairs together when token lengths match (the ONNX graph's safe batch shape).
+
+    The exported graph has known padded-batch parity issues, so batches contain
+    only unpadded sequences of equal length. A failed batch degrades to None for
+    that batch, matching the single-pair fail-open behavior.
+    """
+    results: list[Optional[float]] = [None] * len(pairs)
+    active = [i for i, (new, old) in enumerate(pairs) if new and old]
+    if not active or not _load():
+        return results
+
+    import numpy as np
+
+    groups: dict[int, list[tuple[int, list[int], list[int]]]] = {}
+    try:
+        encoded = _tok.encode_batch([pairs[i] for i in active])
+        for i, enc in zip(active, encoded):
+            ids = enc.ids[:_MAX_TOKENS]
+            type_ids = enc.type_ids[:_MAX_TOKENS] if enc.type_ids else [0] * len(ids)
+            groups.setdefault(len(ids), []).append((i, ids, type_ids))
+    except Exception as exc:
+        _record_inference_error(len(active), exc)
+        return results
+
+    failed = False
+    scored = False
+    for group in groups.values():
+        for start in range(0, len(group), _BATCH_SIZE):
+            batch = group[start:start + _BATCH_SIZE]
+            try:
+                input_ids = np.asarray([item[1] for item in batch], dtype="int64")
+                token_type = np.asarray([item[2] for item in batch], dtype="int64")
+                attn = np.ones_like(input_ids)
+                logits = _sess.run(["logits"], {
+                    "input_ids": input_ids,
+                    "attention_mask": attn,
+                    "token_type_ids": token_type,
+                })[0].reshape(len(batch), -1)
+                if logits.shape[1] == 1:
+                    scores = 1.0 / (1.0 + np.exp(-logits[:, 0]))
+                else:
+                    shifted = logits - logits.max(axis=1, keepdims=True)
+                    probs = np.exp(shifted)
+                    probs /= probs.sum(axis=1, keepdims=True)
+                    scores = probs[:, 1]
+                for item, score in zip(batch, scores):
+                    results[item[0]] = float(score)
+                scored = True
+            except Exception as exc:
+                failed = True
+                _record_inference_error(len(batch), exc)
+                continue
+    if scored and not failed:
+        _clear_inference_error()
+    return results
+
+
 def prob_supersedes(new_desc: str, old_desc: str) -> Optional[float]:
     """P(new_desc supersedes old_desc) in [0,1], or None if the model is unavailable."""
-    if not new_desc or not old_desc or not _load():
-        return None
-    try:
-        import numpy as np
-
-        enc = _tok.encode(new_desc, old_desc)
-        ids = enc.ids[:_MAX_TOKENS]
-        tti = (enc.type_ids[:_MAX_TOKENS] if enc.type_ids else [0] * len(ids))
-        input_ids = np.asarray([ids], dtype="int64")
-        attn = np.ones_like(input_ids)
-        token_type = np.asarray([tti], dtype="int64")
-        logits = _sess.run(["logits"], {
-            "input_ids": input_ids, "attention_mask": attn, "token_type_ids": token_type,
-        })[0].reshape(-1)
-        if logits.size == 1:
-            return float(1.0 / (1.0 + np.exp(-logits[0])))
-        z = logits - logits.max()
-        p = np.exp(z) / np.exp(z).sum()
-        return float(p[1])
-    except Exception:
-        return None
+    return prob_supersedes_batch([(new_desc, old_desc)])[0]
 
 
 def supersedes(new_desc: str, old_desc: str) -> bool:

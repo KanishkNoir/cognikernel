@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -11,6 +12,9 @@ import pytest
 
 from cognikernel.config import Config
 from cognikernel.integration.session import init_project, session_end
+from cognikernel.storage.evidence import store_evidence
+from cognikernel.storage.jobs import WORKER_STALE_AFTER_MS, enqueue_extraction
+from cognikernel.storage.migrations import run_migrations
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -67,6 +71,84 @@ class TestMcpServerName:
     def test_server_name_is_cognikernel(self) -> None:
         from cognikernel.integration.mcp_server import _mcp
         assert _mcp.name == "cognikernel"
+
+
+class TestQueueRecoveryPolling:
+    def _queued_job(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        run_migrations(conn)
+        evidence_id = store_evidence(conn, "project-a", "session-a", "transcript", b"data")
+        job_id = enqueue_extraction(
+            conn, "project-a", "session-a", evidence_id, "extract.transcript"
+        )
+        return conn, job_id
+
+    def test_timeout_dead_letter_triggers_poll_without_queued_jobs(self) -> None:
+        from cognikernel.integration.mcp_server import _queue_needs_processing
+
+        conn, job_id = self._queued_job()
+        conn.execute(
+            "UPDATE extraction_jobs SET state='dead_lettered', failure_class='TIMEOUT' WHERE id=?",
+            (job_id,),
+        )
+
+        assert _queue_needs_processing(conn, "project-a")
+        assert not _queue_needs_processing(conn, "different-project")
+
+    @pytest.mark.parametrize("state", ["claimed", "running"])
+    def test_stale_live_claimant_triggers_poll_for_worker_recovery(
+        self, state: str, monkeypatch
+    ) -> None:
+        from cognikernel.integration.mcp_server import _queue_needs_processing
+
+        conn, job_id = self._queued_job()
+        monkeypatch.setattr(
+            "cognikernel.integration.session._pid_alive", lambda _pid: True
+        )
+        now = 1_800_000_000_000
+        stale_at = now - WORKER_STALE_AFTER_MS - 1
+        conn.execute(
+            """
+            UPDATE extraction_jobs
+            SET state=?, claimed_by='worker-12345', claimed_at=?, updated_at=?
+            WHERE id=?
+            """,
+            (state, stale_at, stale_at, job_id),
+        )
+
+        assert _queue_needs_processing(conn, "project-a", now_ms=now)
+
+    def test_live_fresh_claim_and_non_timeout_dead_letter_do_not_trigger_poll(
+        self, monkeypatch
+    ) -> None:
+        from cognikernel.integration.mcp_server import _queue_needs_processing
+
+        conn, job_id = self._queued_job()
+        now = 1_800_000_000_000
+        monkeypatch.setattr(
+            "cognikernel.integration.session._pid_alive", lambda _pid: True
+        )
+        conn.execute(
+            """
+            UPDATE extraction_jobs
+            SET state='claimed', claimed_by='worker-12345', claimed_at=?, updated_at=?
+            WHERE id=?
+            """,
+            (now, now, job_id),
+        )
+        assert not _queue_needs_processing(conn, "project-a", now_ms=now)
+
+        monkeypatch.setattr(
+            "cognikernel.integration.session._pid_alive", lambda _pid: False
+        )
+        assert _queue_needs_processing(conn, "project-a", now_ms=now)
+
+        conn.execute(
+            "UPDATE extraction_jobs SET state='dead_lettered', failure_class='EXTRACTOR_BUG' WHERE id=?",
+            (job_id,),
+        )
+        assert not _queue_needs_processing(conn, "project-a", now_ms=now)
 
 
 # ── tool registration ─────────────────────────────────────────────────────────

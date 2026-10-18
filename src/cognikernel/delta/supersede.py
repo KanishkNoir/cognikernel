@@ -429,9 +429,14 @@ def find_superseded(
                     key=lambda c: cand_cos[c], reverse=True,
                 )
                 shortlist = ranked[:_XENC_MAX_CANDIDATES] or list(by_id)[:_XENC_MAX_CANDIDATES]
-                for cid in shortlist:
-                    cd = json.loads(by_id[cid]["payload"]).get("description", "")
-                    p = supersede_xenc.prob_supersedes(new_desc, cd)
+                descriptions = [
+                    json.loads(by_id[cid]["payload"]).get("description", "")
+                    for cid in shortlist
+                ]
+                scores = supersede_xenc.prob_supersedes_batch(
+                    [(new_desc, description) for description in descriptions]
+                )
+                for cid, cd, p in zip(shortlist, descriptions, scores):
                     # HYBRID: high cross-encoder score AND a lexical co-fire (filters the
                     # topical false positives the cross-encoder produces alone).
                     if (p is not None and p >= xenc_min
