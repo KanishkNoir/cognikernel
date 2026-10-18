@@ -290,6 +290,53 @@ def threads_resource(project_id: str) -> str:
     return render_section(project_id, "threads")
 
 
+def _queue_needs_processing(
+    conn,
+    project_id: str,
+    now_ms: int | None = None,
+) -> bool:
+    """Whether the worker should inspect queued or recoverable extraction jobs."""
+    import time
+
+    from cognikernel.integration.session import _pid_alive
+    from cognikernel.storage.jobs import WORKER_STALE_AFTER_MS
+
+    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    cutoff = now - WORKER_STALE_AFTER_MS
+    rows = conn.execute(
+        """
+        SELECT state, failure_class, claimed_by, claimed_at, updated_at
+        FROM extraction_jobs
+        WHERE project_id = ?
+          AND job_category = 'extract.transcript'
+          AND state IN (
+              'queued', 'retryable_failure', 'dead_lettered', 'claimed', 'running'
+          )
+        """,
+        (project_id,),
+    ).fetchall()
+    for row in rows:
+        if row["state"] in ("queued", "retryable_failure"):
+            return True
+        if row["state"] == "dead_lettered" and row["failure_class"] == "TIMEOUT":
+            return True
+        if row["state"] == "claimed" and row["claimed_at"] is not None:
+            if row["claimed_at"] < cutoff:
+                return True
+        if row["state"] == "running" and row["updated_at"] < cutoff:
+            return True
+
+        claimant = row["claimed_by"] or ""
+        if row["state"] in ("claimed", "running") and claimant.startswith("worker-"):
+            try:
+                pid = int(claimant.split("-", 1)[1])
+            except (ValueError, IndexError):
+                continue
+            if not _pid_alive(pid):
+                return True
+    return False
+
+
 def _start_queue_drainer() -> None:
     """Background thread: drain queued extraction jobs for this project (I4/I7).
 
@@ -326,19 +373,11 @@ def _start_queue_drainer() -> None:
                 db_path = get_db_path(config, project_id)
                 if db_path.exists():
                     with get_connection(db_path) as conn:
-                        # Requeue jobs whose claimant died (for example, an
-                        # explicitly invoked worker killed at its time budget);
-                        # otherwise they'd be invisible to the queued-count
-                        # below for the whole 10-min stuck-grace window.
-                        from cognikernel.integration.session import _pid_alive
-                        from cognikernel.storage.jobs import recover_orphaned_jobs
-                        recover_orphaned_jobs(conn, _pid_alive)
-                        n = conn.execute(
-                            "SELECT COUNT(*) FROM extraction_jobs "
-                            "WHERE state IN ('queued','retryable_failure')"
-                        ).fetchone()[0]
-                    if n > 0:
-                        _worker_log(project_id, f"mcp-drainer: {n} queued — draining")
+                        should_process = _queue_needs_processing(conn, project_id)
+                    if should_process:
+                        _worker_log(project_id, "mcp-drainer: queued or recoverable jobs — draining")
+                        # Recovery and processing both occur inside process_jobs'
+                        # single-flight lock; the poll above is read-only.
                         process_jobs(project_path, config=config)
             except Exception as exc:
                 _worker_log(project_id, f"mcp-drainer error: {exc}")

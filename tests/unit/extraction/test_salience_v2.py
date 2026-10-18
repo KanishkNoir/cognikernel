@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-import numpy as np
+import pytest
+
+np = pytest.importorskip("numpy")
 
 from cognikernel.extraction import salience_v2
 

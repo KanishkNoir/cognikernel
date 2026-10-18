@@ -210,6 +210,13 @@ def check_supersession_head(config: Config) -> HealthCheck:
     body_dir = supersede_xenc._body_dir()
     artifacts_ok = (body_dir / "body.onnx").exists() and (body_dir / "tokenizer.json").exists()
     if artifacts_ok and engine_ok:
+        inference_error = supersede_xenc.last_inference_error()
+        if inference_error:
+            return HealthCheck(
+                "supersession_head", False,
+                f"installed at {body_dir}, but recent batch inference failed "
+                f"({inference_error})",
+            )
         threshold_note = "" if (body_dir / "threshold.json").exists() else " (default threshold, no threshold.json)"
         return HealthCheck("supersession_head", True, f"installed, loads from {body_dir}{threshold_note}")
     if not artifacts_ok:

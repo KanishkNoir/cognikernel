@@ -414,7 +414,7 @@ def process_jobs(
     from cognikernel.storage.jobs import (
         ack_stage, claim_next_job, fail_job, list_jobs,
         reclaim_stale_jobs, recover_orphaned_jobs, recover_stuck_running_jobs,
-        replay_dead_letter,
+        replay_dead_letter, WORKER_STALE_AFTER_MS,
     )
 
     config = config or Config.load(project_path=project_path)
@@ -438,8 +438,8 @@ def process_jobs(
                     run_migrations(conn)
                     # Grace-free: claimant pid dead => job orphaned, requeue now.
                     recover_orphaned_jobs(conn, _pid_alive)
-                    reclaim_stale_jobs(conn, stale_after_ms=10 * 60 * 1000)
-                    recover_stuck_running_jobs(conn, stale_after_ms=10 * 60 * 1000)
+                    reclaim_stale_jobs(conn, stale_after_ms=WORKER_STALE_AFTER_MS)
+                    recover_stuck_running_jobs(conn, stale_after_ms=WORKER_STALE_AFTER_MS)
                     # Auto-replay ONLY process-killed jobs (failure_class TIMEOUT).
                     # POISON_INPUT / EXTRACTOR_BUG dead-letters need a human or a
                     # code fix — resurrecting them forever masks real bugs.

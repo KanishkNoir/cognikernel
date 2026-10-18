@@ -20,6 +20,8 @@ NON_RETRYABLE_FAILURE_CLASSES = frozenset({
     "SCHEMA_MISMATCH",
 })
 
+WORKER_STALE_AFTER_MS = 10 * 60 * 1000
+
 # States from which no further transition is legal except via the explicit
 # replay_dead_letter() escape hatch. Plan §6.2 invariant: "State transitions
 # are monotone (no `dead_lettered → running`)."
@@ -244,11 +246,9 @@ def recover_orphaned_jobs(
 ) -> int:
     """Immediately recover claimed/running jobs whose claimant process is dead.
 
-    Hook-spawned drains are killed at the hook ceiling (subprocess timeout or
-    Claude Code's hook timeout), leaving their job claimed/running with a dead
-    claimant pid. Time-graced recovery (recover_stuck_running_jobs, 10 min)
-    makes the queue invisible to the MCP drainer for that whole window — the
-    GAMMA_CK_TEST run showed 30+ minute per-job lag from exactly this. The
+    Interrupted workers can leave jobs claimed/running with a dead claimant pid.
+    Time-graced recovery (recover_stuck_running_jobs, 10 min) delays recovery
+    when PID liveness is unavailable. The
     claimant string is "worker-{pid}", so pid liveness gives definitive,
     grace-free orphan detection. Jobs with no parseable claimant fall back to
     the time-graced paths.

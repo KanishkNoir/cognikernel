@@ -20,6 +20,7 @@ it is precision-safe by construction. It never deletes — supersession marks su
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from pathlib import Path
@@ -35,6 +36,9 @@ _sess = None
 _tok = None
 _threshold = _DEFAULT_THRESHOLD
 _deployed_min: Optional[float] = None
+_inference_error: str | None = None
+_inference_error_lock = threading.Lock()
+_log = logging.getLogger("cognikernel.delta.supersede_xenc")
 
 
 def _body_dir() -> Path:
@@ -101,6 +105,30 @@ def deployed_min() -> Optional[float]:
     return _deployed_min
 
 
+def last_inference_error() -> str | None:
+    """Latest batched inference failure, if one occurred since the last successful batch."""
+    with _inference_error_lock:
+        return _inference_error
+
+
+def _record_inference_error(batch_size: int, exc: Exception) -> None:
+    global _inference_error
+    detail = f"batch_size={batch_size}: {exc}"
+    with _inference_error_lock:
+        _inference_error = detail
+    _log.warning(
+        "supersession_xenc.inference_failed: %s",
+        detail,
+        exc_info=True,
+    )
+
+
+def _clear_inference_error() -> None:
+    global _inference_error
+    with _inference_error_lock:
+        _inference_error = None
+
+
 def prob_supersedes_batch(
     pairs: list[tuple[str, str]],
 ) -> list[Optional[float]]:
@@ -124,9 +152,12 @@ def prob_supersedes_batch(
             ids = enc.ids[:_MAX_TOKENS]
             type_ids = enc.type_ids[:_MAX_TOKENS] if enc.type_ids else [0] * len(ids)
             groups.setdefault(len(ids), []).append((i, ids, type_ids))
-    except Exception:
+    except Exception as exc:
+        _record_inference_error(len(active), exc)
         return results
 
+    failed = False
+    scored = False
     for group in groups.values():
         for start in range(0, len(group), _BATCH_SIZE):
             batch = group[start:start + _BATCH_SIZE]
@@ -148,8 +179,13 @@ def prob_supersedes_batch(
                     scores = probs[:, 1]
                 for item, score in zip(batch, scores):
                     results[item[0]] = float(score)
-            except Exception:
+                scored = True
+            except Exception as exc:
+                failed = True
+                _record_inference_error(len(batch), exc)
                 continue
+    if scored and not failed:
+        _clear_inference_error()
     return results
 
 

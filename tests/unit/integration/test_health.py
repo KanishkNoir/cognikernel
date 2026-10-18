@@ -107,6 +107,28 @@ class TestHealthChecks:
         assert str(tmp_path / "ckhome" / "models" / "supersession_xenc") in check.detail
         assert "site-packages-fallback" not in check.detail
 
+    def test_supersession_inference_failure_is_reported_as_degraded(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from cognikernel.delta import supersede_xenc
+
+        body_dir = tmp_path / "supersession_xenc"
+        body_dir.mkdir()
+        (body_dir / "body.onnx").write_bytes(b"")
+        (body_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("COGNIKERNEL_XENC_BODY_DIR", str(body_dir))
+        monkeypatch.setattr("cognikernel.integration.health._encoder_engine_available", lambda: True)
+        monkeypatch.setattr(
+            supersede_xenc,
+            "last_inference_error",
+            lambda: "batch_size=2: simulated ONNX failure",
+        )
+
+        check = check_supersession_head(Config(cross_encoder_supersession=True))
+
+        assert not check.ok
+        assert "batch_size=2: simulated ONNX failure" in check.detail
+
     def test_salience_head_artifacts_present_reports_installed(
         self, tmp_path: Path, monkeypatch
     ) -> None:
