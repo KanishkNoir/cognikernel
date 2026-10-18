@@ -74,6 +74,8 @@ def session_end(
     from cognikernel.storage.jobs import ack_stage, enqueue_extraction, fail_job, recover_stuck_running_jobs
 
     config = config or Config.load(project_path=project_path)
+    from cognikernel.delta.supersede_xenc import set_diagnostics_dir
+    set_diagnostics_dir(config.cognikernel_dir)
     project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 
@@ -418,13 +420,12 @@ def process_jobs(
     )
 
     config = config or Config.load(project_path=project_path)
+    from cognikernel.delta.supersede_xenc import set_diagnostics_dir
+    set_diagnostics_dir(config.cognikernel_dir)
     project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
     claimant = f"worker-{os.getpid()}"
     processed = failed = replayed = 0
-
-    from cognikernel.delta.supersede_xenc import set_diagnostics_dir
-    set_diagnostics_dir(config.cognikernel_dir)
 
     lock_path = _acquire_worker_lock(project_id, cognikernel_dir=config.cognikernel_dir)
     if lock_path is None:
@@ -846,6 +847,8 @@ def rebuild_from_raw(
     from cognikernel.delta.merge import execute_merge
 
     config = config or Config.load(project_path=project_path)
+    from cognikernel.delta.supersede_xenc import set_diagnostics_dir
+    set_diagnostics_dir(config.cognikernel_dir)
     project_id = resolve_project_id(project_path, config)
     db_path = get_db_path(config, project_id)
 
